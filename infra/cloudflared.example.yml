@@ -1,0 +1,11 @@
+# Run only after creating a dedicated named tunnel and its DNS route.
+tunnel: YOUR_TUNNEL_UUID
+credentials-file: /etc/cloudflared/credentials.json
+loglevel: info
+metrics: 127.0.0.1:20241
+ingress:
+  - hostname: juncoystt.junnnny.kr
+    service: http://api:3000
+    originRequest:
+      connectTimeout: 10s
+  - service: http_status:404

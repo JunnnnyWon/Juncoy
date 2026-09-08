@@ -1,0 +1,9 @@
+{$APP_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy api:3000 {
+    flush_interval -1
+    transport http {
+      read_timeout 1h
+    }
+  }
+}

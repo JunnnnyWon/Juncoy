@@ -1,0 +1,6 @@
+[
+  { "spoken": "유니티", "written": "유니티", "weight": 5 },
+  { "spoken": "셰이더", "written": "셰이더", "weight": 5 },
+  { "spoken": "쉐이더", "written": "셰이더", "weight": 5 },
+  { "spoken": "사운드", "written": "사운드", "weight": 5 }
+]

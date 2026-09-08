@@ -1,0 +1,8 @@
+DISCORD_MEETING_BOT_SPEC.md
+docs/SPEC.md
+docs/schemas
+pnpm-lock.yaml
+node_modules
+artifacts
+.data
+apps/web/dist

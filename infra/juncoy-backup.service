@@ -1,0 +1,9 @@
+[Unit]
+Description=Encrypted Juncoy meeting database backup
+[Service]
+Type=oneshot
+WorkingDirectory=%h/services/discord-meeting-bot
+ExecStart=/usr/bin/bash %h/services/discord-meeting-bot/infra/scheduled-backup.sh
+TimeoutStartSec=300
+StandardOutput=null
+StandardError=null

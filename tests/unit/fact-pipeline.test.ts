@@ -1,0 +1,77 @@
+import { it, expect } from 'vitest';
+import {
+  runFactLedger,
+  ProviderError,
+  type StructuredEngine,
+  type LedgerStore,
+} from '@meeting/providers';
+import { caseSegments, summaryCases, qaPeople } from '../fixtures/summary-cases.ts';
+const input = (id: string) => {
+  const c = summaryCases.find((c) => c.id === id)!;
+  return {
+    meeting_id: '00000000-0000-4000-8000-000000000001',
+    started_at: c.started_at,
+    segments: caseSegments(c),
+    participants: qaPeople,
+    metadata: { transcript_version: 1 },
+    glossary: [],
+    markers: [],
+    gaps: [],
+  };
+};
+it('returning only the first unit cannot pass coverage or publish a long summary', async () => {
+  let calls = 0;
+  const engine: StructuredEngine = {
+    model: 'contract-test',
+    concurrency: 3,
+    async request(schema) {
+      calls++;
+      try {
+        return {
+          result: schema.parse({ labels: { 0: 'CORE_DISCUSSION' } }),
+          model: 'contract-test',
+        };
+      } catch {
+        throw new ProviderError('STRUCTURE_MISSING_REQUIRED_UNIT_KEYS', true);
+      }
+    },
+  };
+  await expect(runFactLedger(input('long-late-topics'), engine, async () => {})).rejects.toThrow(
+    'STRUCTURE_MISSING_REQUIRED_UNIT_KEYS',
+  );
+  expect(calls).toBe(9); // Three simultaneous groups, each at most three total attempts.
+});
+it('an independent semantic rejection is terminal and never rerolled into success', async () => {
+  let calls = 0;
+  const engine: StructuredEngine = {
+    model: 'contract-test',
+    concurrency: 3,
+    async request(schema, payload: any) {
+      calls++;
+      if (!payload.units)
+        return {
+          result: schema.parse({
+            kind: 'PROPOSAL',
+            assignment: 'UNSPECIFIED',
+            deadline: 'NONE',
+          }),
+          model: 'contract-test',
+        };
+      const labels = Object.fromEntries(payload.units.map((u: any) => [u.unit_key, 'DECISION']));
+      const claims = Object.fromEntries(
+        Object.keys(payload.structured_values ?? {}).map((k) => [
+          k,
+          { kind_supported: false, owner_supported: false, due_supported: false },
+        ]),
+      );
+      return {
+        result: schema.parse({ labels, ...(payload.structured_values ? { claims } : {}) }),
+        model: 'contract-test',
+      };
+    },
+  };
+  await expect(runFactLedger(input('explicit-decision'), engine, async () => {})).rejects.toThrow(
+    'FACT_SEMANTIC_REJECTED',
+  );
+  expect(calls).toBe(3);
+});

@@ -1,0 +1,49 @@
+{
+  "status": "DEPLOYED",
+  "image": "juncoy-meeting:0.1.0-facts1",
+  "tests": {
+    "vitest": 81,
+    "browser": 7,
+    "validation": 15,
+    "cold_summary": 20
+  },
+  "summary_p95_seconds": 69.119,
+  "browser_p95_ms": 218,
+  "soak": {
+    "status": "PASS",
+    "elapsed_wall_seconds": 14401.132265692999,
+    "canonical_finals": 5760,
+    "all_canonical_match": true,
+    "all_cursors_match": true,
+    "commit_to_sse_p95_ms": 214,
+    "errors": [],
+    "peak_reservations": 10,
+    "ending_reservations": 0,
+    "ending_queue": 0,
+    "max_buffered_pcm_bytes": 19200,
+    "max_pending_archive_bytes": 960000,
+    "peak_rss_mib": 491.6,
+    "latest_rss_mib": 477.9,
+    "checkpoints": 240,
+    "audio_bytes_accepted": 5529600000
+  },
+  "actual_discord": "BLOCKED_EXTERNAL",
+  "human_reference": "BLOCKED_EXTERNAL",
+  "oauth_live_relogin": "BLOCKED_EXTERNAL_TOOL",
+  "deployment": {
+    "status": "DEPLOYED",
+    "at": "2026-09-07T11:58:47.614367+00:00",
+    "image": "juncoy-meeting:0.1.0-facts1",
+    "health_http": 200
+  },
+  "post_deploy_checks": {
+    "api": "healthy",
+    "bot_gateway": "ready",
+    "worker": "healthy",
+    "https_health": 200,
+    "tls_verify": 0,
+    "unauthenticated_me": 401,
+    "oauth_start": 302,
+    "oauth_callback_matches": true
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "generated_at": "2026-09-07T02:34:36.119Z",
+  "web_url": "https://juncoystt.junnnny.kr",
+  "stage": "real integration pilot; muted Discord QA passed; speech and summary quality acceptance pending",
+  "automated": {
+    "vitest_passed": 54,
+    "vitest_failed": 0,
+    "browser_passed": 7,
+    "browser_failed": 0,
+    "environment": "QA-tested production candidate inside server; PostgreSQL schemas isolated per test; Linux Chromium",
+    "local_experimental_summary_tests": "3 prior tests are outside deployed source and excluded from this count",
+    "local_tunnel_test_result": "52 passed, 2 timed out; server-local full rerun passed without relaxing timeout"
+  },
+  "providers": {
+    "returnzero_auth": "PASS",
+    "returnzero_websocket": "PASS",
+    "solar_structured_output": "PASS",
+    "solar_model": "solar-pro3-260323",
+    "file_stt": "PASS",
+    "available_streams_observed": 10
+  },
+  "stream_policy": {
+    "limit": 10,
+    "waiting": "FIFO",
+    "idle_reclaim_ms_when_waiting": 800,
+    "fair_rotation_ms": 60000
+  },
+  "load_test": {
+    "mode": "accelerated mock transcript replay; not a four-hour wall-clock voice soak",
+    "represented_hours": 4,
+    "utterances": 5760,
+    "viewers": 12,
+    "wall_seconds": 139.507,
+    "all_cursors_match": true,
+    "sequence_errors": 0,
+    "commit_to_sse_receive_p95_ms": 160,
+    "latency_samples": 69120,
+    "event_relation_bytes": 9445376,
+    "node_rss_bytes": 278937600,
+    "provider_connections": 0,
+    "status": "PASS"
+  },
+  "deployment": {
+    "at": "2026-09-06T17:02:05.788Z",
+    "checks": [
+      {
+        "path": "/",
+        "status": 200
+      },
+      {
+        "path": "/healthz",
+        "status": 200
+      },
+      {
+        "path": "/api/me",
+        "status": 401
+      },
+      {
+        "path": "/api/meetings",
+        "status": 401
+      },
+      {
+        "path": "/auth/discord",
+        "status": 302,
+        "redirect_uri": "https://juncoystt.junnnny.kr/auth/discord/callback",
+        "scope": "identify guilds.members.read",
+        "secure_cookie": true
+      }
+    ],
+    "qa_web_image": "juncoy-meeting:0.1.0-qa-web1",
+    "qa_healthz": "PASS_REAL",
+    "qa_mobile_menu": "PASS_REAL_BROWSER",
+    "current_image": "juncoy-meeting:0.1.0-qa-muted2",
+    "muted_controls": "PASS_REAL_BROWSER",
+    "auth_verification": "PASS_OAUTH_IDENTITY_AND_BOT_MEMBERSHIP"
+  },
+  "backup": {
+    "encrypted_backup": "PASS",
+    "isolated_restore": "PASS",
+    "daily_timer": "ENABLED",
+    "korea_time": "04:00 plus up to 120s jitter",
+    "linger": true
+  },
+  "human_voice_acceptance": "BLOCKED_EXTERNAL",
+  "deployed_runtime_source": {
+    "at": "2026-09-07T02:33:49.693Z",
+    "checked": 10,
+    "differences": [],
+    "hashes": {
+      "apps/bot/src/main.ts": "4a68401a0909f3fbb14f28082c59cc41d50ab095adb167c4ef695d4d068e7d79",
+      "apps/bot/src/capture.ts": "cf5be2c51ed8d4ba989e54d8e9343c3a08efc4afcb8ede8d26be14a4eb994de5",
+      "packages/db/src/index.ts": "40827d5fdefb553db63aaa09c979fc09ec6d0c85a57c5b6f47dba9f281dcbe6b",
+      "packages/domain/src/index.ts": "eac49bd559a3761717a7b46ab577ae5f94f3877243809226fd458254729552d4",
+      "apps/worker/src/outbox.ts": "94f80bb52311ab3288170f19a178b8f987806d75582fe641de0e38fbeb65cb2c",
+      "apps/api/src/auth.ts": "b09c734150142408e6b0d9601f630600311fe90d83512596fedd58e6b5f0a3b6",
+      "apps/api/src/server.ts": "12774b4754e72f67bac726604eabf994b70223c087d8d1690e8ef66fa9e4a2e7",
+      "apps/web/src/App.tsx": "1baabe9de3b347c372c99adf4bd4dbc3183976de02598b7dcaa9845735642ec4",
+      "apps/web/src/api.ts": "9db4b295dc93a107887a6ef44619ca875afb5f9513be25bec67b25f63ae264cc",
+      "apps/web/src/use-meeting.ts": "3979ef68a922df1eea3e16a3ac8228fedd4d21e73bb44de6afa642cb4631daea"
+    },
+    "image": "juncoy-meeting:0.1.0-qa-muted2",
+    "note": "All 10 changed runtime files match deployment. Local Solar/config experiments remain intentionally undeployed.",
+    "deployed_solar_sha256": "26e961689786046e16d71f527959368e929bcc07bbbfe1a5778acbeb8f8c0e80",
+    "deployed_config_sha256": "2aff441fb492a1540f4bc1168bc7ef8e23060002679ca9c0687fbaa9a1ef3c93"
+  },
+  "browser_bundle_secret_matches": 0,
+  "real_user_oauth": "PASS",
+  "qa": {
+    "report": "docs/qa-2026-09-07.md",
+    "offline_duration_seconds": 3849.834688,
+    "offline_utterances": 661,
+    "inferred_speaker_clusters": 6,
+    "file_stt_seconds": 80.426,
+    "summary_baseline_seconds": 547.357,
+    "summary_experiment_seconds": 78.494,
+    "summary_experiment_content_status": "FAIL",
+    "summary_experiment_deployment": "HELD",
+    "actual_discord_control": "PASS_MUTED",
+    "acceptance_status": "HOLD",
+    "muted_report": "docs/qa-discord-muted-2026-09-07.md",
+    "muted_meetings": 3,
+    "dave_negotiation_protocol": 1,
+    "received_audio_packets": 0,
+    "decoded_audio_bytes": 0,
+    "stt_streams": 0,
+    "provider_usage_records": 0,
+    "final_consent_withdrawn": true,
+    "voice_channel_left": true,
+    "actual_md_txt_download": "PASS_FILES_VERIFIED"
+  }
+}

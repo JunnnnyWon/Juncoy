@@ -1,0 +1,89 @@
+{
+  "name": "discord-meeting-bot",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "tsx scripts/dev.ts",
+    "dev:api": "tsx watch apps/api/src/main.ts",
+    "dev:web": "vite --config apps/web/vite.config.ts",
+    "bot": "tsx apps/bot/src/main.ts",
+    "worker": "tsx apps/worker/src/main.ts",
+    "api": "tsx apps/api/src/main.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "discord:register": "tsx scripts/register-commands.ts",
+    "check": "tsc --noEmit",
+    "build": "vite build --config apps/web/vite.config.ts",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:browser": "playwright test",
+    "verify:providers": "tsx scripts/verify-providers.ts",
+    "verify:dave": "tsx scripts/verify-dave.ts",
+    "verify:load": "tsx scripts/load.ts",
+    "schema": "tsx scripts/schemas.ts",
+    "retention": "tsx scripts/retention.ts",
+    "init:env": "tsx scripts/init-env.ts",
+    "status": "tsx scripts/status.ts",
+    "reconcile": "tsx scripts/reconcile-outbox.ts",
+    "format:check": "prettier --check apps packages scripts tests *.ts package.json tsconfig.json",
+    "qa:freeze": "tsx scripts/freeze-summary-baseline.ts",
+    "qa:summary": "tsx scripts/evaluate-summary.ts",
+    "qa:audio": "tsx scripts/evaluate-audio.ts",
+    "qa:clips": "tsx scripts/generate-replay-clips.ts",
+    "qa:replay": "tsx scripts/verify-replay.ts",
+    "qa:retention": "tsx scripts/qa-retention.ts"
+  },
+  "dependencies": {
+    "@discordjs/voice": "0.19.2",
+    "@fastify/cookie": "^11.0.0",
+    "@fastify/helmet": "^13.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "@fastify/static": "^8.0.0",
+    "@meeting/contracts": "workspace:*",
+    "@meeting/db": "workspace:*",
+    "@meeting/domain": "workspace:*",
+    "@meeting/providers": "workspace:*",
+    "@phosphor-icons/react": "^2.1.10",
+    "discord.js": "14.27.0",
+    "dotenv": "^17.0.0",
+    "fastify": "5.12.3",
+    "kysely": "0.29.5",
+    "opusscript": "^0.1.1",
+    "pg": "^8.16.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.0.0",
+    "react-virtuoso": "^4.14.0",
+    "tsx": "^4.20.0",
+    "ws": "^8.18.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.18.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.0",
+    "vite": "8.2.2",
+    "vitest": "^4.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@discordjs/opus",
+      "esbuild"
+    ]
+  },
+  "optionalDependencies": {
+    "@discordjs/opus": "0.10.0"
+  }
+}

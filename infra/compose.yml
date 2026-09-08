@@ -1,0 +1,84 @@
+name: discord-meeting
+x-app: &app
+  image: ${MEETING_IMAGE:-juncoy-meeting:0.1.0}
+  build:
+    context: ..
+    dockerfile: infra/Dockerfile
+  env_file: ../.env.production
+  user: "${MEETING_UID:-1000}:${MEETING_GID:-1000}"
+  restart: unless-stopped
+  stop_grace_period: 60s
+  depends_on:
+    postgres:
+      condition: service_healthy
+  logging:
+    driver: none
+services:
+  postgres:
+    image: postgres:17-bookworm@sha256:051f7b7b3abdd564d5d1bd1e8c4b9c1b6e77087d1dd22020ede611c096a272e0
+    container_name: discord-meeting-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: meeting
+      POSTGRES_DB: meeting
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment env file}
+    ports:
+      - 127.0.0.1:15439:5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U meeting -d meeting]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+  api:
+    <<: *app
+    command: [node, --import, tsx, scripts/run-service.ts, api]
+    ports:
+      - 127.0.0.1:8790:3000
+    volumes:
+      - ../.data/logs:/data/logs
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  bot:
+    <<: *app
+    command: [node, --import, tsx, scripts/run-service.ts, bot]
+    volumes:
+      - ../.data:/data
+  worker:
+    <<: *app
+    command: [node, --import, tsx, scripts/run-service.ts, worker]
+    volumes:
+      - ../.data:/data
+  tunnel:
+    image: cloudflare/cloudflared:2026.8.3
+    restart: unless-stopped
+    command: [tunnel, --no-autoupdate, --config, /etc/cloudflared/config.yml, run]
+    profiles: [cloudflare]
+    logging:
+      driver: none
+    user: "${MEETING_UID:-1000}:${MEETING_GID:-1000}"
+    volumes:
+      - ../.data/tunnel:/etc/cloudflared:ro
+    depends_on:
+      api:
+        condition: service_healthy
+  caddy:
+    image: caddy:2.10.2
+    restart: unless-stopped
+    profiles: [caddy]
+    ports: ["80:80", "443:443"]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-juncoystt.junnnny.kr}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on: [api]
+volumes:
+  pgdata:
+    name: discord-meeting-pgdata
+    external: true
+  caddydata:
