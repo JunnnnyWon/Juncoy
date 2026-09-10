@@ -485,6 +485,31 @@ export function renderFactLedger(
       d.output_path = `topics[${index}].discussion`;
     }
   }
+  // Keep each topic readable: select a few distinct, substantive utterances
+  // and join them into a compact paragraph instead of dumping the ledger.
+  for (const topic of result.topics) {
+    const lines = topic.discussion
+      .split('\n')
+      .map((line) => line.replace(/^(?:확인 필요|제안):\s*/, '').trim())
+      .filter(
+        (line) =>
+          line.length >= 20 &&
+          !/[?？]$/.test(line) &&
+          !/^(?:네|예|아|음|어|안녕하세요|봤으니까|먼저 얘기|다른 분들|혹시)/.test(line),
+      );
+    const selected: string[] = [];
+    for (const line of lines) {
+      const words = new Set(line.split(/\s+/).filter((word) => word.length >= 2));
+      const duplicate = selected.some((previous) => {
+        const prior = new Set(previous.split(/\s+/).filter((word) => word.length >= 2));
+        const overlap = [...words].filter((word) => prior.has(word)).length;
+        return overlap >= 3 && overlap / Math.max(1, Math.min(words.size, prior.size)) > 0.55;
+      });
+      if (!duplicate) selected.push(line);
+      if (selected.length >= 6) break;
+    }
+    topic.discussion = selected.join(' ');
+  }
   for (const d of dispositions) {
     if (d.status === 'RENDERED' && !d.output_path) throw new DomainError('MISSING_FACT_OUTPUT');
     if (d.target_fact_id) {
@@ -501,11 +526,10 @@ export function renderFactLedger(
   }
   const titles = [...new Set(active.map((f) => f.category + ' 논의'))];
   result.title = sources.length ? '회의 기록' : '기록된 발언이 없는 회의';
-  result.summary = active
-    .filter((f) => f.kind === 'DECISION')
-    .slice(0, 3)
-    .map((f) => '결정: ' + f.statement);
-  if (!result.summary.length) result.summary = titles.map((t) => '논의: ' + t);
+  result.summary = result.topics
+    .filter((topic) => topic.discussion.length > 0)
+    .map((topic) => `${topic.category}에서는 ${topic.discussion.split(/(?<=[.!?다요])\s+/)[0]}`)
+    .slice(0, 5);
   if (dispositions.some((d) => d.status === 'EXCLUDED'))
     result.quality_notes.push('반복 설명과 보충 발언은 전체 전사에서 확인할 수 있습니다.');
   if (facts.some((f) => f.verification === 'REJECTED'))

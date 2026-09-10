@@ -31,6 +31,19 @@ interface Stage {
 export function createSummaryLedger(store: Store, job: Job): LedgerStore {
   const guildId = String(job.payload.guild_id);
   return {
+    rewrite: async (runId, result, outputHash, model) => {
+      await store.db.transaction().execute(async (tx) => {
+        const run = await first<{ meeting_id: string }>(
+          sql`SELECT meeting_id FROM summary_runs WHERE id=${runId}::uuid AND owner_job_id=${job.id}::uuid AND owner_generation=${job.generation} AND status='VERIFIED' FOR UPDATE`,
+          tx,
+        );
+        if (!run) throw new DomainError('STALE_SUMMARY_OWNER');
+        await store.assertJob(tx, job);
+        await sql`UPDATE summary_runs SET observed_model=${model},output_hash=${outputHash},result=${json(result)},updated_at=now() WHERE id=${runId}::uuid AND status='VERIFIED'`.execute(
+          tx,
+        );
+      });
+    },
     async open(d: LedgerDescriptor): Promise<LedgerJournal> {
       const run = await store.withMeeting(guildId, d.meeting_id, async (tx, m) => {
         await store.assertJob(tx, job);

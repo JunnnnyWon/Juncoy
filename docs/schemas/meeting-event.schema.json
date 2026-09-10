@@ -673,6 +673,10 @@
                 },
                 "resolved": {
                   "type": "boolean"
+                },
+                "resolution": {
+                  "type": "string",
+                  "const": "NO_SPEECH_OR_NOISE"
                 }
               },
               "required": [

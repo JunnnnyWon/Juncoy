@@ -2001,3 +2001,196 @@ small {
     padding-left: 13px;
   }
 }
+
+/* Summary mode intentionally shows only the narrative and topic sections. */
+.summary-content > section:not(.summary-overview):has(.decision),
+.summary-content > section:not(.summary-overview):has(.action-item),
+.summary-content > section.summary-extra {
+  display: none;
+}
+
+/* Each column owns its scrolling area; content cannot enlarge the viewport grid. */
+.meeting-body {
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: minmax(0, 1fr);
+}
+.meeting-content,
+.meeting-aside {
+  min-height: 0;
+  max-height: 100%;
+}
+.meeting-aside {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.meeting-content > .summary-content {
+  min-height: 0;
+  flex: 1;
+  padding: 20px 28px 28px;
+}
+.meeting-tabs {
+  flex-shrink: 0;
+}
+.transcript-toolbar {
+  flex-shrink: 0;
+}
+.transcript-viewport {
+  min-height: 0;
+}
+.utterance-text {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.85;
+  cursor: pointer;
+  user-select: text;
+  border-radius: 4px;
+  transition: color 180ms ease;
+}
+.utterance-text:hover,
+.utterance-text.is-playing {
+  color: #b4dbc2;
+}
+.utterance-text:focus-visible {
+  outline: 2px solid #91b39e;
+  outline-offset: 4px;
+}
+.audio-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 200ms ease,
+    opacity 200ms ease;
+}
+.audio-reveal.expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.audio-reveal-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.audio-wave-player {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0 4px;
+}
+.audio-wave {
+  flex: 1;
+  max-width: 340px;
+  min-width: 0;
+  height: 40px;
+  position: relative;
+}
+.audio-wave svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  fill: #4b5550;
+}
+.audio-wave .played {
+  fill: #9dc8ad;
+}
+.audio-wave input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.audio-wave:focus-within {
+  outline: 1px solid #9dc8ad;
+  outline-offset: 3px;
+}
+.audio-time {
+  flex-shrink: 0;
+  font:
+    11px ui-monospace,
+    monospace;
+  color: #a0b7a8;
+  font-variant-numeric: tabular-nums;
+}
+.audio-error,
+.audio-reveal small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  padding-top: 6px;
+}
+.audio-loading {
+  padding-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+@media (max-width: 680px) {
+  .meeting-content > .summary-content {
+    padding: 18px 20px 24px;
+  }
+  .audio-wave-player {
+    gap: 8px;
+  }
+  .audio-time {
+    font-size: 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .audio-reveal,
+  .utterance-text {
+    transition: none;
+  }
+}
+
+.more-evidence {
+  display: inline-block;
+  position: relative;
+  font-size: 11px;
+  color: var(--muted);
+}
+.more-evidence summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.more-evidence summary::-webkit-details-marker {
+  display: none;
+}
+.more-evidence > div {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  top: calc(100% + 5px);
+  display: grid;
+  gap: 4px;
+  padding: 7px;
+  background: #202428;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 10px 28px #0005;
+}
+.more-evidence button {
+  white-space: nowrap;
+}
+/* Keep the summary and transcript flush with the participant rail. */
+.summary-content {
+  padding-right: 12px;
+}
+.summary-content > section {
+  max-width: none;
+}
+@media (max-width: 680px) {
+  .summary-content {
+    padding-right: 20px;
+  }
+}

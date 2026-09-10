@@ -98,6 +98,7 @@ export class Capture {
   private paused = false;
   private pool: StreamPool;
   private releases = new WeakMap<SpeechStream, () => void>();
+  private retiring = new WeakSet<Track>();
   private flushing = false;
   private failed = false;
   private stopped = false;
@@ -268,9 +269,23 @@ export class Capture {
     for (const p of participants) {
       const track = this.tracks.get(p.user_id);
       if (!p.present || !p.recording_eligible || this.paused) {
-        if (track) this.disable(track);
+        if (track) void this.retire(track);
       } else if (!track || !track.eligible) this.add(p);
       else track.name = p.display_name;
+    }
+  }
+  /** Drain a departing participant before disabling its receive track. */
+  private async retire(t: Track) {
+    if (!t.eligible || this.retiring.has(t)) return;
+    this.retiring.add(t);
+    try {
+      await this.flushArchive(t);
+      if (t.stream) await this.closeStream(t);
+      await this.flushArchive(t);
+    } catch {
+      await this.storageFailure();
+    } finally {
+      this.disable(t);
     }
   }
   private add(p: ParticipantDTO) {

@@ -44,6 +44,7 @@ import type {
 } from '@meeting/contracts';
 import { api, ApiError } from './api';
 import { useMeeting } from './use-meeting';
+import { AudioText } from './AudioText';
 interface Me {
   user_id: string;
   display_name: string;
@@ -137,7 +138,7 @@ export function App() {
             error instanceof ApiError && error.status === 401
               ? ''
               : error instanceof ApiError && error.status === 403
-                ? '23팀 Discord 서버 구성원만 이용할 수 있습니다.'
+                ? 'Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.'
                 : 'Discord 멤버십을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.',
           );
         }
@@ -182,17 +183,17 @@ export function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <Link to="/meetings" className="brand" aria-label="23팀 회의록">
+        <Link to="/meetings" className="brand" aria-label="Juncoy 회의록">
           <span className="brand-icon">
             <Waveform size={21} weight="bold" />
           </span>
-          <span>23팀 회의록</span>
+          <span>Juncoy 회의록</span>
         </Link>
         <div className="account">
           <Avatar name={me.display_name} id={me.user_id} />
           <div>
             {me.display_name}
-            <small>{me.mode === 'mock' ? '데모' : '23팀 구성원'}</small>
+            <small>{me.mode === 'mock' ? '데모' : 'Juncoy 구성원'}</small>
           </div>
           <button className="icon-button" aria-label="로그아웃" onClick={() => void logout()}>
             <SignOut />
@@ -232,11 +233,11 @@ function Login({ error = '' }: { error?: string }) {
           <p role="alert">
             {error ||
               (location.search.includes('access=denied')
-                ? '23팀 Discord 서버 구성원만 이용할 수 있습니다.'
+                ? 'Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.'
                 : 'Discord 멤버십을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.')}
           </p>
         )}
-        <h1>23팀 회의록</h1>
+        <h1>Juncoy 회의록</h1>
         <p>팀의 회의 내용과 결정사항을 확인하세요.</p>
         <a className="primary-button" href={'/auth/discord?return_to=' + encodeURIComponent(back)}>
           <ChatCircleText weight="fill" />
@@ -245,7 +246,7 @@ function Login({ error = '' }: { error?: string }) {
         </a>
         <div className="login-privacy">
           <LockSimple size={15} />
-          23팀 Discord 서버 구성원만 이용할 수 있습니다.
+          Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.
         </div>
       </div>
       <div className="login-visual" aria-hidden>
@@ -313,7 +314,7 @@ function Meetings() {
       <div className="topbar">
         <span>
           <Notebook size={17} />
-          23팀 회의록
+          Juncoy 회의록
         </span>
         <span className="private-label">
           <LockSimple size={14} />팀 전용
@@ -644,7 +645,7 @@ function Meeting() {
         URL.revokeObjectURL(url);
       }, 1000);
     } catch {
-      setToast('23팀 멤버십 확인 또는 다운로드 연결에 실패했습니다. 다시 시도해 주세요.');
+      setToast('Juncoy 멤버십 확인 또는 다운로드 연결에 실패했습니다. 다시 시도해 주세요.');
     }
   };
   const copy = async (s: SegmentDTO) => {
@@ -968,11 +969,13 @@ function Meeting() {
                         STORAGE_ERROR: '저장 오류',
                       }[g.reason]
                     }
-                    {g.resolved
-                      ? ' · 복구됨'
-                      : !g.recoverable && g.reason === 'STT_PENDING'
-                        ? ' · 복구 불가'
-                        : ''}
+                    {g.resolution === 'NO_SPEECH_OR_NOISE'
+                      ? ' · 음성 없음/잡음 (전사 결과 없음)'
+                      : g.resolved
+                        ? ' · 복구됨'
+                        : !g.recoverable && g.reason === 'STT_PENDING'
+                          ? ' · 복구 불가'
+                          : ''}
                     <small>
                       {clock(g.start_ms)} ~ {g.end_ms === null ? '진행 중' : clock(g.end_ms)}
                     </small>
@@ -1000,6 +1003,9 @@ function TranscriptRow({
   highlighted?: boolean;
   onCopy: () => void;
 }) {
+  const { id } = useParams();
+  const [params] = useSearchParams();
+  const version = params.get('transcript_version');
   return (
     <article
       className={`transcript-row ${s.is_final ? 'final' : 'partial'} ${highlighted ? 'highlighted' : ''}`}
@@ -1035,7 +1041,11 @@ function TranscriptRow({
             <LinkSimple size={16} />
           </button>
         </div>
-        <p>{s.text}</p>
+        <AudioText
+          text={s.text}
+          enabled={s.is_final}
+          url={`/api/meetings/${id}/segments/${s.segment_id}/audio${version ? `?transcript_version=${encodeURIComponent(version)}` : ''}`}
+        />
       </div>
     </article>
   );
@@ -1062,7 +1072,7 @@ function Summary({
         icon={<Notebook size={32} />}
       >
         <p>
-          확정된 발언을 바탕으로 결정사항과 할 일을 정리합니다.
+          확정된 발언을 바탕으로 회의의 핵심 내용과 주요 주제를 정리합니다.
           <br />
           전체 전사는 계속 열람할 수 있습니다.
         </p>
@@ -1071,12 +1081,25 @@ function Summary({
   const s = result.result;
   const evidence = (ids: string[]) => (
     <span className="evidence-links">
-      {ids.map((id, i) => (
+      {ids.slice(0, 2).map((id, i) => (
         <button key={id} onClick={() => showEvidence(id, result.transcript_version)}>
           <LinkSimple size={13} />
           {ids.length === 1 ? '근거 보기' : `근거 ${i + 1}`}
         </button>
       ))}
+      {ids.length > 2 && (
+        <details className="more-evidence">
+          <summary>근거 {ids.length - 2}개 더 보기</summary>
+          <div>
+            {ids.slice(2).map((id, i) => (
+              <button key={id} onClick={() => showEvidence(id, result.transcript_version)}>
+                <LinkSimple size={13} />
+                근거 {i + 3}
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
     </span>
   );
   return (
@@ -1111,7 +1134,7 @@ function Summary({
           ))}
         </ul>
       </section>
-      <section>
+      <section className="summary-extra">
         <h2>
           결정사항 <span>{s.decisions.length}</span>
         </h2>
@@ -1130,7 +1153,7 @@ function Summary({
           <p className="muted">명시적으로 확정된 결정사항이 없습니다.</p>
         )}
       </section>
-      <section>
+      <section className="summary-extra">
         <h2>
           다음 할 일 <span>{s.action_items.length}</span>
         </h2>
@@ -1160,7 +1183,7 @@ function Summary({
         )}
       </section>
       <section>
-        <h2>주제별 논의</h2>
+        <h2>주제별 요약</h2>
         {s.topics.map((t, i) => (
           <div className="topic" key={i}>
             <span className="topic-category">{t.category}</span>
@@ -1171,7 +1194,7 @@ function Summary({
         ))}
       </section>
       {s.open_questions.length > 0 && (
-        <section>
+        <section className="summary-extra">
           <h2>미결 질문</h2>
           {s.open_questions.map((q, i) => (
             <div className="topic" key={i}>
@@ -1182,7 +1205,7 @@ function Summary({
         </section>
       )}
       {s.blockers.length > 0 && (
-        <section>
+        <section className="summary-extra">
           <h2>장애 요인</h2>
           {s.blockers.map((b, i) => (
             <div className="topic" key={i}>
@@ -1195,7 +1218,7 @@ function Summary({
         </section>
       )}
       {s.next_agenda.length > 0 && (
-        <section>
+        <section className="summary-extra">
           <h2>다음 안건</h2>
           {s.next_agenda.map((a, i) => (
             <div className="topic" key={i}>
@@ -1211,7 +1234,7 @@ function Summary({
         </section>
       )}
       {s.quality_notes.length > 0 && (
-        <section className="quality-notes">
+        <section className="quality-notes summary-extra">
           <h2>기록 품질 안내</h2>
           {s.quality_notes.map((n, i) => (
             <p key={i}>{n}</p>

@@ -161,6 +161,13 @@ export function unitGroups(units: FactUnit[], maxChars = 16000) {
 export function ruleKind(u: FactUnit): 'IGNORE' | 'DECISION' | 'ACTION' | 'PROPOSAL' | null {
   const t = u.span.quote;
   if (u.instruction) return 'IGNORE';
+  // Turn-taking and generic effort are not concrete work assignments.
+  if (
+    /^(?:(?:네|예|아|자|그럼)[,\s]*)?(?:먼저\s*|계속\s*|한번\s*)?(?:(?:얘기|이야기|말씀)(?:해|하셔)\s*주세요|열심히\s*하겠습니다)[.!?]?$/.test(
+      t,
+    )
+  )
+    return null;
   if (/^(?:최종\s*)?(?:합의|결정|결론)(?:사항)?입니다[.!]?$/.test(t)) return null;
   if (
     /(?:맡지 않|하지 않|약속이 아|뜻[은이]? 아|말한 적[은이]? 없|배정.*취소)/.test(t) &&

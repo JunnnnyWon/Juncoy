@@ -241,8 +241,10 @@ export class Jobs {
     if (
       (job.payload.capture_recovery || /^(recover:|recovered-gap:)/.test(job.key)) &&
       !result.utterances.some((u) => u.msg.trim())
-    )
-      throw new DomainError('RECOVERY_NO_TRANSCRIPT');
+    ) {
+      await this.store.completeEmptyRecovery(job);
+      return;
+    }
     const glossary = job.payload.glossary ?? m.settings.glossary;
     const participant = (await this.store.snapshot(guildId, id)).participants.find(
       (p) => p.user_id === userId,

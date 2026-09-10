@@ -183,7 +183,7 @@ test('speaker filtering retrieves a former participant outside the latest snapsh
   await expect(page.getByText('오래전에만 발언한 화자의 기록', { exact: true })).toBeVisible();
 });
 test('shared workspace copy and membership loss clear all meeting content', async ({ page }) => {
-  await expect(page.locator('.topbar').getByText('23팀 회의록')).toBeVisible();
+  await expect(page.locator('.topbar').getByText('Juncoy 회의록')).toBeVisible();
   await expect(
     page.locator('.sidebar, .mobile-menu, .workspace, .sidebar-note, .list-footnote'),
   ).toHaveCount(0);
@@ -194,15 +194,114 @@ test('shared workspace copy and membership loss clear all meeting content', asyn
       body: JSON.stringify({
         error: {
           code: 'WORKSPACE_FORBIDDEN',
-          message: '23팀 Discord 서버 구성원만 이용할 수 있습니다.',
+          message: 'Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.',
         },
       }),
     }),
   );
   await expect(page.getByRole('alert')).toHaveText(
-    '23팀 Discord 서버 구성원만 이용할 수 있습니다.',
+    'Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.',
     { timeout: 20000 },
   );
   await expect(page.getByRole('heading', { name: '모든 회의', exact: true })).toHaveCount(0);
   await expect(page.locator('.app-shell')).toHaveCount(0);
+});
+test('text playback opens waveform, pauses, resumes, switches and collapses on end', async ({
+  page,
+}) => {
+  const pcm = Buffer.alloc(16000 * 2 * 4);
+  for (let i = 0; i < pcm.length / 2; i++)
+    pcm.writeInt16LE(Math.round(Math.sin((i * 2 * Math.PI * 440) / 16000) * 3000), i * 2);
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0);
+  h.writeUInt32LE(36 + pcm.length, 4);
+  h.write('WAVE', 8);
+  h.write('fmt ', 12);
+  h.writeUInt32LE(16, 16);
+  h.writeUInt16LE(1, 20);
+  h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(16000, 24);
+  h.writeUInt32LE(32000, 28);
+  h.writeUInt16LE(2, 32);
+  h.writeUInt16LE(16, 34);
+  h.write('data', 36);
+  h.writeUInt32LE(pcm.length, 40);
+  let requests = 0;
+  await page.route('**/segments/*/audio*', (route) => {
+    requests++;
+    return route.fulfill({ status: 200, contentType: 'audio/wav', body: Buffer.concat([h, pcm]) });
+  });
+  await page.getByRole('link', { name: /실시간 기록 보기/ }).click();
+  const row = page.locator('.transcript-row.final').last();
+  await row.locator('.utterance-text').click();
+  await expect(row.locator('.audio-wave')).toBeVisible();
+  await expect(row.locator('.audio-time')).toContainText('/ 00:04');
+  await row.locator('.utterance-text').click();
+  await expect(row.locator('.audio-wave')).toHaveCount(0);
+  await row.locator('.utterance-text').click();
+  await expect(row.locator('.audio-wave')).toBeVisible();
+  expect(requests).toBe(1);
+  const other = page.locator('.transcript-row.final').nth(-2);
+  await other.locator('.utterance-text').click();
+  await expect(row.locator('.audio-wave')).toHaveCount(0);
+  await expect(other.locator('.audio-wave')).toBeVisible();
+  await expect(other.locator('.audio-wave')).toHaveCount(0, { timeout: 7000 });
+  await expect(page.locator('.sidebar')).toHaveCount(0);
+  const bounds = await page
+    .locator('.meeting-aside')
+    .evaluate((e) => ({ bottom: e.getBoundingClientRect().bottom, height: innerHeight }));
+  expect(bounds.bottom).toBeLessThanOrEqual(bounds.height + 1);
+  await page.setViewportSize({ width: 1100, height: 600 });
+  const scroll = await page.locator('.meeting-aside').evaluate((e) => {
+    e.scrollTop = e.scrollHeight;
+    return e.scrollTop;
+  });
+  expect(scroll).toBeGreaterThan(0);
+  await page.screenshot({ path: 'artifacts/audio-panel-layout.png' });
+});
+test('text selection does not play and rapid cancellation cannot revive audio', async ({
+  page,
+}) => {
+  let requests = 0;
+  await page.route('**/segments/*/audio*', async (route) => {
+    requests++;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await route
+      .fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: {
+            code: 'AUDIO_UNAVAILABLE',
+            message: '원음이 만료됐거나 아직 저장되지 않았습니다.',
+          },
+        }),
+      })
+      .catch(() => {});
+  });
+  await page.getByRole('link', { name: /실시간 기록 보기/ }).click();
+  const text = page.locator('.transcript-row.final').last().locator('.utterance-text');
+  await text.scrollIntoViewIfNeeded();
+  await expect(text).toBeVisible();
+  const selected = await text.evaluate((e) => {
+    const range = document.createRange();
+    range.selectNodeContents(e);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const before = selection.toString();
+    (e as HTMLElement).click();
+    return { before, after: selection.toString(), text: e.textContent };
+  });
+  expect(selected.before, JSON.stringify(selected)).not.toBe('');
+  expect(requests).toBe(0);
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await text.focus();
+  await text.press('Enter');
+  await expect(page.locator('.audio-loading')).toHaveText('원음 불러오는 중…');
+  await text.press('Enter');
+  await expect(page.locator('.audio-reveal')).toHaveCount(0);
+  await text.press('Enter');
+  await expect(page.getByRole('alert')).toContainText('원음이 만료됐거나');
+  await expect(page.locator('.audio-wave')).toHaveCount(0);
 });

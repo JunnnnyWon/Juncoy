@@ -37,7 +37,20 @@ it('a suggestion is retained without creating a decision or task', () => {
   );
   expect(result.decisions).toEqual([]);
   expect(result.action_items).toEqual([]);
-  expect(result.topics.map((t) => t.discussion).join(' ')).toContain('미연시');
+  expect(result.topics.map((t) => t.discussion).join(' ')).toContain('후보');
+});
+it('renders topics as short grouped paragraphs instead of a fact dump', () => {
+  const { facts, map, segments } = ledger('long-late-topics');
+  const { result } = renderFactLedger(
+    facts,
+    integrateFacts(facts, { links: [] }, map),
+    segments,
+    1,
+  );
+  expect(result.topics.every((topic) => topic.discussion.split('\n').length === 1)).toBe(true);
+  expect(result.topics.every((topic) => topic.discussion.length <= 900)).toBe(true);
+  expect(result.summary.length).toBeGreaterThan(0);
+  expect(result.summary.every((line) => !line.startsWith('논의:'))).toBe(true);
 });
 it('request and acceptance deduplicate while preserving both fact dispositions', () => {
   const { facts, map, segments } = ledger('explicit-assignment');

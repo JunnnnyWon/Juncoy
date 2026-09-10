@@ -9,3 +9,7 @@ playwright-report
 apps/web/dist
 
 **/._*
+
+graphify-out/
+
+.graphify_cache/

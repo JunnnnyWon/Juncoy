@@ -8,11 +8,13 @@ import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { Store, sql, rows, first, json, type MeetingRow } from '@meeting/db';
-import { type AppConfig, hash } from '@meeting/providers';
+import { type AppConfig, hash, readEncrypted, flacToPcm } from '@meeting/providers';
+import { randomUUID } from 'node:crypto';
 import { DomainError, parseCursor, safeReturnTo } from '@meeting/domain';
 import { Id, Snapshot, SummaryResult } from '@meeting/contracts';
 import { Auth, type Session } from './auth.ts';
 import { exportMarkdown, exportText } from './export.ts';
+import { segmentAudio, type AudioChunk } from './segment-audio.ts';
 export async function buildServer(config: AppConfig, store: Store) {
   const app = Fastify({
     logger:
@@ -39,6 +41,7 @@ export async function buildServer(config: AppConfig, store: Store) {
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:'],
         connectSrc: ["'self'"],
+        mediaSrc: ["'self'", 'blob:'],
         fontSrc: ["'self'"],
         frameAncestors: ["'none'"],
       },
@@ -294,6 +297,32 @@ export async function buildServer(config: AppConfig, store: Store) {
       .object({ transcript_version: z.coerce.number().int().nonnegative().optional() })
       .parse(req.query);
     return store.segmentContext(meeting.guild_id, meeting.id, id, q.transcript_version);
+  });
+  app.get('/api/meetings/:id/segments/:segment_id/audio', async (req, reply) => {
+    const { meeting } = await checkMeeting(req);
+    const q = z
+      .object({ transcript_version: z.coerce.number().int().nonnegative().optional() })
+      .parse(req.query);
+    const context = await store.segmentContext(
+      meeting.guild_id,
+      meeting.id,
+      Id.parse((req.params as any).segment_id),
+      q.transcript_version ?? meeting.view.transcript_version,
+    );
+    const body = context.segment;
+    if (!body?.is_final || body.end_ms === null)
+      throw new DomainError('AUDIO_UNAVAILABLE', '확정된 발언의 원음만 재생할 수 있습니다.', 404);
+    const chunks = await rows<AudioChunk>(
+      sql`SELECT id,storage_ref,start_ms,end_ms FROM audio_chunks WHERE meeting_id=${meeting.id}::uuid AND user_id=${body.user_id} AND start_ms<${body.end_ms} AND end_ms>${body.start_ms} AND expires_at>now() ORDER BY start_ms LIMIT 513`,
+      store.db,
+    );
+    const result = await segmentAudio(config, chunks, body.start_ms, body.end_ms);
+    await checkMeeting(req);
+    return reply
+      .type('audio/wav')
+      .header('Cache-Control', 'private, no-store')
+      .header('X-Audio-Missing-Ms', String(Math.round(result.missingMs)))
+      .send(result.data);
   });
   app.get('/api/meetings/:id/summary', async (req) => {
     const { meeting } = await checkMeeting(req);

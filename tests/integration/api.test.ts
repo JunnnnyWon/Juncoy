@@ -118,3 +118,53 @@ it('workspace membership guards even empty lists and me, while imported records 
     expect((await app.inject({ url, headers: { cookie: outsider } })).statusCode).toBe(403);
   }
 });
+it('audio is scoped to the speaker, clipped to the utterance and unavailable after expiry', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { pcmToFlac, writeEncrypted } = await import('@meeting/providers');
+  const dir = await mkdtemp(join(tmpdir(), 'meeting-playback-'));
+  try {
+    await app.close();
+    app = await buildServer({ ...f.config, RECORDING_STORAGE_PATH: dir }, f.store);
+    const segment = (await f.store.allSegments(guild, id))[0]!;
+    for (const [speaker, value] of [
+      [user, 1000],
+      ['900000000000000088', 9999],
+    ] as const) {
+      const chunk = randomUUID(),
+        ref = id + '/' + chunk + '.flac.enc',
+        pcm = Buffer.alloc(2000 * 32);
+      for (let i = 0; i < pcm.length; i += 2) pcm.writeInt16LE(value, i);
+      const checksum = await writeEncrypted(
+        dir,
+        ref,
+        await pcmToFlac(pcm),
+        f.config.AUDIO_ENCRYPTION_KEY,
+        chunk,
+      );
+      await sql`INSERT INTO audio_chunks(id,meeting_id,user_id,start_ms,end_ms,storage_ref,checksum) VALUES(${chunk},${id},${speaker},0,2000,${ref},${checksum})`.execute(
+        f.store.db,
+      );
+    }
+    const url = `/api/meetings/${id}/segments/${segment.segment_id}/audio`;
+    expect((await app.inject({ url })).statusCode).toBe(401);
+    const result = await app.inject({ url, headers: { cookie } });
+    expect(result.statusCode).toBe(200);
+    expect(result.rawPayload.length).toBe(32044);
+    expect(result.rawPayload.readInt16LE(44)).toBe(1000);
+    expect(result.headers['x-audio-missing-ms']).toBe('0');
+    expect(
+      (await app.inject({ url: url + '?transcript_version=999999', headers: { cookie } }))
+        .statusCode,
+    ).toBe(400);
+    await sql`UPDATE audio_chunks SET expires_at=now()-interval '1 second' WHERE meeting_id=${id}::uuid`.execute(
+      f.store.db,
+    );
+    expect((await app.inject({ url, headers: { cookie } })).json().error.code).toBe(
+      'AUDIO_UNAVAILABLE',
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

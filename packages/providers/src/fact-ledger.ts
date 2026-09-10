@@ -53,6 +53,7 @@ const ClaimReview = z
   })
   .strict();
 export const RELATE_PROMPT = `당신은 시간순 회의 사실 사이의 명시적 변경을 찾는 도구다. 새 사실이나 업무를 만들지 않는다. 앞 사실이 뒤에서 명시적으로 취소·번복되거나 담당자·기한이 변경될 때만 SUPERSEDED 관계를 반환한다. 취소 후 대체 결정이 없으면 뒤의 '미정' 사실이 앞 결정을 대체한다. 뒤의 단순 다른 제안이나 별개의 업무는 이전 사실을 대체하지 않는다. 입력의 허용된 earlier:later 쌍만 선택한다. 관계가 없으면 superseded_pairs를 빈 배열로 반환한다. 내부 사고 과정 없이 JSON만 출력한다.`;
+export const SYNTHESIS_PROMPT = `검증된 회의 사실을 바탕으로 실제 사람이 읽기 좋은 한국어 회의 요약을 작성한다. 원문 문장을 줄줄이 나열하거나 발언 순서를 재현하지 말고, 같은 주제의 내용을 원인·논점·현재까지의 방향이 드러나는 2~4문장 문단으로 통합한다. 각 주제의 제목은 기획·프로그래밍·아트·사운드·QA·운영 중 실제 내용에 맞게 정한다. 회의 전체 흐름은 3~5개의 짧은 문장으로 요약한다. 인사, 마이크 안내, 질문 진행 멘트, 단순 맞장구는 제외한다. 원문에 없는 결정·일정·담당자·수치를 만들지 않는다. decisions, action_items, open_questions, blockers, next_agenda, quality_notes는 빈 배열로 반환한다. topics와 summary의 각 주장에는 입력에 있는 가장 직접적인 evidence_segment_ids를 최대 4개 연결한다. 근거 ID 별칭을 그대로 사용하고 새로운 ID를 만들지 않는다. JSON만 반환한다.`;
 export const FACTS_PROMPT_HASH = hash(
   readFileSync(new URL('./fact-ledger.ts', import.meta.url), 'utf8') +
     readFileSync(new URL('../../domain/src/facts.ts', import.meta.url), 'utf8') +
@@ -61,6 +62,7 @@ export const FACTS_PROMPT_HASH = hash(
     EXTRACT_PROMPT +
     VERIFY_PROMPT +
     RELATE_PROMPT +
+    SYNTHESIS_PROMPT +
     canonicalJson([
       z.toJSONSchema(UnitClassification),
       z.toJSONSchema(UnitReview),
@@ -92,10 +94,12 @@ export interface LedgerJournal {
     outputHash: string,
     model: string,
   ): Promise<void>;
+  rewrite?(runId: string, result: SummaryDTO, outputHash: string, model: string): Promise<void>;
   reject(code: string): Promise<void>;
 }
 export interface LedgerStore {
   open(descriptor: LedgerDescriptor): Promise<LedgerJournal>;
+  rewrite?(runId: string, result: SummaryDTO, outputHash: string, model: string): Promise<void>;
 }
 export interface StructuredEngine {
   model: string;
@@ -289,13 +293,6 @@ export async function runFactLedger(
       const reviewCodes = await stage(`verify:${index}`, schema, payload, VERIFY_PROMPT);
       const review = decodeClassification(reviewCodes, local);
       // Structured commitments are proposed by source rules, then checked in isolation below.
-      for (const item of review.items) {
-        const rule = ruleKind(local[item.unit_key]!);
-        if (rule === 'ACTION' || rule === 'DECISION') {
-          item.kind = rule;
-          item.supported = true;
-        }
-      }
       return unitsToFacts(local, draft, review, materializeOptions);
     });
     const facts = batches

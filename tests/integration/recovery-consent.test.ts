@@ -108,7 +108,7 @@ it('a recovered range is applied once, and deletion rejects a late replacement',
   }
 });
 
-it('empty automatic file recovery keeps existing speech and its unresolved gap', async () => {
+it('empty automatic file recovery preserves speech and resolves the gap as no speech/noise', async () => {
   const f = await fixture(),
     directory = await mkdtemp(join(tmpdir(), 'recovery-empty-'));
   try {
@@ -162,9 +162,12 @@ it('empty automatic file recovery keeps existing speech and its unresolved gap',
         fileStatus: async () => ({ status: 'completed', utterances: [] }),
       },
     );
-    await expect(jobs.retranscribe(job)).rejects.toThrow('RECOVERY_NO_TRANSCRIPT');
+    await jobs.retranscribe(job);
     expect((await f.store.allSegments(guild, m.id))[0]!.text).toBe('이미 보존된 발언');
-    expect((await f.store.snapshot(guild, m.id)).gaps[0]!.resolved).toBe(false);
+    expect((await f.store.snapshot(guild, m.id)).gaps[0]).toMatchObject({
+      resolved: true,
+      resolution: 'NO_SPEECH_OR_NOISE',
+    });
   } finally {
     await f.dispose();
     await rm(directory, { recursive: true, force: true });

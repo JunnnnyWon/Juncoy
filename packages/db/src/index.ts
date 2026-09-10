@@ -30,6 +30,21 @@ export { sql } from 'kysely';
 export type Database = Record<string, never>;
 export type Conn = Kysely<Database> | Transaction<Database>;
 export const json = (value: unknown) => sql`${JSON.stringify(value)}::jsonb`;
+const summaryOnly = (result: SummaryDTO): SummaryDTO => ({
+  ...result,
+  summary: result.summary.map((x) => x.replace(/(?:^|\n)(?:확인 필요|제안):\s*/g, '')),
+  topics: result.topics.map((topic) => ({
+    ...topic,
+    evidence_segment_ids: topic.evidence_segment_ids.slice(0, 4),
+    discussion: topic.discussion.replace(/(?:^|\n)(?:확인 필요|제안):\s*/g, ''),
+  })),
+  decisions: [],
+  action_items: [],
+  open_questions: [],
+  blockers: [],
+  next_agenda: [],
+  quality_notes: [],
+});
 export const rows = async <T>(q: RawBuilder<T>, db: Conn) => (await q.execute(db)).rows;
 export const first = async <T>(q: RawBuilder<T>, db: Conn) => (await rows(q, db))[0];
 export interface MeetingRow {
@@ -878,6 +893,33 @@ export class Store {
         });
     });
   }
+  async completeEmptyRecovery(job: Job) {
+    const guildId = String(job.payload.guild_id);
+    await this.withMeeting(guildId, job.meeting_id!, async (tx, m) => {
+      await this.assertJob(tx, job);
+      await this.assertRecoveryConsent(tx, job);
+      const row = await first(
+        sql<{
+          body: GapDTO;
+        }>`SELECT body FROM coverage_gaps WHERE meeting_id=${m.id}::uuid AND id::text=${String(job.payload.gap_id ?? '')} FOR UPDATE`,
+        tx,
+      );
+      if (row) {
+        const gap = { ...row.body, resolved: true, resolution: 'NO_SPEECH_OR_NOISE' as const };
+        await sql`UPDATE coverage_gaps SET body=${json(gap)} WHERE id=${gap.gap_id}::uuid`.execute(
+          tx,
+        );
+        await this.event(tx, m, 'gap.upsert', { gap });
+      }
+      await sql`UPDATE jobs SET payload=payload || ${json({ result: 'NO_SPEECH_OR_NOISE' })} WHERE id=${job.id}::uuid`.execute(
+        tx,
+      );
+      await this.audit(tx, guildId, m.id, null, 'RECOVERY_NO_SPEECH', {
+        job_id: job.id,
+        gap_id: job.payload.gap_id ?? null,
+      });
+    });
+  }
   async gap(guildId: string, id: string, gap: GapDTO) {
     await this.withMeeting(guildId, id, async (tx, m) => {
       await sql`INSERT INTO coverage_gaps(id,meeting_id,body) VALUES(${gap.gap_id},${id},${json(gap)}) ON CONFLICT(id) DO UPDATE SET body=EXCLUDED.body`.execute(
@@ -989,7 +1031,7 @@ export class Store {
     const found = await rows(
       sql<{
         body: SegmentDTO;
-      }>`SELECT body FROM ${source} WHERE true ${options.speaker ? sql`AND body->>'user_id'=${options.speaker}` : sql``} ${options.q ? sql`AND body->>'text' ILIKE ${'%' + escapeLike(options.q) + '%'}` : sql``} ${cursor ? sql`AND ((body->>'start_ms')::int,body->>'user_id',body->>'segment_id')<(${cursor.start},${cursor.user},${cursor.id})` : sql``} ORDER BY (body->>'start_ms')::int DESC,body->>'user_id' DESC,body->>'segment_id' DESC LIMIT ${limit + 1}`,
+      }>`SELECT body FROM ${source} WHERE true ${options.speaker ? sql`AND body->>'user_id'=${options.speaker}` : sql``} ${options.q ? sql`AND (body->>'is_final')::boolean=true AND body->>'text' ILIKE ${'%' + escapeLike(options.q) + '%'}` : sql``} ${cursor ? sql`AND ((body->>'start_ms')::int,body->>'user_id',body->>'segment_id')<(${cursor.start},${cursor.user},${cursor.id})` : sql``} ORDER BY (body->>'start_ms')::int DESC,body->>'user_id' DESC,body->>'segment_id' DESC LIMIT ${limit + 1}`,
       this.db,
     );
     const page = found.slice(0, limit).map((r) => r.body);
@@ -1078,7 +1120,7 @@ export class Store {
       summary_status: m.view.summary_status,
       summary_version: m.view.summary_version,
       transcript_version: s?.transcript_version ?? m.view.transcript_version,
-      result: s?.result ?? null,
+      result: s?.result ? summaryOnly(s.result) : null,
       generated_at: s?.created_at.toISOString() ?? null,
       model: s?.model ?? null,
       partial: s?.partial ?? false,
@@ -1125,6 +1167,7 @@ export class Store {
           throw new DomainError('SUMMARY_VERIFICATION_FAILED');
         inputHash = run.input_hash;
       }
+      const publicResult = summaryOnly(result);
       const existing = await first(
         sql<{
           summary_version: number;
@@ -1140,13 +1183,13 @@ export class Store {
           tx,
         ))!.n;
       if (!existing)
-        await sql`INSERT INTO summaries(id,meeting_id,transcript_version,summary_version,prompt_hash,model,result,partial,input_hash,verification_run_id) VALUES(${randomUUID()},${id},${version},${next},${promptHash},${model},${json(result)},${partial},${inputHash},${proof?.runId ?? null}::uuid)`.execute(
+        await sql`INSERT INTO summaries(id,meeting_id,transcript_version,summary_version,prompt_hash,model,result,partial,input_hash,verification_run_id) VALUES(${randomUUID()},${id},${version},${next},${promptHash},${model},${json(publicResult)},${partial},${inputHash},${proof?.runId ?? null}::uuid)`.execute(
           tx,
         );
       m.view.summary_version = next;
       m.view.summary_status = 'READY';
       m.view.status = partial ? 'PARTIAL' : 'COMPLETED';
-      m.view.title = result.title || m.view.title;
+      m.view.title = publicResult.title || m.view.title;
       await this.saveView(tx, m);
       await this.event(tx, m, 'summary.updated', {
         status: 'READY',

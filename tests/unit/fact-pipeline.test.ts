@@ -75,3 +75,11 @@ it('an independent semantic rejection is terminal and never rerolled into succes
   );
   expect(calls).toBe(3);
 });
+
+it('turn-taking and generic effort are not assigned work', async () => {
+  const { ruleKind } = await import('../../packages/providers/src/fact-units.ts');
+  const kind = (quote: string) => ruleKind({ span: { quote }, instruction: false } as any);
+  expect(kind('네, 먼저 얘기해 주세요.')).toBeNull();
+  expect(kind('예, 열심히 하겠습니다.')).toBeNull();
+  expect(kind('회의록을 정리해서 노션에 업로드하겠습니다.')).toBe('ACTION');
+});

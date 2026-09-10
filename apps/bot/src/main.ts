@@ -209,11 +209,11 @@ async function handle(interaction: Interaction) {
     }
     if (action === '설정' && interaction.isChatInputCommand()) {
       return say(
-        `감지: 모든 일반 음성방 (AFK·스테이지 제외)\n안내·요약: <#${c.bot_channel_id}>\n열람: 23팀 서버 구성원 전체\n시작: 음성방에서 /회의 시작\n동시에 기록하는 회의: 1개`,
+        `감지: 모든 일반 음성방 (AFK·스테이지 제외)\n안내·요약: <#${c.bot_channel_id}>\n열람: Juncoy에 연결된 서버 구성원 전체\n시작: 음성방에서 /회의 시작\n동시에 기록하는 회의: 1개`,
       );
     }
     if (!memberTeam(member, c))
-      throw new DomainError('FORBIDDEN', '23팀 서버 구성원만 사용할 수 있습니다.', 403);
+      throw new DomainError('FORBIDDEN', 'Juncoy에 연결된 서버 구성원만 사용할 수 있습니다.', 403);
     if (action === '시작' || action === 'start') {
       const m = await start(guild, member, interaction.id, button?.[1]);
       return say(`회의 상태: ${m.status}\n${link(m.id)}`);

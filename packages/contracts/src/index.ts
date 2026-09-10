@@ -59,6 +59,7 @@ export const Gap = z
     reason: z.enum(['PAUSED', 'VOICE_LOST', 'STT_PENDING', 'STORAGE_ERROR']),
     recoverable: z.boolean(),
     resolved: z.boolean(),
+    resolution: z.literal('NO_SPEECH_OR_NOISE').optional(),
   })
   .strict();
 export const Marker = z
