@@ -41,7 +41,7 @@ it('returning only the first unit cannot pass coverage or publish a long summary
   );
   expect(calls).toBe(9); // Three simultaneous groups, each at most three total attempts.
 });
-it('an independent semantic rejection is terminal and never rerolled into success', async () => {
+it('an independent kind disagreement downgrades the fact instead of rejecting the run', async () => {
   let calls = 0;
   const engine: StructuredEngine = {
     model: 'contract-test',
@@ -70,10 +70,18 @@ it('an independent semantic rejection is terminal and never rerolled into succes
       };
     },
   };
-  await expect(runFactLedger(input('explicit-decision'), engine, async () => {})).rejects.toThrow(
-    'FACT_SEMANTIC_REJECTED',
-  );
+  const run = await runFactLedger(input('explicit-decision'), engine, async () => {});
   expect(calls).toBe(3);
+  const downgraded = run.facts.filter((f) => f.reason_code === 'CLAIM_KIND_DOWNGRADED');
+  expect(downgraded).toHaveLength(1);
+  expect(downgraded[0]).toMatchObject({
+    kind: 'PROPOSAL',
+    section: 'topics',
+    verification: 'DOWNGRADED',
+    owner_user_id: null,
+    due_date: null,
+  });
+  expect(run.result.decisions).toHaveLength(0);
 });
 
 it('turn-taking and generic effort are not assigned work', async () => {
