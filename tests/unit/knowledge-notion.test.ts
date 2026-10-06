@@ -97,3 +97,22 @@ describe('NotionCollector.syncIncremental', () => {
     expect(ingested).toEqual(['new-1', 'new-2']);
   });
 });
+
+import { untar } from '@meeting/knowledge';
+import { execSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+describe('untar', () => {
+  it('strips the repo-<sha> prefix directory and yields file contents', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tar-'));
+    mkdirSync(join(dir, 'owner-repo-abc1234/src'), { recursive: true });
+    writeFileSync(join(dir, 'owner-repo-abc1234/src/main.ts'), 'export const a = 1;');
+    writeFileSync(join(dir, 'owner-repo-abc1234/README.md'), '# hi');
+    const tar = execSync(`tar -C ${dir} -cf - .`).subarray(0);
+    const files = untar(tar as unknown as Buffer);
+    expect(files.get('src/main.ts')?.toString()).toBe('export const a = 1;');
+    expect(files.get('README.md')?.toString()).toBe('# hi');
+  });
+});
