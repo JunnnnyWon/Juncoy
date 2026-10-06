@@ -92,7 +92,8 @@ export function registerReadTools(reg: ToolRegistry) {
     }),
     run: async (ctx, q) =>
       rows<any>(
-        sql`SELECT d.stable_key, d.title, c.content, c.span
+        sql`SELECT d.stable_key, coalesce(d.metadata->>'title', d.stable_key) AS title,
+              c.content, c.span
             FROM chunks c
             JOIN chunk_sets s ON s.id=c.chunk_set_id AND s.active
             JOIN documents d ON d.id=s.document_id AND s.version_id=d.current_version_id
