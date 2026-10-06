@@ -183,7 +183,7 @@ test('speaker filtering retrieves a former participant outside the latest snapsh
   await expect(page.getByText('오래전에만 발언한 화자의 기록', { exact: true })).toBeVisible();
 });
 test('shared workspace copy and membership loss clear all meeting content', async ({ page }) => {
-  await expect(page.locator('.topbar').getByText('Juncoy 회의록')).toBeVisible();
+  await expect(page.locator('.topbar').getByText('23시 정시퇴근 회의록')).toBeVisible();
   await expect(
     page.locator('.sidebar, .mobile-menu, .workspace, .sidebar-note, .list-footnote'),
   ).toHaveCount(0);
@@ -194,13 +194,13 @@ test('shared workspace copy and membership loss clear all meeting content', asyn
       body: JSON.stringify({
         error: {
           code: 'WORKSPACE_FORBIDDEN',
-          message: 'Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.',
+          message: '23시 정시퇴근에 연결된 Discord 서버 구성원만 이용할 수 있습니다.',
         },
       }),
     }),
   );
   await expect(page.getByRole('alert')).toHaveText(
-    'Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.',
+    '23시 정시퇴근에 연결된 Discord 서버 구성원만 이용할 수 있습니다.',
     { timeout: 20000 },
   );
   await expect(page.getByRole('heading', { name: '모든 회의', exact: true })).toHaveCount(0);

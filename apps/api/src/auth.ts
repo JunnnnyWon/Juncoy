@@ -124,7 +124,7 @@ export class Auth {
     if (!result.allowed)
       throw new DomainError(
         'WORKSPACE_FORBIDDEN',
-        'Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.',
+        '23시 정시퇴근에 연결된 Discord 서버 구성원만 이용할 수 있습니다.',
         403,
       );
     return result.until;

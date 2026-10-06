@@ -138,7 +138,7 @@ export function App() {
             error instanceof ApiError && error.status === 401
               ? ''
               : error instanceof ApiError && error.status === 403
-                ? 'Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.'
+                ? '23시 정시퇴근에 연결된 Discord 서버 구성원만 이용할 수 있습니다.'
                 : 'Discord 멤버십을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.',
           );
         }
@@ -183,17 +183,17 @@ export function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <Link to="/meetings" className="brand" aria-label="Juncoy 회의록">
+        <Link to="/meetings" className="brand" aria-label="23시 정시퇴근 회의록">
           <span className="brand-icon">
             <Waveform size={21} weight="bold" />
           </span>
-          <span>Juncoy 회의록</span>
+          <span>23시 정시퇴근 회의록</span>
         </Link>
         <div className="account">
           <Avatar name={me.display_name} id={me.user_id} />
           <div>
             {me.display_name}
-            <small>{me.mode === 'mock' ? '데모' : 'Juncoy 구성원'}</small>
+            <small>{me.mode === 'mock' ? '데모' : '23시 정시퇴근 구성원'}</small>
           </div>
           <button className="icon-button" aria-label="로그아웃" onClick={() => void logout()}>
             <SignOut />
@@ -227,17 +227,17 @@ function Login({ error = '' }: { error?: string }) {
           <span className="brand-icon">
             <Waveform size={24} weight="bold" />
           </span>
-          Juncoy
+          23시 정시퇴근
         </div>
         {(error || location.search.includes('access=')) && (
           <p role="alert">
             {error ||
               (location.search.includes('access=denied')
-                ? 'Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.'
+                ? '23시 정시퇴근에 연결된 Discord 서버 구성원만 이용할 수 있습니다.'
                 : 'Discord 멤버십을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.')}
           </p>
         )}
-        <h1>Juncoy 회의록</h1>
+        <h1>23시 정시퇴근 회의록</h1>
         <p>팀의 회의 내용과 결정사항을 확인하세요.</p>
         <a className="primary-button" href={'/auth/discord?return_to=' + encodeURIComponent(back)}>
           <ChatCircleText weight="fill" />
@@ -246,7 +246,7 @@ function Login({ error = '' }: { error?: string }) {
         </a>
         <div className="login-privacy">
           <LockSimple size={15} />
-          Juncoy에 연결된 Discord 서버 구성원만 이용할 수 있습니다.
+          23시 정시퇴근에 연결된 Discord 서버 구성원만 이용할 수 있습니다.
         </div>
       </div>
       <div className="login-visual" aria-hidden>
@@ -314,7 +314,7 @@ function Meetings() {
       <div className="topbar">
         <span>
           <Notebook size={17} />
-          Juncoy 회의록
+          23시 정시퇴근 회의록
         </span>
         <span className="private-label">
           <LockSimple size={14} />팀 전용
@@ -645,7 +645,7 @@ function Meeting() {
         URL.revokeObjectURL(url);
       }, 1000);
     } catch {
-      setToast('Juncoy 멤버십 확인 또는 다운로드 연결에 실패했습니다. 다시 시도해 주세요.');
+      setToast('23시 정시퇴근 멤버십 확인 또는 다운로드 연결에 실패했습니다. 다시 시도해 주세요.');
     }
   };
   const copy = async (s: SegmentDTO) => {
