@@ -45,6 +45,22 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('persists Parse structure and isolates lookup by project', async (ctx) => {
+    skipIf(ctx);
+    const projectId = randomUUID();
+    await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'parse fixture')`.execute(store!.db);
+    const upload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'fixture.pdf', mime: 'application/pdf', bytes: 10, sha256: 'd'.repeat(64), storageKey: 'parse-fixture' });
+    const versionId = await store!.createUploadVersion({ uploadId: upload.id, extractorVersion: '2', sourceRevision: 'd'.repeat(64), parserKind: 'upstage_document_parse', parserVersion: 'fixture', parseStatus: 'READY', sourceSha256: 'd'.repeat(64), normalizedHash: 'e'.repeat(64), parseLatencyMs: 17 });
+    await store!.saveDocumentParseStructure(versionId, {
+      blocks: [{ block_id: 'p2-b1', page: 2, ordinal: 0, block_type: 'table', text: 'cell', metadata: { bbox: [0, 0, 1, 1] } }],
+      pages: [{ page: 2, text: 'cell', block_ids: ['p2-b1'] }],
+    });
+    const result = await store!.getDocumentParse(projectId, upload.id);
+    expect(result!.version.parse_latency_ms).toBe(17);
+    expect(result!.blocks[0].metadata.bbox).toEqual([0, 0, 1, 1]);
+    expect(result!.pages[0].block_ids).toEqual(['p2-b1']);
+    expect(await store!.getDocumentParse(randomUUID(), upload.id)).toBeNull();
+  });
   it('keeps immutable art analyses and binds approval to revision/hash', async (ctx) => {
     skipIf(ctx);
     const projectId = randomUUID();
@@ -254,11 +270,12 @@ describe('knowledge-db semantics', () => {
   it('expired-lease jobs are reclaimed and stale-generation writes rejected', async (ctx) => {
     skipIf(ctx);
     await store!.enqueueJob('job-lease', 'fetch', { x: 1 });
-    const claimed = await store!.claimJobs('w1', ['fetch'], 5, 1); // 1ms lease
+    const claimed = await store!.claimJobs('w1', ['fetch'], 5, 30_000);
     expect(claimed).toHaveLength(1);
     const job = claimed[0];
     expect(job.owner).toBe('w1');
-    await new Promise((r) => setTimeout(r, 20)); // lease 만료 대기
+    // Set an expired lease using the same DB clock used by claimJobs.
+    await sql`UPDATE knowledge_jobs SET lease_until=now() - interval '1 second' WHERE id=${job.id}`.execute(store!.db);
     const reclaimed = await store!.claimJobs('w2', ['fetch'], 5, 30_000);
     expect(reclaimed).toHaveLength(1);
     expect(reclaimed[0].generation).toBe(job.generation + 1);

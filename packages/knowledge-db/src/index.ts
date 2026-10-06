@@ -131,7 +131,7 @@ export class KnowledgeStore {
     await sql`
       INSERT INTO knowledge_jobs(id, key, kind, document_id, payload, due_at)
       VALUES (${randomUUID()}, ${key}, ${kind}, ${opts?.documentId ?? null}, ${json(payload)},
-              ${opts?.dueAt ?? new Date()})
+              ${opts?.dueAt ?? sql`now()`})
       ON CONFLICT (key) DO NOTHING`.execute(this.db);
   }
   /**
