@@ -372,7 +372,7 @@ export function ArtReferenceCanvas() {
                 {generated.slice(0, 6).map((image) => (
                   <a key={image.id} href={'/api/assistant/images/' + image.id} target="_blank" rel="noreferrer">
                     <img src={'/api/assistant/images/' + image.id} alt="생성 결과" loading="lazy" />
-                    <small>DRAFT · {image.model}</small>
+                    <small>DRAFT · canonical 아님 · {image.model}</small>
                   </a>
                 ))}
               </div>
