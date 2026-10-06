@@ -154,21 +154,31 @@ export class GitHubCollector {
     );
   }
 
-  /** recursive tree의 blob 경로→SHA 맵. truncated면 하위 tree를 재귀 조회 (§6.2-7). */
+  /** recursive tree의 blob 경로→SHA 맵. truncated면 잘린 하위 tree만 비재귀로 재조회 (§6.2-7). */
   private async flattenTree(sha: string): Promise<Record<string, string>> {
+    const r = await this.rest.tree(this.repo, sha);
+    if (r.status !== 200 || !Array.isArray(r.body?.tree)) {
+      process.stderr.write(`github tree ${sha.slice(0, 8)}: status ${r.status}\n`);
+      return {};
+    }
     const out: Record<string, string> = {};
-    const walk = async (treeSha: string, prefix: string) => {
-      const r = await this.rest.tree(this.repo, treeSha);
-      if (r.status !== 200 || !Array.isArray(r.body?.tree)) return;
-      for (const e of r.body.tree as TreeEntry[]) {
-        const p = prefix ? `${prefix}/${e.path}` : e.path;
-        if (e.type === 'blob') out[p] = e.sha;
-        else if (e.type === 'tree') await walk(e.sha, p);
-      }
-      // truncated=true: recursive 응답이 잘렸으면 비재귀로 재조회가 필요하지만
-      // 이 구현은 이미 트리별 재귀 호출이라 path가 완전하다.
-    };
-    await walk(sha, '');
+    for (const e of r.body.tree as TreeEntry[]) if (e.type === 'blob') out[e.path] = e.sha;
+    if (r.body.truncated) {
+      // 응답이 잘렸다 — 'tree' 엔트리별로 비재귀 조회해 누락분을 메운다.
+      const fill = async (treeSha: string, prefix: string) => {
+        const sub = await this.rest.request(
+          `/repos/${this.repo}/git/trees/${treeSha}`,
+        );
+        if (sub.status !== 200 || !Array.isArray(sub.body?.tree)) return;
+        for (const e of sub.body.tree as TreeEntry[]) {
+          const p = prefix ? `${prefix}/${e.path}` : e.path;
+          if (e.type === 'blob') out[p] = e.sha;
+          else if (e.type === 'tree') await fill(e.sha, p);
+        }
+      };
+      for (const e of r.body.tree as TreeEntry[])
+        if (e.type === 'tree') await fill(e.sha, e.path);
+    }
     return out;
   }
 
@@ -199,7 +209,15 @@ export class GitHubCollector {
     const added = Object.keys(tree).filter((p) => !(p in old));
     const modified = Object.keys(tree).filter((p) => p in old && old[p] !== tree[p]);
     const removed = Object.keys(old).filter((p) => !(p in tree));
-    for (const p of [...added, ...modified]) await this.ingestFile(ref, p, tree[p], head);
+    process.stdout.write(
+      `github ${this.repo}@${ref} head=${head.slice(0, 8)} files=${Object.keys(tree).length} +${added.length} ~${modified.length} -${removed.length}\n`,
+    );
+    const work = [...added, ...modified];
+    for (let i = 0; i < work.length; i++) {
+      if (i && i % 200 === 0)
+        process.stdout.write(`github ${this.repo}@${ref} ingest ${i}/${work.length}\n`);
+      await this.ingestFile(ref, work[i], tree[work[i]], head);
+    }
     for (const p of removed)
       await this.store.applyTombstone(
         documentKeys.githubFile(this.repoId, ref, p),
