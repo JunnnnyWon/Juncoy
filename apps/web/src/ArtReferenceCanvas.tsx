@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api.ts';
 import type { ArtCanvasNode, ArtCanvasEdge } from '@meeting/contracts';
+import { changeCanvas, travelCanvas, type CanvasHistory } from './canvas-history.ts';
 
 type Role =
   'face_shape' | 'modeling_language' | 'material_surface' | 'texture' | 'lighting' | 'mood';
@@ -37,6 +38,37 @@ export function ArtReferenceCanvas() {
   const [refs, setRefs] = useState<RefCard[]>([]);
   const [nodes, setNodes] = useState<ArtCanvasNode[]>([]);
   const [edges, setEdges] = useState<ArtCanvasEdge[]>([]);
+  const history = useRef<CanvasHistory<{ refs: RefCard[]; nodes: ArtCanvasNode[]; edges: ArtCanvasEdge[] }> | null>(null);
+  const restoring = useRef(false);
+  const loadedBoard = useRef(false);
+  const [, setHistoryVersion] = useState(0);
+  useEffect(() => {
+    if (!loadedBoard.current) return;
+    const present = { refs, nodes, edges };
+    if (restoring.current) { restoring.current = false; return; }
+    history.current = history.current ? changeCanvas(history.current, present) : { past: [], present, future: [] };
+    setHistoryVersion((v) => v + 1);
+  }, [refs, nodes, edges]);
+  const travel = (direction: 'undo' | 'redo') => {
+    if (!history.current) return;
+    const next = travelCanvas(history.current, direction);
+    if (next === history.current) return;
+    history.current = next;
+    restoring.current = true;
+    setRefs(next.present.refs); setNodes(next.present.nodes); setEdges(next.present.edges);
+    setBrief(null); setAnalysis(null); setSyncState('미저장 변경');
+    setHistoryVersion((v) => v + 1);
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || !['z', 'y'].includes(event.key.toLowerCase())) return;
+      if ((event.target as HTMLElement).closest('input, textarea, select, [contenteditable=true]')) return;
+      event.preventDefault();
+      travel(event.shiftKey || event.key.toLowerCase() === 'y' ? 'redo' : 'undo');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [connectSource, setConnectSource] = useState<string | null>(null);
   const [edgeType, setEdgeType] = useState<ArtCanvasEdge['edge_type']>('supports');
@@ -78,6 +110,7 @@ export function ArtReferenceCanvas() {
           setRevision(Number(boards[0].current_revision ?? 0));
           const detail = await api<any>('/api/assistant/art-boards/' + boards[0].id);
           const saved = detail.revision?.snapshot?.references;
+          history.current = { past: [], present: { refs: Array.isArray(saved) ? saved : [], nodes: detail.revision?.snapshot?.nodes ?? [], edges: detail.revision?.snapshot?.edges ?? [] }, future: [] };
           if (Array.isArray(saved)) setRefs(saved);
           setNodes(detail.revision?.snapshot?.nodes ?? []);
           setEdges(detail.revision?.snapshot?.edges ?? []);
@@ -93,7 +126,9 @@ export function ArtReferenceCanvas() {
             body: JSON.stringify({ name: '비주얼 레퍼런스 보드' }),
           });
           setBoardId(created.id);
+          history.current = { past: [], present: { refs: [], nodes: [], edges: [] }, future: [] };
         }
+        loadedBoard.current = true;
         setSyncState('서버에 연결됨');
         setGenerated(await api<any[]>('/api/assistant/images'));
       } catch {
@@ -269,6 +304,8 @@ export function ArtReferenceCanvas() {
         </div>
       </header>
       <div className="art-toolbar">
+        <button className="art-tool" aria-label="실행 취소" title="실행 취소" disabled={!history.current?.past.length} onClick={() => travel('undo')}>↶</button>
+        <button className="art-tool" aria-label="다시 실행" title="다시 실행" disabled={!history.current?.future.length} onClick={() => travel('redo')}>↷</button>
         <button className="art-tool active">↖ 선택</button>
         <button className="art-tool" onClick={() => addNode('frame')}>▧ 프레임</button>
         <button className="art-tool" onClick={() => addNode('text_note')}>T 메모</button>
