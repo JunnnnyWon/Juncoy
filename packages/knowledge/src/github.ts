@@ -195,7 +195,11 @@ export class GitHubCollector {
       sql`SELECT cursor FROM connector_cursors WHERE source_id=${this.sourceId} AND scope_key=${this.cursorKey(ref)}`,
       this.store.db,
     );
-    return (row?.cursor ?? {}) as { head_sha?: string; tree?: Record<string, string> };
+    return (row?.cursor ?? {}) as {
+      head_sha?: string | null;
+      tree?: Record<string, string>;
+      failed?: string[];
+    };
   }
   private async saveCursor(ref: string, cursor: object) {
     await sql`
@@ -257,7 +261,7 @@ export class GitHubCollector {
     }
     if (br.status !== 200) return { changed: false, status: br.status };
     const head = br.body.commit?.sha as string;
-    if (!head || (head === prev.head_sha && !(prev.failed as string[] | undefined)?.length))
+    if (!head || (head === prev.head_sha && !(prev.failed)?.length))
       return { changed: false, head };
     const tree = await this.flattenTree(head);
     if (tree === null) return { changed: false, status: 'tree_failed', head };
@@ -266,7 +270,7 @@ export class GitHubCollector {
     const modified = Object.keys(tree).filter((p) => p in old && old[p] !== tree[p]);
     const removed = Object.keys(old).filter((p) => !(p in tree));
     // 지난번에 실패한 파일도 이번에 재시도 — 커서의 tree는 진실이 아니라 수집 목표다.
-    const pending = ((prev.failed as string[] | undefined) ?? []).filter((p) => p in tree);
+    const pending = (prev.failed ?? []).filter((p) => p in tree);
     process.stdout.write(
       `github ${this.repo}@${ref} head=${head.slice(0, 8)} files=${Object.keys(tree).length} +${added.length} ~${modified.length} -${removed.length}\n`,
     );
