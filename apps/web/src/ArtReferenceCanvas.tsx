@@ -41,6 +41,8 @@ export function ArtReferenceCanvas() {
   const [generated, setGenerated] = useState<any[]>([]);
   const [analysis, setAnalysis] = useState<any>(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [assetAnalysis, setAssetAnalysis] = useState<any>(null);
+  const [assetAnalysisBusy, setAssetAnalysisBusy] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -137,6 +139,18 @@ export function ArtReferenceCanvas() {
       window.alert('보드 분석을 시작할 수 없습니다.');
     } finally {
       setAnalysisBusy(false);
+    }
+  };
+  const analyzeSelectedAsset = async () => {
+    if (!selected?.art_asset_id || assetAnalysisBusy) return;
+    setAssetAnalysisBusy(true);
+    try {
+      const result = await api<any>('/api/assistant/art-assets/' + selected.art_asset_id + '/analyze', { method: 'POST' });
+      setAssetAnalysis(result);
+    } catch {
+      window.alert('이미지 분석을 실행할 수 없습니다. Gemini Vision 설정을 확인해 주세요.');
+    } finally {
+      setAssetAnalysisBusy(false);
     }
   };
   const addFiles = async (files: FileList | null) => {
@@ -451,6 +465,24 @@ export function ArtReferenceCanvas() {
                   rows={4}
                 />
               </label>
+              <button
+                className="secondary-button asset-analyze-button"
+                disabled={!selected.art_asset_id || assetAnalysisBusy}
+                onClick={() => void analyzeSelectedAsset()}
+              >
+                {assetAnalysisBusy ? 'Gemini 분석 중…' : selected.art_asset_id ? 'Gemini로 이미지 분석' : '서버 업로드 후 분석 가능'}
+              </button>
+              {assetAnalysis && selected.art_asset_id && (
+                <div className="asset-observation-card">
+                  <span className="eyebrow">VISION OBSERVATION / DRAFT</span>
+                  <p>{assetAnalysis.observations?.description}</p>
+                  <div>
+                    {(assetAnalysis.observations?.materials ?? []).slice(0, 4).map((item: string) => <span key={item}>{item}</span>)}
+                    {(assetAnalysis.observations?.palette ?? []).slice(0, 4).map((item: string) => <span key={item}>{item}</span>)}
+                  </div>
+                  <small>AI 관찰은 초안이며 Art Bible 규칙이나 canonical 자산이 아닙니다.</small>
+                </div>
+              )}
               <div className="inspector-rule" />
               <div className="inspector-meta">
                 <span>원본 픽셀</span>

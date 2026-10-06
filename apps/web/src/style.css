@@ -2932,6 +2932,40 @@ small {
   background: #202326;
   font-size: 11px;
 }
+.asset-analyze-button {
+  width: 100%;
+  margin-top: 14px;
+}
+.asset-observation-card {
+  margin-top: 14px;
+  padding: 12px;
+  background: #202326;
+  border: 1px solid #3b4741;
+}
+.asset-observation-card p {
+  margin-top: 9px;
+  color: #c0c2bb;
+  font-size: 10px;
+  line-height: 1.55;
+}
+.asset-observation-card > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+.asset-observation-card > div span {
+  padding: 4px 6px;
+  color: #c8d5c8;
+  background: #2d3930;
+  font-size: 9px;
+}
+.asset-observation-card small {
+  margin-top: 10px;
+  color: #8c928b;
+  font-size: 9px;
+  line-height: 1.5;
+}
 .art-inspector textarea {
   resize: vertical;
   line-height: 1.5;
