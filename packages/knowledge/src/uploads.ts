@@ -54,7 +54,7 @@ const stripXml = (xml: string) =>
 async function extractDocx(buf: Buffer): Promise<string> {
   const yauzl = await import('yauzl');
   const zip = await new Promise<any>((res, rej) =>
-    yauzl.fromBuffer(buf, { lazyEntries: true }, (e, z) => (e ? rej(e) : res(z))),
+    yauzl.fromBuffer(buf, { lazyEntries: true }, (e: any, z: any) => (e ? rej(e) : res(z))),
   );
   if (!zip) return '';
   return new Promise((res, rej) => {
