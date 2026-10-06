@@ -34,7 +34,7 @@ const main = async () => {
     log('disabled (KNOWLEDGE_ENABLED)');
     return;
   }
-  const store = new KnowledgeStore(config.KNOWLEDGE_DATABASE_URL);
+  const store = new KnowledgeStore(config.KNOWLEDGE_DATABASE_URL, { max: 16 });
   const owner = `worker:${hostname()}:${process.pid}`;
   const embeddings = config.UPSTAGE_API_KEY
     ? new UpstageEmbeddings(
