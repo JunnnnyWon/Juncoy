@@ -431,10 +431,21 @@ export function ArtReferenceCanvas() {
             {generated.length ? (
               <div className="output-grid">
                 {generated.slice(0, 6).map((image) => (
-                  <a key={image.id} href={'/api/assistant/images/' + image.id} target="_blank" rel="noreferrer">
-                    <img src={'/api/assistant/images/' + image.id} alt="생성 결과" loading="lazy" />
-                    <small>DRAFT · canonical 아님 · {image.model}</small>
-                  </a>
+                  <div key={image.id} className="output-item">
+                    <a href={'/api/assistant/images/' + image.id} target="_blank" rel="noreferrer">
+                      <img src={'/api/assistant/images/' + image.id} alt="생성 결과" loading="lazy" />
+                    </a>
+                    <small>{image.review_status ?? 'DRAFT'} · {image.model}</small>
+                    {image.review_status !== 'APPROVED_CANONICAL' && (
+                      <button className="output-review" onClick={async () => {
+                        const result = await api<any>('/api/assistant/images/' + image.id + '/review', {
+                          method: 'POST',
+                          body: JSON.stringify({ status: 'APPROVED_CANONICAL', review_role: 'art_reference' }),
+                        });
+                        if (result.reviewed) setGenerated(await api<any[]>('/api/assistant/images'));
+                      }}>canonical 승인</button>
+                    )}
+                  </div>
                 ))}
               </div>
             ) : (

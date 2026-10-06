@@ -241,7 +241,8 @@ export async function finishImageJob(
 
 export async function listImages(store: KnowledgeStore, projectId: string) {
   return rows<any>(
-    sql`SELECT r.id, r.job_id, r.bytes, r.width, r.height, r.created_at,
+        sql`SELECT r.id, r.job_id, r.bytes, r.width, r.height, r.created_at,
+               r.review_status, r.reviewed_by, r.reviewed_at, r.review_note,
                j.prompt, j.model, j.owner_id
         FROM image_results r JOIN image_jobs j ON j.id=r.job_id
         WHERE j.project_id=${projectId} ORDER BY r.created_at DESC LIMIT 100`,
@@ -256,4 +257,20 @@ export async function getImage(store: KnowledgeStore, projectId: string, resultI
         WHERE r.id=${resultId} AND j.project_id=${projectId}`,
     store.db,
   );
+}
+
+export async function reviewImageResult(
+  store: KnowledgeStore,
+  projectId: string,
+  resultId: string,
+  userId: string,
+  status: 'REVIEW' | 'APPROVED_CANONICAL' | 'REJECTED',
+  role: string,
+  note?: string,
+) {
+  const r = await first<any>(sql`UPDATE image_results r SET
+      review_status=${status}, reviewed_by=${userId}, reviewed_at=now(), review_role=${role}, review_note=${note ?? null}
+    FROM image_jobs j WHERE r.id=${resultId} AND j.id=r.job_id AND j.project_id=${projectId}
+    RETURNING r.id`, store.db);
+  return Boolean(r);
 }

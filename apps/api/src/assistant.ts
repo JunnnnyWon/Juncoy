@@ -12,6 +12,7 @@ import {
   registerImageTools,
   listImages,
   getImage,
+  reviewImageResult,
   NotionRest,
   GitHubRest,
   InstallationTokenProvider,
@@ -648,6 +649,19 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     } catch {
       return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
     }
+  });
+
+  app.post('/api/assistant/images/:id/review', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const body = z.object({
+      status: z.enum(['REVIEW', 'APPROVED_CANONICAL', 'REJECTED']),
+      review_role: z.string().min(1).max(80).default('art_reference'),
+      note: z.string().max(1000).optional(),
+    }).parse(req.body ?? {});
+    const ok = await reviewImageResult(ctx.store, projectId, (req.params as any).id, session.user_id, body.status, body.review_role, body.note);
+    if (!ok) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return { reviewed: true, status: body.status };
   });
 
   // ── 파일 업로드 (spec §5): init → complete(바이트+magic) → 추출 잡 ──

@@ -2959,6 +2959,27 @@ small {
   background: #202326;
   border: 1px solid #35393d;
 }
+.output-item {
+  overflow: hidden;
+  background: #202326;
+  border: 1px solid #35393d;
+}
+.output-item > a {
+  display: block;
+  border: 0;
+}
+.output-item > small {
+  padding: 7px 7px 0;
+  color: #a5aaa2;
+  font-size: 8px;
+}
+.output-review {
+  margin: 7px;
+  padding: 5px 7px;
+  color: #e2c0b8;
+  border: 1px solid #6e3b39;
+  font-size: 9px;
+}
 .output-grid img {
   display: block;
   width: 100%;
