@@ -421,6 +421,74 @@ export class KnowledgeStore {
     return id;
   }
 
+  async createArtBoard(projectId: string, ownerId: string, name = '비주얼 레퍼런스 보드') {
+    const id = randomUUID();
+    await sql`INSERT INTO art_boards(id, project_id, owner_id, name)
+      VALUES (${id}, ${projectId}, ${ownerId}, ${name})`.execute(this.db);
+    return id;
+  }
+
+  async listArtBoards(projectId: string, ownerId: string) {
+    return rows<any>(
+      sql`SELECT id, name, description, status, current_revision, created_at, updated_at
+      FROM art_boards WHERE project_id=${projectId} AND owner_id=${ownerId} AND archived_at IS NULL
+      ORDER BY updated_at DESC`,
+      this.db,
+    );
+  }
+
+  async getArtBoard(projectId: string, ownerId: string, boardId: string) {
+    return first<any>(
+      sql`SELECT id, name, description, status, current_revision, created_at, updated_at
+      FROM art_boards WHERE id=${boardId} AND project_id=${projectId} AND owner_id=${ownerId} AND archived_at IS NULL`,
+      this.db,
+    );
+  }
+
+  async saveArtBoardRevision(input: {
+    projectId: string;
+    ownerId: string;
+    boardId: string;
+    baseRevision: number;
+    snapshot: unknown;
+    snapshotHash: string;
+  }) {
+    return this.db.transaction().execute(async (tx) => {
+      const board = await first<{ current_revision: number }>(
+        sql`SELECT current_revision FROM art_boards
+        WHERE id=${input.boardId} AND project_id=${input.projectId} AND owner_id=${input.ownerId} AND archived_at IS NULL FOR UPDATE`,
+        tx,
+      );
+      if (!board) return { kind: 'NOT_FOUND' as const };
+      if (Number(board.current_revision) !== input.baseRevision)
+        return { kind: 'CONFLICT' as const, current_revision: Number(board.current_revision) };
+      const revision = input.baseRevision + 1;
+      await sql`INSERT INTO art_board_revisions(id, board_id, revision, created_by, snapshot, snapshot_hash)
+        VALUES (${randomUUID()}, ${input.boardId}, ${revision}, ${input.ownerId}, ${json(input.snapshot)}, ${input.snapshotHash})`.execute(
+        tx,
+      );
+      await sql`UPDATE art_boards SET current_revision=${revision}, updated_at=now() WHERE id=${input.boardId}`.execute(
+        tx,
+      );
+      return { kind: 'SAVED' as const, revision };
+    });
+  }
+
+  async getArtBoardRevision(
+    projectId: string,
+    ownerId: string,
+    boardId: string,
+    revision?: number,
+  ) {
+    const board = await this.getArtBoard(projectId, ownerId, boardId);
+    if (!board) return null;
+    return first<any>(
+      sql`SELECT r.id, r.revision, r.snapshot, r.snapshot_hash, r.analysis_state, r.created_at
+      FROM art_board_revisions r WHERE r.board_id=${boardId} AND r.revision=${revision ?? board.current_revision}`,
+      this.db,
+    );
+  }
+
   /** 대화는 owner+project 스코프로만 조회 — id만으로 타인 대화를 열지 않는다. */
   async getConversation(projectId: string, conversationId: string, ownerId: string) {
     return first<{ id: string; title: string; archived: boolean }>(
@@ -712,6 +780,15 @@ export class KnowledgeStore {
              OR d.stable_key='upload:' || u.id::text
           WHERE u.project_id=${projectId} AND u.state != 'DELETED'
           ORDER BY u.created_at DESC LIMIT 200`,
+      this.db,
+    );
+  }
+
+  async getUploadsByIds(projectId: string, ids: string[]) {
+    if (!ids.length) return [];
+    return rows<any>(
+      sql`SELECT id, filename, mime, storage_key, sha256, state
+      FROM knowledge_uploads WHERE project_id=${projectId} AND id = ANY(${ids}::uuid[]) AND state != 'DELETED'`,
       this.db,
     );
   }

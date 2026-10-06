@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile, rm, stat } from 'node:fs/promises';
+import { mkdir, writeFile, rm, stat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sql } from 'kysely';
 import { first, type KnowledgeStore } from '@meeting/knowledge-db';
@@ -177,6 +177,9 @@ export class UploadStorage {
   }
   async sizeOf(key: string) {
     return (await stat(join(this.dir, key))).size;
+  }
+  async read(key: string) {
+    return readFile(join(this.dir, key));
   }
 }
 

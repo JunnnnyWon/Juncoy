@@ -12,6 +12,12 @@ export interface ImageResult {
   width?: number;
   height?: number;
 }
+export interface ImageReferenceInput {
+  bytes: Buffer;
+  mime: string;
+  role?: string;
+  instruction?: string;
+}
 
 export class OpenRouterImages {
   private running = 0;
@@ -48,14 +54,18 @@ export class OpenRouterImages {
   }
 
   /** 실제 생성. 결과는 base64 png/jpeg. 실패 시 throw. */
-  async generate(prompt: string, negative?: string): Promise<ImageResult> {
+  async generate(
+    prompt: string,
+    negative?: string,
+    references: ImageReferenceInput[] = [],
+  ): Promise<ImageResult> {
     const fullPrompt = negative ? `${prompt}\n\n제외: ${negative}` : prompt;
     await this.acquire();
     try {
-      return await this.withRetry(() => this.callImages(fullPrompt));
+      return await this.withRetry(() => this.callImages(fullPrompt, references));
     } catch (e: any) {
       if (e?.code === 'images_api_unsupported')
-        return this.withRetry(() => this.callChat(fullPrompt));
+        return this.withRetry(() => this.callChat(fullPrompt, references));
       throw e;
     } finally {
       this.release();
@@ -79,14 +89,33 @@ export class OpenRouterImages {
     throw new Error('unreachable');
   }
 
-  private async callImages(prompt: string): Promise<ImageResult> {
+  private async callImages(
+    prompt: string,
+    references: ImageReferenceInput[],
+  ): Promise<ImageResult> {
     const r = await fetch(`${this.baseUrl}/images/generations`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ model: this.model, prompt, n: 1 }),
+      body: JSON.stringify({
+        model: this.model,
+        prompt: references.length
+          ? prompt +
+            '\n\nReference use instructions:\n' +
+            references
+              .map(
+                (r) => (r.role ?? 'reference') + ': ' + (r.instruction ?? 'use as reference only'),
+              )
+              .join('\n')
+          : prompt,
+        n: 1,
+        input_references: references.map((r) => ({
+          type: 'image_url',
+          image_url: { url: 'data:' + r.mime + ';base64,' + r.bytes.toString('base64') },
+        })),
+      }),
       signal: AbortSignal.timeout(180_000),
     });
     if (r.status === 404 || r.status === 400) {
@@ -110,7 +139,7 @@ export class OpenRouterImages {
     throw new Error('empty_image_response');
   }
 
-  private async callChat(prompt: string): Promise<ImageResult> {
+  private async callChat(prompt: string, references: ImageReferenceInput[]): Promise<ImageResult> {
     const r = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -120,7 +149,18 @@ export class OpenRouterImages {
       body: JSON.stringify({
         model: this.model,
         modalities: ['image', 'text'],
-        messages: [{ role: 'user', content: prompt }],
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              ...references.map((r) => ({
+                type: 'image_url',
+                image_url: { url: 'data:' + r.mime + ';base64,' + r.bytes.toString('base64') },
+              })),
+            ],
+          },
+        ],
       }),
       signal: AbortSignal.timeout(180_000),
     });

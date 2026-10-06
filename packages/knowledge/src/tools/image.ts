@@ -29,7 +29,11 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
     name: 'image.preview_generation',
     kind: 'preview',
     description: '이미지 생성 미리보기 — 근거 기반 프롬프트 합성, 생성은 승인 후',
-    input: z.strictObject({ request: z.string().min(1).max(2000) }),
+    input: z.strictObject({
+      request: z.string().min(1).max(2000),
+      reference_upload_ids: z.array(z.string().uuid()).max(16).default([]),
+      reference_instructions: z.record(z.string(), z.string()).default({}),
+    }),
     minRole: 'editor',
     auditKind: 'image.preview',
     async run(ctx, q) {
@@ -47,6 +51,8 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
           prompt: built.prompt,
           negative: built.negative,
           evidence: built.evidence,
+          reference_upload_ids: q.reference_upload_ids,
+          reference_instructions: q.reference_instructions,
           style_approved: built.style_approved,
           note: '이미지 provider가 설정되지 않았습니다. 프롬프트만 생성됩니다.',
         };
@@ -106,7 +112,24 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
         idempotencyKey: `approval:${approval.id}`,
       });
       try {
-        const out = await provider.generate(after.prompt, after.negative);
+        const refs = await ctx.store.getUploadsByIds(
+          ctx.projectId,
+          after.reference_upload_ids ?? [],
+        );
+        const missing = (after.reference_upload_ids ?? []).filter(
+          (id: string) => !refs.some((ref: any) => ref.id === id),
+        );
+        if (missing.length)
+          throw new DomainError('REFERENCE_NOT_FOUND', '이미지 레퍼런스를 찾을 수 없습니다.', 409);
+        const referenceInputs = await Promise.all(
+          refs.map(async (ref: any) => ({
+            bytes: await storage.read(ref.storage_key),
+            mime: ref.mime,
+            role: 'project reference',
+            instruction: after.reference_instructions?.[ref.id],
+          })),
+        );
+        const out = await provider.generate(after.prompt, after.negative, referenceInputs);
         const buf = Buffer.from(out.b64, 'base64');
         const resultKey = `img-${randomUUID()}.png`;
         await storage.put(resultKey, buf);

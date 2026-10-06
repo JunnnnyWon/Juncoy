@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from './api.ts';
 
 type Role =
   'face_shape' | 'modeling_language' | 'material_surface' | 'texture' | 'lighting' | 'mood';
@@ -6,6 +7,7 @@ type Usage =
   'MUST_FOLLOW' | 'STRONG_REFERENCE' | 'MOOD_ONLY' | 'PARTIAL_REFERENCE' | 'REVIEW_REQUIRED';
 interface RefCard {
   id: string;
+  upload_id?: string;
   name: string;
   url: string;
   role: Role;
@@ -61,22 +63,115 @@ const demoRefs: RefCard[] = [
 export function ArtReferenceCanvas() {
   const [refs, setRefs] = useState<RefCard[]>(demoRefs);
   const [selectedId, setSelectedId] = useState('ref-1');
+  const [boardId, setBoardId] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const [syncState, setSyncState] = useState('로컬 초안');
   const inputRef = useRef<HTMLInputElement>(null);
   const selected = refs.find((ref) => ref.id === selectedId) ?? refs[0];
   const selectedCount = useMemo(() => refs.filter((ref) => ref.selected).length, [refs]);
-  const addFiles = (files: FileList | null) => {
+  useEffect(() => {
+    void (async () => {
+      try {
+        const boards = await api<any[]>('/api/assistant/art-boards');
+        if (boards[0]) {
+          setBoardId(boards[0].id);
+          setRevision(Number(boards[0].current_revision ?? 0));
+          const detail = await api<any>('/api/assistant/art-boards/' + boards[0].id);
+          const saved = detail.revision?.snapshot?.references;
+          if (Array.isArray(saved) && saved.length) setRefs(saved);
+        } else {
+          const created = await api<{ id: string }>('/api/assistant/art-boards', {
+            method: 'POST',
+            body: JSON.stringify({ name: '비주얼 레퍼런스 보드' }),
+          });
+          setBoardId(created.id);
+        }
+        setSyncState('서버에 연결됨');
+      } catch {
+        setSyncState('로컬 초안');
+      }
+    })();
+  }, []);
+  const saveRevision = async () => {
+    if (!boardId) return;
+    setSyncState('저장 중');
+    try {
+      const result = await api<{ revision: number }>(
+        '/api/assistant/art-boards/' + boardId + '/revisions',
+        {
+          method: 'POST',
+          body: JSON.stringify({ base_revision: revision, snapshot: { references: refs } }),
+        },
+      );
+      setRevision(result.revision);
+      setSyncState('자동 저장됨');
+    } catch {
+      setSyncState('충돌 확인 필요');
+    }
+  };
+  const previewBrief = async () => {
+    if (!boardId) return;
+    await saveRevision();
+    try {
+      const brief = await api<any>(
+        '/api/assistant/art-boards/' + boardId + '/image-briefs/preview',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            request: '현재 보드 기준 캐릭터 컨셉 아트',
+            revision: revision + 1,
+          }),
+        },
+      );
+      window.alert('ImageBrief 초안\n\n' + (brief.instructions || '선택된 레퍼런스가 없습니다.'));
+    } catch {
+      window.alert('ImageBrief 미리보기를 만들 수 없습니다.');
+    }
+  };
+  const addFiles = async (files: FileList | null) => {
     if (!files) return;
-    const next = Array.from(files)
-      .filter((file) => file.type.startsWith('image/'))
-      .map((file, index) => ({
-        id: file.name + '-' + file.lastModified + '-' + index,
-        name: file.name,
-        url: URL.createObjectURL(file),
-        role: 'mood' as Role,
-        usage: 'REVIEW_REQUIRED' as Usage,
-        note: '새 레퍼런스. 분석 전 검토 필요',
-        selected: false,
-      }));
+    const next = await Promise.all(
+      Array.from(files)
+        .filter((file) => file.type.startsWith('image/'))
+        .map(async (file, index) => {
+          const bytes = await file.arrayBuffer();
+          const digest = await crypto.subtle.digest('SHA-256', bytes);
+          const sha = [...new Uint8Array(digest)]
+            .map((b) => b.toString(16).padStart(2, '0'))
+            .join('');
+          let upload_id: string | undefined;
+          try {
+            const init = await api<{ id: string; reused: boolean }>('/api/assistant/files/init', {
+              method: 'POST',
+              body: JSON.stringify({
+                filename: file.name,
+                mime: file.type,
+                bytes: file.size,
+                sha256: sha,
+              }),
+            });
+            upload_id = init.id;
+            if (!init.reused)
+              await api('/api/assistant/files/' + init.id + '/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: bytes,
+              });
+          } catch {
+            /* local draft remains usable when API is unavailable */
+          }
+          return {
+            id: file.name + '-' + file.lastModified + '-' + index,
+            upload_id,
+            name: file.name,
+            url: URL.createObjectURL(file),
+            role: 'mood' as Role,
+            usage: 'REVIEW_REQUIRED' as Usage,
+            note: '새 레퍼런스. 분석 전 검토 필요',
+            selected: false,
+          };
+        }),
+    );
     setRefs((current) => [...next, ...current]);
     if (next[0]) setSelectedId(next[0].id);
   };
@@ -94,12 +189,9 @@ export function ArtReferenceCanvas() {
         </div>
         <div className="art-header-actions">
           <span className="save-state">
-            <i /> 자동 저장됨
+            <i /> {syncState}
           </span>
-          <button
-            className="primary-button"
-            onClick={() => setRefs((current) => current.map((ref) => ({ ...ref, selected: true })))}
-          >
+          <button className="primary-button" onClick={() => void previewBrief()}>
             ImageBrief 미리보기 ↗
           </button>
         </div>
@@ -120,7 +212,7 @@ export function ArtReferenceCanvas() {
           accept="image/png,image/jpeg,image/webp"
           multiple
           onChange={(event) => {
-            addFiles(event.target.files);
+            void addFiles(event.target.files);
             event.target.value = '';
           }}
         />
