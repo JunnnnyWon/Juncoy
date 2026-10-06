@@ -762,10 +762,14 @@ export class KnowledgeStore {
 
   async getUpload(projectId: string, uploadId: string) {
     return first<any>(
-      sql`SELECT u.*, d.state AS document_state, d.id AS document_id
+      sql`SELECT u.*, d.state AS document_state, d.id AS document_id,
+          pv.parser_kind, pv.parser_version, pv.parse_status, pv.parse_error_code,
+          pv.parse_request_id, pv.parse_latency_ms, pv.source_sha256 AS parsed_source_sha256
           FROM knowledge_uploads u
           LEFT JOIN documents d ON d.id=u.document_id
              OR d.stable_key='upload:' || u.id::text
+          LEFT JOIN LATERAL (SELECT v.* FROM knowledge_upload_versions v
+             WHERE v.upload_id=u.id ORDER BY v.created_at DESC LIMIT 1) pv ON true
           WHERE u.project_id=${projectId} AND u.id=${uploadId}`,
       this.db,
     );
@@ -774,10 +778,14 @@ export class KnowledgeStore {
   async listUploads(projectId: string) {
     return rows<any>(
       sql`SELECT u.id, u.filename, u.mime, u.bytes, u.sha256, u.state, u.error,
-                 u.owner_id, u.created_at, d.state AS document_state, d.id AS document_id
+                 u.owner_id, u.created_at, d.state AS document_state, d.id AS document_id,
+                 pv.parser_kind, pv.parser_version, pv.parse_status, pv.parse_error_code,
+                 pv.parse_request_id, pv.parse_latency_ms, pv.source_sha256 AS parsed_source_sha256
           FROM knowledge_uploads u
           LEFT JOIN documents d ON d.id=u.document_id
              OR d.stable_key='upload:' || u.id::text
+          LEFT JOIN LATERAL (SELECT v.* FROM knowledge_upload_versions v
+             WHERE v.upload_id=u.id ORDER BY v.created_at DESC LIMIT 1) pv ON true
           WHERE u.project_id=${projectId} AND u.state != 'DELETED'
           ORDER BY u.created_at DESC LIMIT 200`,
       this.db,

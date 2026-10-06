@@ -469,6 +469,8 @@ export function Assistant() {
                 <div className="dim">
                   {(f.bytes / 1024).toFixed(0)}KB ·{' '}
                   {f.document_state === 'READY' ? '색인 완료' : f.state} · {f.mime}
+                  {f.mime === 'application/pdf' && f.parse_status ?
+                    ` · Parse ${f.parse_status === 'READY' ? '완료' : f.parse_status === 'FALLBACK' ? '로컬 대체' : f.parse_status}` : ''}
                 </div>
                 <button
                   className="ghost-button"
