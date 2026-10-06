@@ -1,5 +1,9 @@
 import 'dotenv/config';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { reparseUpload, UploadStorage, UpstageDocumentParse, sha256 } from '@meeting/knowledge';
 import { randomUUID } from 'node:crypto';
 import { KnowledgeStore, sql, first, rows } from '@meeting/knowledge-db';
 
@@ -45,6 +49,58 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('reparses the same original twice and queues each changed normalized result', async (ctx) => {
+    skipIf(ctx);
+    const dir = await mkdtemp(join(tmpdir(), 'juncoy-reparse-test-'));
+    const keys = ['KNOWLEDGE_UPLOAD_DIR', 'UPSTAGE_DOCUMENT_PARSE_ENABLED', 'UPSTAGE_API_KEY', 'UPSTAGE_DOCUMENT_PARSE_ENDPOINT'];
+    const previous = keys.map((k) => process.env[k]);
+    const original = Buffer.from('%PDF-fixture');
+    const hash = sha256(original);
+    const spy = vi.spyOn(UpstageDocumentParse.prototype, 'parsePdf');
+    try {
+      process.env.KNOWLEDGE_UPLOAD_DIR = dir;
+      process.env.UPSTAGE_DOCUMENT_PARSE_ENABLED = 'true';
+      process.env.UPSTAGE_API_KEY = 'test';
+      process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT = 'https://parse.test';
+      const projectId = randomUUID(), sourceId = randomUUID(), docId = randomUUID();
+      await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'reparse')`.execute(store!.db);
+      await sql`INSERT INTO knowledge_sources(id,project_id,kind,auth_ref) VALUES(${sourceId},${projectId},'upload','local')`.execute(store!.db);
+      await sql`INSERT INTO documents(id,source_id,stable_key) VALUES(${docId},${sourceId},'upload:fixture')`.execute(store!.db);
+      const upload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'fixture.pdf', mime: 'application/pdf', bytes: original.length, sha256: hash, storageKey: 'fixture' });
+      await store!.updateUpload(upload.id, { documentId: docId });
+      const storage = new UploadStorage(dir);
+      await storage.put('fixture', original);
+      for (const text of ['first parse', 'second parse']) {
+        spy.mockResolvedValueOnce({ text, parserVersion: 'fixture', sourceSha256: hash, warnings: [], blocks: [], pages: [] });
+        expect(await reparseUpload(store!, upload.id)).toMatchObject({ reparsed: true });
+      }
+      const current = await first<any>(sql`SELECT v.normalized FROM documents d JOIN document_versions v ON v.id=d.current_version_id WHERE d.id=${docId}`, store!.db);
+      expect(current.normalized.text).toBe('second parse');
+      const jobs = await rows<any>(sql`SELECT payload FROM knowledge_jobs WHERE kind='extract' AND payload->>'document_id'=${docId}`, store!.db);
+      expect(jobs).toHaveLength(2);
+      expect(new Set(jobs.map((j) => j.payload.content_hash)).size).toBe(2);
+      expect(await storage.read('fixture')).toEqual(original);
+    } finally {
+      spy.mockRestore();
+      keys.forEach((key, i) => { if (previous[i] === undefined) delete process.env[key]; else process.env[key] = previous[i]; });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  it('allows multiple normalized versions for one immutable source hash', async (ctx) => {
+    skipIf(ctx);
+    const projectId = randomUUID();
+    await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'reparse versions')`.execute(store!.db);
+    const sourceId = randomUUID();
+    await sql`INSERT INTO knowledge_sources(id, project_id, kind, auth_ref) VALUES(${sourceId},${projectId},'upload','local')`.execute(store!.db);
+    const docId = randomUUID();
+    await sql`INSERT INTO documents(id, source_id, stable_key) VALUES(${docId},${sourceId},'upload:reparse')`.execute(store!.db);
+    const sourceHash = 'f'.repeat(64);
+    expect(await store!.publishVersion(docId, { contentHash: 'norm-1', sourceRevision: sourceHash, extractorVersion: 3, normalized: { text: 'one', parser: { source_sha256: sourceHash } } })).toBe(true);
+    expect(await store!.publishVersion(docId, { contentHash: 'norm-2', sourceRevision: sourceHash, extractorVersion: 3, normalized: { text: 'two', parser: { source_sha256: sourceHash } } })).toBe(true);
+    const versions = await rows<any>(sql`SELECT content_hash, source_revision FROM document_versions WHERE document_id=${docId} ORDER BY created_at`, store!.db);
+    expect(versions.map((v) => v.content_hash)).toEqual(['norm-1', 'norm-2']);
+    expect(versions.every((v) => v.source_revision === sourceHash)).toBe(true);
+  });
   it('persists Parse structure and isolates lookup by project', async (ctx) => {
     skipIf(ctx);
     const projectId = randomUUID();

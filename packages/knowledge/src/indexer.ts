@@ -24,6 +24,8 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string) {
     ? new UpstageDocumentParse({ apiKey: process.env.UPSTAGE_API_KEY, endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT, timeoutMs: Number(process.env.UPSTAGE_DOCUMENT_PARSE_TIMEOUT_MS ?? 60_000) })
     : undefined;
   const extracted = await extractUpload(bytes, upload.mime, { documentParse: parser, expectedSha256: upload.sha256 });
+  const normalized = { ...extracted.normalized, upload_id: upload.id, filename: upload.filename, mime: upload.mime };
+  const normalizedHash = sha256(JSON.stringify(normalized));
   const versionId = await store.createUploadVersion({
     uploadId: upload.id,
     extractorVersion: String(EXTRACTOR_VERSION + 1),
@@ -35,17 +37,17 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string) {
     parseRequestId: extracted.normalized.parser?.request_id,
     parseErrorCode: extracted.parseError,
     sourceSha256: upload.sha256,
-    normalizedHash: sha256(JSON.stringify(extracted.normalized)),
+    normalizedHash,
   });
   await store.saveDocumentParseStructure(versionId, extracted.normalized);
   const published = await store.publishVersion(upload.document_id, {
-    contentHash: upload.sha256,
+    contentHash: normalizedHash,
     sourceRevision: upload.sha256,
     extractorVersion: EXTRACTOR_VERSION + 1,
-    normalized: { ...extracted.normalized, upload_id: upload.id, filename: upload.filename, mime: upload.mime },
+    normalized,
   });
   if (!published) return { skipped: 'publish_rejected' } as const;
-  await store.enqueueJob('extract:' + upload.document_id + ':' + upload.sha256 + ':reparse', 'extract', { document_id: upload.document_id, content_hash: upload.sha256 });
+  await store.enqueueJob('extract:' + upload.document_id + ':' + normalizedHash + ':' + versionId, 'extract', { document_id: upload.document_id, content_hash: normalizedHash });
   await store.updateUpload(upload.id, { state: 'INDEXING' });
   return { reparsed: true, parser: extracted.parserKind } as const;
 }
