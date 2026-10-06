@@ -369,6 +369,41 @@ export class KnowledgeStore {
       );
     });
   }
+  /**
+   * prefix 단위 대량 tombstone (RAG-010) — 채널/스레드 삭제처럼 부모가 지워질 때
+   * 그 아래 문서 전체를 한 트랜잭션으로 차단한다.
+   * stable_key LIKE '<prefix>%' 형태 — 호출자는 접두 경계(보통 ':'로 끝나는)를 맞춘다.
+   */
+  async applyTombstonesByPrefix(sourceId: string, keyPrefix: string, reason: string) {
+    return this.db.transaction().execute(async (tx) => {
+      const docs = await rows<{ id: string; stable_key: string }>(
+        sql`SELECT id, stable_key FROM documents
+            WHERE source_id=${sourceId} AND stable_key LIKE ${keyPrefix + '%'} AND NOT deleted`,
+        tx,
+      );
+      for (const d of docs) {
+        await sql`
+          INSERT INTO deletion_tombstones(stable_key, source_id, document_id, reason)
+          VALUES (${d.stable_key}, ${sourceId}, ${d.id}, ${reason})
+          ON CONFLICT (stable_key) DO UPDATE
+            SET reason=EXCLUDED.reason, deleted_at=now()`.execute(tx);
+        await sql`
+          UPDATE chunk_sets SET active=false WHERE document_id=${d.id}`.execute(tx);
+      }
+      if (docs.length)
+        await sql`
+          UPDATE documents SET state='UNAVAILABLE', deleted=true, dirty=false, updated_at=now()
+          WHERE source_id=${sourceId} AND stable_key LIKE ${keyPrefix + '%'}`.execute(tx);
+      await sql`
+        INSERT INTO knowledge_audit(id, project_id, actor, kind, data)
+        VALUES (${randomUUID()}, null, null, 'TOMBSTONE_BULK',
+          ${json({ prefix: keyPrefix, reason, count: docs.length, at: new Date().toISOString() })})`.execute(
+        tx,
+      );
+      return docs.length;
+    });
+  }
+
   /** tombstone 해제는 원본 존재 + 새 fetch 버전 확인이 있는 경우에만 (§8.1). */
   async liftTombstone(stableKey: string, observedAt: Date) {
     await sql`

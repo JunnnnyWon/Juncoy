@@ -135,8 +135,16 @@ export class DiscordCollector {
     return doc?.id ?? null;
   }
 
-  /** 메시지 1건을 문서로 기록 — 생성·편집·백필 공용. 변경 없으면 스킵. */
-  async ingestMessage(sourceId: string, channelId: string, m: DiscordMessage) {
+  /**
+   * 메시지 1건을 문서로 기록 — 생성·편집·백필 공용. 변경 없으면 스킵.
+   * scopeKey: 문서 ACL에 바인딩할 scope (기본 channel:<id>, 스레드는 thread:<id>).
+   */
+  async ingestMessage(
+    sourceId: string,
+    channelId: string,
+    m: DiscordMessage,
+    opts?: { scopeKey?: string },
+  ) {
     const key = documentKeys.discordMessage(this.guildId, channelId, m.id);
     const hash = messageHash(m);
     const revision = m.edited_timestamp ?? `create:${m.id}`;
@@ -150,7 +158,7 @@ export class DiscordCollector {
         acl: {
           guild: this.guildId,
           channel: channelId,
-          scope: `channel:${channelId}`,
+          scope: opts?.scopeKey ?? `channel:${channelId}`,
         },
       },
     );
@@ -178,16 +186,26 @@ export class DiscordCollector {
         message_type: m.type ?? 0,
       },
     }, revision);
-    for (const a of m.attachments ?? [])
+    const attachmentKeys = (m.attachments ?? []).map((a) => documentKeys.discordFile(m.id, a.id));
+    for (let i = 0; i < (m.attachments ?? []).length; i++) {
+      const a = m.attachments![i]!;
       await sql`
         INSERT INTO attachments(id, document_id, stable_key, mime, bytes, metadata)
         VALUES (${crypto.randomUUID()}, ${doc.id},
-          ${documentKeys.discordFile(m.id, a.id)}, ${a.content_type ?? null}, ${a.size},
+          ${attachmentKeys[i]}, ${a.content_type ?? null}, ${a.size},
           ${JSON.stringify({ filename: a.filename, source_url: a.url })}::jsonb)
         ON CONFLICT (document_id, stable_key) DO UPDATE
           SET mime=EXCLUDED.mime, bytes=EXCLUDED.bytes, metadata=EXCLUDED.metadata`.execute(
         this.store.db,
       );
+    }
+    // 편집으로 제거된 첨부는 행도 지운다 (RAG-010) — upsert만 하면 stale이 남는다.
+    if (attachmentKeys.length)
+      await sql`
+        DELETE FROM attachments WHERE document_id=${doc.id}
+          AND stable_key != ALL(${attachmentKeys}::text[])`.execute(this.store.db);
+    else
+      await sql`DELETE FROM attachments WHERE document_id=${doc.id}`.execute(this.store.db);
     // 답글 관계 — 대상이 아직 없으면 나중 백필에서 자연 해결된다.
     if (m.message_reference?.message_id) {
       const dst = await this.docIdFor(
@@ -212,11 +230,12 @@ export class DiscordCollector {
   async backfillChannel(
     sourceId: string,
     channelId: string,
-    opts?: { limit?: number; signal?: AbortSignal },
+    opts?: { limit?: number; signal?: AbortSignal; scopeKey?: string },
   ) {
     const cursor = await this.getCursor(sourceId, channelId);
     let newest = cursor.newest_id;
     let before = cursor.oldest_id;
+    let fetched = 0;
     if (!cursor.backfill_done && !newest) {
       const head = await this.rest.messages(channelId, { limit: 1 });
       if (head.status !== 200 || !Array.isArray(head.body) || !head.body.length) {
@@ -225,12 +244,19 @@ export class DiscordCollector {
           await this.saveCursor(sourceId, channelId, { ...cursor, access_lost: true });
         return { fetched: 0, done: false, status: head.status };
       }
+      // head 메시지 자체도 수집한다 — before 커서는 그 다음부터 (RAG-009).
+      await this.ingestMessage(sourceId, channelId, head.body[0], {
+        scopeKey: opts?.scopeKey,
+      });
+      fetched++;
       newest = head.body[0].id;
       before = newest;
     }
-    let fetched = 0;
-    if (!cursor.backfill_done) {
-      // 지정 개수만큼만 과거로 내려간다(재호출로 재개).
+    // done은 "채널 시작까지 다 읽었다"는 뜻 — 페이지가 비었거나
+    // 마지막 페이지가 100 미만이거나 더 이상 before가 없을 때만 true (RAG-009).
+    // 중간 슬라이스(slice)로 멈춘 것은 done이 아니다.
+    let reachedStart = false;
+    if (!cursor.backfill_done && before) {
       let remaining = opts?.limit ?? 500;
       while (remaining > 0 && before) {
         if (opts?.signal?.aborted) break;
@@ -239,25 +265,34 @@ export class DiscordCollector {
           before,
         });
         if (page.status !== 200 || !Array.isArray(page.body)) break;
-        if (!page.body.length) break;
-        for (const m of page.body) await this.ingestMessage(sourceId, channelId, m);
+        if (!page.body.length) {
+          reachedStart = true; // 빈 페이지 = 채널 시작에 도달
+          break;
+        }
+        for (const m of page.body)
+          await this.ingestMessage(sourceId, channelId, m, { scopeKey: opts?.scopeKey });
         fetched += page.body.length;
         remaining -= page.body.length;
         before = page.body[page.body.length - 1].id;
-        if (page.body.length < 100) break;
+        if (page.body.length < 100) {
+          reachedStart = true;
+          break;
+        }
       }
     }
-    const done = cursor.backfill_done || !before || fetched > 0;
+    const done = cursor.backfill_done || reachedStart || !before;
     await this.saveCursor(sourceId, channelId, {
+      ...cursor,
+      access_lost: false,
       oldest_id: before,
       newest_id: newest,
-      backfill_done: done && fetched > 0 ? true : cursor.backfill_done ?? false,
+      backfill_done: done,
     });
-    return { fetched, done: done || !before, status: 200 };
+    return { fetched, done, status: 200 };
   }
 
   /** 최신 head 확인 — new message + edited_message를 after cursor로 수집 (§6.3 대조). */
-  async reconcileHead(sourceId: string, channelId: string) {
+  async reconcileHead(sourceId: string, channelId: string, opts?: { scopeKey?: string }) {
     const cursor = await this.getCursor(sourceId, channelId);
     const after = cursor.newest_id;
     let collected = 0;
@@ -270,7 +305,9 @@ export class DiscordCollector {
     if (!after) {
       if (head.status === 200 && head.body?.[0]?.id) {
         await this.saveCursor(sourceId, channelId, { ...cursor, newest_id: head.body[0].id });
-        await this.ingestMessage(sourceId, channelId, head.body[0]);
+        await this.ingestMessage(sourceId, channelId, head.body[0], {
+          scopeKey: opts?.scopeKey,
+        });
       }
       return { collected: 1 };
     }
@@ -278,21 +315,25 @@ export class DiscordCollector {
     const recent = await this.rest.messages(channelId, { limit: 20 });
     if (recent.status === 200 && Array.isArray(recent.body))
       for (const m of recent.body) {
-        const r = await this.ingestMessage(sourceId, channelId, m);
+        const r = await this.ingestMessage(sourceId, channelId, m, { scopeKey: opts?.scopeKey });
         if (r.changed) collected++;
       }
     if (head.status === 200 && head.body?.[0]?.id) newest = head.body[0].id;
     let page = await this.rest.messages(channelId, { after, limit: 100 });
     while (page.status === 200 && Array.isArray(page.body) && page.body.length) {
       for (const m of page.body) {
-        await this.ingestMessage(sourceId, channelId, m);
+        await this.ingestMessage(sourceId, channelId, m, { scopeKey: opts?.scopeKey });
         collected++;
       }
       newest = page.body[0].id;
       if (page.body.length < 100) break;
       page = await this.rest.messages(channelId, { after: newest, limit: 100 });
     }
-    await this.saveCursor(sourceId, channelId, { ...cursor, newest_id: newest });
+    await this.saveCursor(sourceId, channelId, {
+      ...cursor,
+      access_lost: false,
+      newest_id: newest,
+    });
     return { collected };
   }
 
