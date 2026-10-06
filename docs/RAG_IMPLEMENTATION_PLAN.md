@@ -17,7 +17,23 @@
 | C08 브랜치 정책 | ✅ | main / SideView / Stairs 분리 수집 명세 확인 |
 | C09 리소스/예산 | 설계로 해결 | 별도 DB·큐·프로세스, 동일 Discord token limiter 공유 |
 
-사용자에게 필요한 것 3개: **Notion integration 토큰**, **Discord MessageContent intent 활성**, **GitHub App vs PAT 결정**. 이 3개 없이도 W01/W02 기반 + Discord REST 백필 + Juncoy 수집기 + 추출/인덱스/검색/문답 골격은 진행 가능(Notion/GitHub는 fixture 어댑터로 개발, 토큰 도착 즉시 실연결).
+사용자에게 필요한 것 3개: **Notion integration 토큰**, **Discord MessageContent intent 활성**, **GitHub App 자격증명** (App 채택 확정 — App ID/private key/installation ID/webhook secret). 이 3개 없이도 W01/W02 기반 + Discord REST 백필 + Juncoy 수집기 + 추출/인덱스/검색/문답 골격은 진행 가능(Notion/GitHub는 fixture 어댑터로 개발, 토큰 도착 즉시 실연결).
+
+## 0. 진행 상태 (2026-10-06)
+
+| 단계 | 상태 | 비고 |
+|---|---|---|
+| P1 | ✅ PR #4 | contracts + knowledge-db(전체 테이블, 큐/fencing/tombstone) |
+| P2 | ✅ PR #5 | Discord REST 백필/head 대조/스레드 탐색 + discord-context 폴러 |
+| P4 | ✅ PR #5 | Juncoy 수집기 — canonical/정정/삭제/공유취소 5초 동기화 |
+| P6 | ✅ PR #5 | GitHub App JWT+webhook 서명+tree diff (push/rename/force-push/revert) |
+| P7 | ✅ PR #5 | 출처별 청커 + extract/index 잡 + 활성 chunk_set 원자 교체 |
+| P8 | ✅ PR #5 | trgm+식별자 키워드, pgvector, RRF, ACTIVE set/READY 문서만 |
+| P9 | ✅ PR #5 | answer 파이프라인(라이브 읽기→검색→Solar→근거 재검증), /api/knowledge/* + /ask UI |
+| P10 | ✅ PR #5 | 근거 기반 프롬프트 합성 API (생성은 provider 미설정) |
+| P11 | ✅ PR #5 | `infra/compose.knowledge.yml` + `.env.knowledge.example` — **미배포** |
+| P3 | ⏸ 사용자 | Discord MessageContent intent + Gateway 수신기 |
+| P5 | ⏸ 사용자 | Notion 읽기 전용 토큰 |
 
 ## 1. PR 단위 실행 순서
 

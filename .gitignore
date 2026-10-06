@@ -14,3 +14,4 @@ coverage/
 graphify-out/
 
 .graphify_cache/
+!.env.*.example
