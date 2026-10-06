@@ -208,11 +208,12 @@ export class GitHubCollector {
   }
 
   /** recursive tree의 blob 경로→SHA 맵. truncated면 잘린 하위 tree만 비재귀로 재조회 (§6.2-7). */
-  private async flattenTree(sha: string): Promise<Record<string, string>> {
+  private async flattenTree(sha: string): Promise<Record<string, string> | null> {
     const r = await this.rest.tree(this.repo, sha);
     if (r.status !== 200 || !Array.isArray(r.body?.tree)) {
+      // 실패를 빈 트리로 저장하면 파일 전부 tombstone/영구 스킵된다 — 커서는 건드리지 않는다.
       process.stderr.write(`github tree ${sha.slice(0, 8)}: status ${r.status}\n`);
-      return {};
+      return null;
     }
     const out: Record<string, string> = {};
     for (const e of r.body.tree as TreeEntry[]) if (e.type === 'blob') out[e.path] = e.sha;
@@ -256,16 +257,20 @@ export class GitHubCollector {
     }
     if (br.status !== 200) return { changed: false, status: br.status };
     const head = br.body.commit?.sha as string;
-    if (!head || head === prev.head_sha) return { changed: false, head };
+    if (!head || (head === prev.head_sha && !(prev.failed as string[] | undefined)?.length))
+      return { changed: false, head };
     const tree = await this.flattenTree(head);
+    if (tree === null) return { changed: false, status: 'tree_failed', head };
     const old = prev.tree ?? {};
     const added = Object.keys(tree).filter((p) => !(p in old));
     const modified = Object.keys(tree).filter((p) => p in old && old[p] !== tree[p]);
     const removed = Object.keys(old).filter((p) => !(p in tree));
+    // 지난번에 실패한 파일도 이번에 재시도 — 커서의 tree는 진실이 아니라 수집 목표다.
+    const pending = ((prev.failed as string[] | undefined) ?? []).filter((p) => p in tree);
     process.stdout.write(
       `github ${this.repo}@${ref} head=${head.slice(0, 8)} files=${Object.keys(tree).length} +${added.length} ~${modified.length} -${removed.length}\n`,
     );
-    const work = [...added, ...modified];
+    const work = [...new Set([...added, ...modified, ...pending])];
     // 첫 동기화(빈 cursor)는 blob GET × N 대신 tarball 1회 다운로드로 수집한다.
     let tarContents: Map<string, Buffer> | null = null;
     if (!prev.head_sha && work.length > 0) {
@@ -279,16 +284,22 @@ export class GitHubCollector {
     }
     // 파일당 REST 1회 + DB 왕복 수 회라 직렬은 느리다 — 8개씩 병렬 수집.
     const PAR = 8;
+    const stillFailed: string[] = [];
     for (let i = 0; i < work.length; i += PAR) {
       if (i && i % 200 === 0)
         process.stdout.write(`github ${this.repo}@${ref} ingest ${i}/${work.length}\n`);
-      await Promise.all(
-        work.slice(i, i + PAR).map((p) =>
-          this.ingestFile(ref, p, tree[p], head, tarContents?.get(p)).catch((e) => {
-            process.stderr.write(`github ingest ${p}: ${e}\n`);
-          }),
+      const batch = work.slice(i, i + PAR);
+      const results = await Promise.all(
+        batch.map((p) =>
+          this.ingestFile(ref, p, tree[p], head, tarContents?.get(p))
+            .then(() => ({ p, ok: true }))
+            .catch((e) => {
+              process.stderr.write(`github ingest ${p}: ${e}\n`);
+              return { p, ok: false };
+            }),
         ),
       );
+      for (const r of results) if (!r.ok) stillFailed.push(r.p);
     }
     for (const p of removed)
       await this.store.applyTombstone(
@@ -297,8 +308,19 @@ export class GitHubCollector {
         'path_removed',
         old[p],
       );
-    await this.saveCursor(ref, { head_sha: head, tree });
-    return { changed: true, head, added: added.length, modified: modified.length, removed: removed.length };
+    await this.saveCursor(ref, {
+      head_sha: head,
+      tree,
+      ...(stillFailed.length ? { failed: stillFailed } : {}),
+    });
+    return {
+      changed: true,
+      head,
+      added: added.length,
+      modified: modified.length,
+      removed: removed.length,
+      failed: stillFailed.length,
+    };
   }
 
   /** blob 내용을 문서로 기록. LFS 포인터는 내용을 읽은 것으로 표시하지 않는다 (§6.2-8). */
