@@ -390,10 +390,10 @@ export function ArtReferenceCanvas() {
             <div className="analysis-card">
               <div className="analysis-card-head">
                 <div>
-                  <span className="eyebrow">ART BIBLE / DRAFT</span>
+                  <span className="eyebrow">ART BIBLE / {analysis.status}</span>
                   <h3>보드 분석 초안</h3>
                 </div>
-                <span>DRAFT</span>
+                <span>{analysis.status}</span>
               </div>
               <p>{analysis.result?.summary}</p>
               {analysis.status === 'DRAFT' && (
@@ -401,9 +401,9 @@ export function ArtReferenceCanvas() {
                   className="secondary-button"
                   onClick={async () => {
                     try {
-                      const approved = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + revision + '/approve', {
+                      const approved = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision + '/approve', {
                         method: 'POST',
-                        body: JSON.stringify({ analysis_id: analysis.id }),
+                        body: JSON.stringify({ analysis_id: analysis.id, expected_hash: analysis.result_hash }),
                       });
                       setAnalysis({ ...analysis, status: 'APPROVED', style_version: approved.version });
                     } catch {

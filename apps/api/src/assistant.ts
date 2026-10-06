@@ -1045,7 +1045,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
   app.post('/api/assistant/art-boards/:id/analysis/:revision/approve', async (req, reply) => {
     const { session, ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
-    const body = z.object({ analysis_id: z.string().uuid() }).parse(req.body ?? {});
+    const body = z.object({ analysis_id: z.string().uuid(), expected_hash: z.string().regex(/^[0-9a-f]{64}$/) }).parse(req.body ?? {});
     const result = await ctx.store.approveArtBoardAnalysis({
       projectId,
       ownerId: session.user_id,
@@ -1053,8 +1053,10 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       revision: Number((req.params as any).revision),
       analysisId: body.analysis_id,
       approvedBy: session.user_id,
+      expectedHash: body.expected_hash,
     });
     if (result.kind === 'NOT_FOUND') return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    if (result.kind !== 'APPROVED') return reply.code(409).send({ error: { code: result.kind } });
     return result;
   });
 

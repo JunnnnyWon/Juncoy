@@ -522,7 +522,7 @@ export class KnowledgeStore {
     const id = randomUUID();
     await sql`INSERT INTO art_board_analyses(id, board_id, revision, status, model, result, result_hash, created_by)
       VALUES (${id}, ${input.boardId}, ${input.revision}, 'DRAFT', ${input.model}, ${json(input.result)}, ${input.resultHash}, ${input.userId})
-      ON CONFLICT (board_id, revision) DO UPDATE SET status='DRAFT', model=excluded.model, result=excluded.result, result_hash=excluded.result_hash, created_by=excluded.created_by, created_at=now()`.execute(this.db);
+      `.execute(this.db);
     return id;
   }
 
@@ -530,7 +530,8 @@ export class KnowledgeStore {
     return first<any>(sql`SELECT a.* FROM art_board_analyses a
       JOIN art_boards b ON b.id=a.board_id
       WHERE a.board_id=${boardId} AND a.revision=${revision}
-        AND b.project_id=${projectId} AND b.owner_id=${ownerId}`, this.db);
+        AND b.project_id=${projectId} AND b.owner_id=${ownerId}
+      ORDER BY a.created_at DESC, a.id DESC LIMIT 1`, this.db);
   }
 
   async approveArtBoardAnalysis(input: {
@@ -540,19 +541,30 @@ export class KnowledgeStore {
     revision: number;
     analysisId: string;
     approvedBy: string;
+    expectedHash: string;
   }) {
     return this.db.transaction().execute(async (tx) => {
-      const analysis = await first<any>(sql`SELECT a.* FROM art_board_analyses a
+      // Serialize project-wide version allocation across different boards.
+      await sql`SELECT id FROM knowledge_projects WHERE id=${input.projectId} FOR UPDATE`.execute(tx);
+      const analysis = await first<any>(sql`SELECT a.*, b.current_revision, b.archived_at FROM art_board_analyses a
         JOIN art_boards b ON b.id=a.board_id
         WHERE a.id=${input.analysisId} AND a.board_id=${input.boardId} AND a.revision=${input.revision}
           AND b.project_id=${input.projectId} AND b.owner_id=${input.ownerId} FOR UPDATE`, tx);
       if (!analysis) return { kind: 'NOT_FOUND' as const };
+      if (analysis.result_hash !== input.expectedHash) return { kind: 'RESULT_CHANGED' as const };
+      if (analysis.status === 'APPROVED') {
+        if (!analysis.approved_style_version) return { kind: 'LEGACY_APPROVAL' as const };
+        return { kind: 'APPROVED' as const, version: Number(analysis.approved_style_version), result: analysis.result, reused: true };
+      }
+      if (analysis.status !== 'DRAFT') return { kind: 'NOT_DRAFT' as const };
+      if (analysis.archived_at || Number(analysis.current_revision) !== input.revision)
+        return { kind: 'REVISION_CONFLICT' as const };
       const latest = await first<{ version: number }>(sql`SELECT coalesce(max(version), 0)::int AS version
         FROM style_profiles WHERE project_id=${input.projectId}`, tx);
       const version = Number(latest?.version ?? 0) + 1;
       await sql`INSERT INTO style_profiles(id, project_id, version, body, approved_by, approved_at, epoch)
-        VALUES (${randomUUID()}, ${input.projectId}, ${version}, ${analysis.result}, ${input.approvedBy}, now(), ${version})`.execute(tx);
-      await sql`UPDATE art_board_analyses SET status='APPROVED' WHERE id=${analysis.id}`.execute(tx);
+        VALUES (${randomUUID()}, ${input.projectId}, ${version}, ${json({ ...analysis.result, provenance: { board_id: input.boardId, revision: input.revision, analysis_id: analysis.id, result_hash: analysis.result_hash } })}, ${input.approvedBy}, now(), ${version})`.execute(tx);
+      await sql`UPDATE art_board_analyses SET status='APPROVED', approved_style_version=${version} WHERE id=${analysis.id}`.execute(tx);
       return { kind: 'APPROVED' as const, version, result: analysis.result };
     });
   }

@@ -45,6 +45,28 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('keeps immutable art analyses and binds approval to revision/hash', async (ctx) => {
+    skipIf(ctx);
+    const projectId = randomUUID();
+    await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'art approval')`.execute(store!.db);
+    const boardId = await store!.createArtBoard(projectId, 'owner');
+    await store!.saveArtBoardRevision({ projectId, ownerId: 'owner', boardId, baseRevision: 0, snapshot: { references: [] }, snapshotHash: 'snapshot' });
+    const draft = { summary: 'test', common_rules: [], conflicts: [], suggestions: [] };
+    const firstId = await store!.saveArtBoardAnalysis({ boardId, revision: 1, userId: 'owner', model: 'test', result: draft, resultHash: 'a'.repeat(64) });
+    const input = { projectId, ownerId: 'owner', boardId, revision: 1, analysisId: firstId, approvedBy: 'owner', expectedHash: 'a'.repeat(64) };
+    expect((await store!.approveArtBoardAnalysis({ ...input, expectedHash: 'b'.repeat(64) })).kind).toBe('RESULT_CHANGED');
+    const outcomes = await Promise.all([store!.approveArtBoardAnalysis(input), store!.approveArtBoardAnalysis(input)]);
+    expect(outcomes.map((r) => r.kind)).toEqual(['APPROVED', 'APPROVED']);
+    const versions = await rows<any>(sql`SELECT * FROM style_profiles WHERE project_id=${projectId}`, store!.db);
+    expect(versions).toHaveLength(1);
+    expect(versions[0].body.provenance.analysis_id).toBe(firstId);
+    const nextId = await store!.saveArtBoardAnalysis({ boardId, revision: 1, userId: 'owner', model: 'test', result: draft, resultHash: 'c'.repeat(64) });
+    expect(nextId).not.toBe(firstId);
+    const old = await first<any>(sql`SELECT status FROM art_board_analyses WHERE id=${firstId}`, store!.db);
+    expect(old.status).toBe('APPROVED');
+    await store!.saveArtBoardRevision({ projectId, ownerId: 'owner', boardId, baseRevision: 1, snapshot: { references: [] }, snapshotHash: 'new' });
+    expect((await store!.approveArtBoardAnalysis({ ...input, analysisId: nextId, expectedHash: 'c'.repeat(64) })).kind).toBe('REVISION_CONFLICT');
+  });
   it('dedupes source events by (source_id, event_key)', async (ctx) => {
     skipIf(ctx);
     const sid = randomUUID();
