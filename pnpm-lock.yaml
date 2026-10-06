@@ -32,6 +32,9 @@ importers:
       '@meeting/domain':
         specifier: workspace:*
         version: link:packages/domain
+      '@meeting/knowledge-db':
+        specifier: workspace:*
+        version: link:packages/knowledge-db
       '@meeting/providers':
         specifier: workspace:*
         version: link:packages/providers
@@ -156,6 +159,12 @@ importers:
         version: link:../domain
 
   packages/domain:
+    dependencies:
+      '@meeting/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
+  packages/knowledge-db:
     dependencies:
       '@meeting/contracts':
         specifier: workspace:*
