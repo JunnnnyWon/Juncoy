@@ -87,15 +87,37 @@ export async function indexMissingEmbeddings(
   let indexed = 0;
   for (let i = 0; i < pending.length; i += batch) {
     const slice = pending.slice(i, i + batch);
-    const vectors = await client.embedDocuments(slice.map((c) => c.content));
+    // 배치 400(초장 컨텍스트)은 개별 재시도로 고립 — 재시도해도 실패하는 항목은 스킵한다.
+    let vectors: number[][];
+    try {
+      vectors = await client.embedDocuments(slice.map((c) => c.content));
+    } catch {
+      vectors = [];
+      for (const c of slice) {
+        try {
+          const v = await client.embedDocuments([c.content]);
+          vectors.push(v[0]);
+        } catch {
+          try {
+            // 잘린 대신 마지막 수단: 끝에서 잘라서 한 번 더.
+            const v = await client.embedDocuments([c.content.slice(0, 4_000)]);
+            vectors.push(v[0]);
+          } catch (e) {
+            process.stderr.write(`embed skip ${c.id}: ${e}\n`);
+            vectors.push([]);
+          }
+        }
+      }
+    }
     for (let j = 0; j < slice.length; j++) {
+      if (!vectors[j]?.length) continue;
       const lit = `[${vectors[j].join(',')}]`;
       await sql`
         INSERT INTO chunk_embeddings(chunk_id, profile_id, embedding)
         VALUES (${slice[j].id}, ${profileId}, ${lit}::vector)
         ON CONFLICT (chunk_id, profile_id) DO NOTHING`.execute(store.db);
+      indexed++;
     }
-    indexed += slice.length;
   }
   return { indexed, pending: pending.length };
 }

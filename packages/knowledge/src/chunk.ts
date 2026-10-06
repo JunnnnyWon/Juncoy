@@ -146,6 +146,33 @@ export function chunkMeeting(
  * 문서의 normalized 내용을 청크로 변환 — 출처별 규칙 분기.
  * 반환 span에는 문서 원복에 필요한 식별자를 모두 포함한다 (citation용).
  */
+/** 임베딩 모델 컨텍스트 상한 대비 보수 하드캡 — 이 길이를 넘는 청크는 순서대로 쪼갠다. */
+const MAX_CHUNK_CHARS = 5_000;
+
+function capChunkSize(chunks: ChunkOut[]): ChunkOut[] {
+  const out: ChunkOut[] = [];
+  for (const c of chunks) {
+    if (c.content.length <= MAX_CHUNK_CHARS) {
+      c.ordinal = out.length;
+      out.push(c);
+      continue;
+    }
+    const total = Math.ceil(c.content.length / MAX_CHUNK_CHARS);
+    for (let i = 0; i < total; i++) {
+      const content = c.content.slice(i * MAX_CHUNK_CHARS, (i + 1) * MAX_CHUNK_CHARS);
+      if (!content.trim()) continue;
+      out.push({
+        ordinal: out.length,
+        content,
+        tokenCount: estimateTokens(content),
+        span: c.span,
+        metadata: { ...c.metadata, split_part: total > 1 ? `${i + 1}/${total}` : undefined },
+      });
+    }
+  }
+  return out;
+}
+
 export function chunkDocument(
   sourceKind: string,
   stableKey: string,
@@ -154,24 +181,28 @@ export function chunkDocument(
   const text: string = normalized.text ?? '';
   if (!text && !(normalized.segments?.length ?? 0)) return [];
   if (sourceKind === 'meeting' && Array.isArray(normalized.segments))
-    return chunkMeeting(
-      normalized.segments.map((s: any) => ({
-        segment_id: s.segment_id,
-        speaker: s.speaker ?? s.user_id,
-        display_text: s.display_text ?? s.raw_text,
-        start_ms: s.start_ms,
-        end_ms: s.end_ms,
-      })),
+    return capChunkSize(
+      chunkMeeting(
+        normalized.segments.map((s: any) => ({
+          segment_id: s.segment_id,
+          speaker: s.speaker ?? s.user_id,
+          display_text: s.display_text ?? s.raw_text,
+          start_ms: s.start_ms,
+          end_ms: s.end_ms,
+        })),
+      ),
     );
   if (sourceKind === 'github')
-    return chunkCode(text, {
-      repo: normalized.repo ?? stableKey.split(':')[1],
-      ref: normalized.ref ?? 'main',
-      path: normalized.path ?? '',
-      commit: normalized.sha,
-    });
+    return capChunkSize(
+      chunkCode(text, {
+        repo: normalized.repo ?? stableKey.split(':')[1],
+        ref: normalized.ref ?? 'main',
+        path: normalized.path ?? '',
+        commit: normalized.sha,
+      }),
+    );
   if (sourceKind === 'discord')
-    return [
+    return capChunkSize([
       {
         ordinal: 0,
         content: text,
@@ -185,6 +216,6 @@ export function chunkDocument(
           reply_to: normalized.reply_to ?? null,
         },
       },
-    ];
-  return chunkText(text, { spanBase: { document_key: stableKey } });
+    ]);
+  return capChunkSize(chunkText(text, { spanBase: { document_key: stableKey } }));
 }
