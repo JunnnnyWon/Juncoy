@@ -212,15 +212,20 @@ export class KnowledgeStore {
   }
 
   // ── active chunk_set 단일 트랜잭션 전환 (§8.1) ────────────────────
-  async activateChunkSet(documentId: string, extractorVersion: number) {
+  /** 비활성 set을 먼저 만들고 청크를 채운 뒤 swapChunkSet으로 원자 교체한다. */
+  async createChunkSet(documentId: string, extractorVersion: number) {
+    const id = randomUUID();
+    await sql`
+      INSERT INTO chunk_sets(id, document_id, extractor_version)
+      VALUES (${id}, ${documentId}, ${extractorVersion})`.execute(this.db);
+    return id;
+  }
+  /** 단일 UPDATE로 활성 set을 바꿔 검색자가 부분 청크를 보지 않게 한다. */
+  async swapChunkSet(documentId: string, chunkSetId: string) {
     return this.db.transaction().execute(async (tx) => {
-      await sql`
-        INSERT INTO chunk_sets(id, document_id, extractor_version)
-        VALUES (${randomUUID()}, ${documentId}, ${extractorVersion})`.execute(tx);
       const set = await first<{ id: string }>(
-        sql`SELECT id FROM chunk_sets WHERE document_id=${documentId}
-              AND extractor_version=${extractorVersion} AND NOT active
-            ORDER BY created_at DESC LIMIT 1`,
+        sql`SELECT id FROM chunk_sets WHERE id=${chunkSetId}
+              AND document_id=${documentId} AND NOT active FOR UPDATE`,
         tx,
       );
       if (!set) return null;

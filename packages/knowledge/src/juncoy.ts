@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { createHash } from 'node:crypto';
 import { KnowledgeStore, sql, first } from '@meeting/knowledge-db';
 import { documentKeys } from '@meeting/contracts';
+import { queueExtract } from './indexer.ts';
 
 // Juncoy 회의 수집기 — spec §6.4.
 // 회의 DB는 read-only 전용 role(pool 2)로 읽고, 지식 DB에만 쓴다.
@@ -114,8 +115,9 @@ export class JuncoyCollector {
       this.store.db,
     );
     if (!doc) return { synced: false };
+    const contentHash = sha256(JSON.stringify(segments));
     const published = await this.store.publishVersion(doc.id, {
-      contentHash: sha256(JSON.stringify(segments)),
+      contentHash,
       sourceRevision: `tv:${m.transcript_version}`,
       sourceModifiedAt: m.ended_at ? new Date(m.ended_at) : null,
       normalized: {
@@ -138,7 +140,10 @@ export class JuncoyCollector {
         })),
       },
     });
-    if (published) await this.saveCursor(m.meeting_id, m.transcript_version);
+    if (published) {
+      await queueExtract(this.store, doc.id, contentHash);
+      await this.saveCursor(m.meeting_id, m.transcript_version);
+    }
     return { synced: published };
   }
 

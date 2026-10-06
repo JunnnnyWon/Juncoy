@@ -117,12 +117,15 @@ describe('knowledge-db semantics', () => {
       sql`SELECT id FROM documents WHERE stable_key=${key}`,
       store!.db,
     );
-    const s1 = await store!.activateChunkSet(doc!.id, 1);
+    const s1 = await store!.createChunkSet(doc!.id, 1);
     await store!.insertChunks(s1!, [
       { ordinal: 0, content: '첫 청크' },
       { ordinal: 1, content: '두번째 청크' },
     ]);
-    const s2 = await store!.activateChunkSet(doc!.id, 2);
+    await store!.swapChunkSet(doc!.id, s1!);
+    const s2 = await store!.createChunkSet(doc!.id, 2);
+    await store!.insertChunks(s2!, [{ ordinal: 0, content: 'v2 청크' }]);
+    await store!.swapChunkSet(doc!.id, s2!);
     const actives = await rows<{ id: string }>(
       sql`SELECT id FROM chunk_sets WHERE document_id=${doc!.id} AND active`,
       store!.db,
