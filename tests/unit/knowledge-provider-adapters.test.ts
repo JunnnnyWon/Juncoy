@@ -102,4 +102,20 @@ describe('document and image provider adapters', () => {
       new UpstageDocumentParse({ apiKey: 'secret', endpoint: 'https://parse.test', maxResponseBytes: 4 }).parsePdf(Buffer.from('%PDF-test')),
     ).rejects.toThrow('upstage_document_parse_response_too_large');
   });
+
+  it('cancels a streaming Document Parse response when the limit is crossed', async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.enqueue(new Uint8Array([4, 5, 6]));
+      },
+      cancel,
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(stream, { status: 200 }));
+    await expect(
+      new UpstageDocumentParse({ apiKey: 'secret', endpoint: 'https://parse.test', maxResponseBytes: 4 }).parsePdf(Buffer.from('%PDF-test')),
+    ).rejects.toThrow('upstage_document_parse_response_too_large');
+    expect(cancel).toHaveBeenCalled();
+  });
 });

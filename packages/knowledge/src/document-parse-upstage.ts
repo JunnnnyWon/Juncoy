@@ -46,6 +46,40 @@ function textFromHtml(html: string) {
     .trim();
 }
 
+async function readResponseWithinLimit(response: Response, maxBytes: number) {
+  const declared = Number(response.headers.get('content-length') ?? 0);
+  if (declared > maxBytes) {
+    await response.body?.cancel('response_too_large');
+    throw new Error('upstage_document_parse_response_too_large');
+  }
+  if (!response.body) return new ArrayBuffer(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = next.value;
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel('response_too_large');
+        throw new Error('upstage_document_parse_response_too_large');
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
 export class UpstageDocumentParse {
   constructor(private options: DocumentParseOptions) {}
 
@@ -68,9 +102,10 @@ export class UpstageDocumentParse {
       throw Object.assign(new Error('upstage_document_parse_' + response.status), {
         status: response.status,
       });
-    const raw = await response.arrayBuffer();
-    if (raw.byteLength > (this.options.maxResponseBytes ?? 25 * 1024 * 1024))
-      throw new Error('upstage_document_parse_response_too_large');
+    const raw = await readResponseWithinLimit(
+      response,
+      this.options.maxResponseBytes ?? 25 * 1024 * 1024,
+    );
     const body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
     const content = body.content;
     const contentObject = content && typeof content === 'object' ? (content as Record<string, unknown>) : undefined;

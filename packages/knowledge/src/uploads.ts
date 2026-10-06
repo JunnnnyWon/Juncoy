@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { mkdir, writeFile, rm, stat, readFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, writeFile, rm, stat, readFile, link } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sql } from 'kysely';
 import { first, type KnowledgeStore } from '@meeting/knowledge-db';
@@ -172,18 +172,35 @@ export async function ensureUploadSource(store: KnowledgeStore, projectId: strin
 
 export class UploadStorage {
   constructor(public dir: string) {}
+  private path(key: string) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(key)) throw new Error('invalid_storage_key');
+    return join(this.dir, key);
+  }
   async put(key: string, buf: Buffer) {
+    const target = this.path(key);
     await mkdir(this.dir, { recursive: true });
-    await writeFile(join(this.dir, key), buf, { mode: 0o600 });
+    const temporary = join(this.dir, '.pending-' + randomUUID());
+    try {
+      await writeFile(temporary, buf, { mode: 0o600, flag: 'wx' });
+      try {
+        await link(temporary, target);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const original = await readFile(target);
+        if (!original.equals(buf)) throw new Error('immutable_storage_conflict');
+      }
+    } finally {
+      await rm(temporary, { force: true });
+    }
   }
   async remove(key: string) {
-    await rm(join(this.dir, key), { force: true });
+    await rm(this.path(key), { force: true });
   }
   async sizeOf(key: string) {
-    return (await stat(join(this.dir, key))).size;
+    return (await stat(this.path(key))).size;
   }
   async read(key: string) {
-    return readFile(join(this.dir, key));
+    return readFile(this.path(key));
   }
 }
 
