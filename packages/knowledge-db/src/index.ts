@@ -859,6 +859,26 @@ export class KnowledgeStore {
     }
   }
 
+  async getDocumentParse(projectId: string, uploadId: string) {
+    const version = await first<any>(sql`
+      SELECT v.id, v.parser_kind, v.parser_version, v.parse_status, v.parse_request_id,
+             v.parse_latency_ms, v.parse_error_code, v.source_sha256, v.normalized_hash
+      FROM knowledge_upload_versions v
+      JOIN knowledge_uploads u ON u.id=v.upload_id
+      WHERE u.project_id=${projectId} AND u.id=${uploadId}
+      ORDER BY v.created_at DESC LIMIT 1`, this.db);
+    if (!version) return null;
+    const blocks = await rows<any>(sql`
+      SELECT block_id, page_number, ordinal, block_type, text, html, metadata, content_hash
+      FROM document_parse_blocks WHERE upload_version_id=${version.id}
+      ORDER BY page_number NULLS LAST, ordinal`, this.db);
+    const pages = await rows<any>(sql`
+      SELECT page_number, text, block_ids, page_hash
+      FROM document_parse_pages WHERE upload_version_id=${version.id}
+      ORDER BY page_number`, this.db);
+    return { version, blocks, pages };
+  }
+
   async uploadQuotaUsed(projectId: string) {
     const r = await first<{ total: string }>(
       sql`SELECT coalesce(sum(bytes),0) AS total FROM knowledge_uploads

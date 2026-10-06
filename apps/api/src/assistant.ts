@@ -833,6 +833,15 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     }
   });
 
+  app.get('/api/assistant/files/:id/parse', async (req, reply) => {
+    const { ctx, projectId } = await requireSession(req);
+    const upload = await ctx.store.getUpload(projectId, (req.params as any).id);
+    if (!upload) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    const parsed = await ctx.store.getDocumentParse(projectId, upload.id);
+    if (!parsed) return reply.code(404).send({ error: { code: 'PARSE_NOT_FOUND' } });
+    return { upload_id: upload.id, source_sha256: upload.sha256, ...parsed };
+  });
+
   app.post('/api/assistant/files/:id/ingest', async (req, reply) => {
     const { ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });

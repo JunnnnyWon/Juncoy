@@ -75,6 +75,24 @@ describe('chunkDocument dispatch', () => {
     const dc = chunkDocument('discord', 'discord:g:ch:m9', { text: 'msg', author: 'u' });
     expect(dc[0].span.message_id).toBe('m9');
   });
+
+  it('keeps Document Parse page/block citation metadata on chunks', () => {
+    const chunks = chunkDocument('upload', 'upload:doc-1', {
+      text: '제목\n본문',
+      parser: { kind: 'upstage_document_parse', version: 'parse-v1', source_sha256: 'a'.repeat(64) },
+      blocks: [
+        { block_id: 'p1-b1', page: 1, ordinal: 0, block_type: 'heading', text: '제목' },
+        { block_id: 'p2-b1', page: 2, ordinal: 1, block_type: 'paragraph', text: '본문' },
+      ],
+    });
+    expect(chunks[0].span).toMatchObject({
+      page_start: 1,
+      page_end: 2,
+      block_ids: ['p1-b1', 'p2-b1'],
+      parser_kind: 'upstage_document_parse',
+      source_sha256: 'a'.repeat(64),
+    });
+  });
 });
 
 describe('estimateTokens', () => {

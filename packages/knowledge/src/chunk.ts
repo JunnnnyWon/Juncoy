@@ -217,5 +217,44 @@ export function chunkDocument(
         },
       },
     ]);
+  if (Array.isArray(normalized.blocks) && normalized.blocks.length) {
+    const blocks = normalized.blocks
+      .filter((b: any) => String(b.text ?? '').trim())
+      .sort((a: any, b: any) => Number(a.ordinal ?? 0) - Number(b.ordinal ?? 0));
+    const out: ChunkOut[] = [];
+    let text = '';
+    let blockIds: string[] = [];
+    let pages: number[] = [];
+    const flush = () => {
+      if (!text.trim()) return;
+      out.push({
+        ordinal: out.length,
+        content: text,
+        tokenCount: estimateTokens(text),
+        span: {
+          document_key: stableKey,
+          page_start: pages.length ? Math.min(...pages) : null,
+          page_end: pages.length ? Math.max(...pages) : null,
+          block_ids: [...blockIds],
+          parser_kind: normalized.parser?.kind ?? null,
+          parser_version: normalized.parser?.version ?? null,
+          source_sha256: normalized.parser?.source_sha256 ?? null,
+        },
+        metadata: { block_types: blocks.filter((b: any) => blockIds.includes(String(b.block_id))).map((b: any) => b.block_type) },
+      });
+      text = '';
+      blockIds = [];
+      pages = [];
+    };
+    for (const block of blocks) {
+      const value = String(block.text).trim();
+      if (text && text.length + value.length + 1 > windowChars(700)) flush();
+      text += (text ? '\n' : '') + value;
+      blockIds.push(String(block.block_id));
+      if (typeof block.page === 'number') pages.push(block.page);
+    }
+    flush();
+    return capChunkSize(out);
+  }
   return capChunkSize(chunkText(text, { spanBase: { document_key: stableKey } }));
 }
