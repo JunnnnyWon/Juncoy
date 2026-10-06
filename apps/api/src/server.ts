@@ -34,6 +34,19 @@ export async function buildServer(config: AppConfig, store: Store) {
   const auth = new Auth(store, config);
   const origin = new URL(config.APP_BASE_URL).origin;
   await app.register(cookie);
+  // webhook HMAC 검증용 raw body 보존 (지식 라우트만 소비)
+  app.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (req: any, body: string, done) => {
+      (req as any).rawBody = body;
+      try {
+        done(null, body ? JSON.parse(body) : {});
+      } catch (e) {
+        done(e as Error);
+      }
+    },
+  );
   await app.register(helmet, {
     contentSecurityPolicy: {
       directives: {
@@ -69,7 +82,12 @@ export async function buildServer(config: AppConfig, store: Store) {
   app.addHook('onRequest', async (req, reply) => {
     if (req.url.startsWith('/api') || req.url.startsWith('/auth'))
       reply.header('Cache-Control', 'private, no-store');
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin !== origin)
+    if (
+      !['GET', 'HEAD', 'OPTIONS'].includes(req.method) &&
+      req.headers.origin !== origin &&
+      // 머신 간 webhook은 Origin 없음 — 라우트에서 HMAC 서명으로 인증한다.
+      !req.url.startsWith('/api/knowledge/webhooks/')
+    )
       throw new DomainError('INVALID_ORIGIN', '잘못된 요청입니다.', 403);
   });
   app.setErrorHandler((error, req, reply) => {

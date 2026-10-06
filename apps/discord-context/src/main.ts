@@ -1,6 +1,12 @@
 import 'dotenv/config';
-import { KnowledgeStore, sql, rows } from '@meeting/knowledge-db';
-import { DiscordCollector, DiscordRest } from '@meeting/knowledge';
+import { KnowledgeStore, sql, rows, first } from '@meeting/knowledge-db';
+import {
+  DiscordCollector,
+  DiscordRest,
+  DiscordGateway,
+  INTENTS,
+} from '@meeting/knowledge';
+import { documentKeys } from '@meeting/contracts';
 import { loadKnowledgeConfig } from '@meeting/providers';
 
 // Discord 텍스트 수집 서비스 — spec §6.3.
@@ -31,8 +37,79 @@ const main = async () => {
       store.db,
     );
 
+  /** 채널/스레드 ID → 등록된 discord source. scope 없는 채널은 수집하지 않는다 (§5.2). */
+  const sourceForChannel = async (channelId: string) => {
+    const row = await first<{ source_id: string }>(
+      sql`SELECT source_id FROM source_scopes
+          WHERE allowed AND scope_key IN ('channel:' || ${channelId}, 'thread:' || ${channelId})
+          LIMIT 1`,
+      store.db,
+    );
+    return row?.source_id ?? null;
+  };
+
+  // ── 실시간 Gateway (P3) — 같은 프로세스가 유일한 Discord 작성자 ──
+  const reconcileAll = async () => {
+    for (const src of await discordSources())
+      for (const scope of await scopes(src.id)) {
+        const channelId = scope.scope_key.split(':')[1];
+        if (!channelId) continue;
+        try {
+          await collector.reconcileHead(src.id, channelId);
+        } catch (e) {
+          process.stderr.write(`resync ${scope.scope_key}: ${e}\n`);
+        }
+      }
+  };
+  const gateway = new DiscordGateway(
+    config.DISCORD_BOT_TOKEN,
+    INTENTS.GUILDS | INTENTS.GUILD_MESSAGES | INTENTS.MESSAGE_CONTENT,
+    {
+      onDispatch: async (t, d) => {
+        if (t === 'MESSAGE_CREATE' || t === 'MESSAGE_UPDATE') {
+          const srcId = await sourceForChannel(d.channel_id);
+          if (!srcId) return;
+          // uncached UPDATE는 캐시된 payload를 믿지 않고 REST로 재조회한다 (§6.3).
+          const full = await rest.message(d.channel_id, d.id);
+          if (full.status === 200 && full.body) {
+            await store.recordSourceEvent(
+              srcId,
+              `gw:${t}:${d.id}:${full.body.edited_timestamp ?? 'new'}`,
+              t.toLowerCase(),
+              d,
+            );
+            await collector.ingestMessage(srcId, d.channel_id, full.body);
+          }
+        } else if (t === 'MESSAGE_DELETE') {
+          const srcId = await sourceForChannel(d.channel_id);
+          if (!srcId) return;
+          await store.applyTombstone(
+            documentKeys.discordMessage(config.DISCORD_GUILD_ID, d.channel_id, d.id),
+            srcId,
+            'discord_message_deleted',
+          );
+        } else if (t?.startsWith('THREAD_')) {
+          const parent = d.parent_id ?? d.channel_id;
+          if (parent && (await sourceForChannel(parent))) {
+            await collector.discoverThreads(parent);
+          }
+        }
+      },
+      onResyncNeeded: () => reconcileAll(),
+      onStateChange: (s, d) => process.stdout.write(`gateway ${s}${d ? ' ' + d : ''}\n`),
+    },
+  );
+  void gateway.run().catch((e) => {
+    process.stderr.write(`gateway fatal: ${e}\n`);
+    process.exit(1);
+  });
+
   let stop = false;
-  for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => (stop = true));
+  for (const sig of ['SIGINT', 'SIGTERM'] as const)
+    process.on(sig, () => {
+      stop = true;
+      gateway.stop();
+    });
 
   while (!stop) {
     for (const src of await discordSources()) {

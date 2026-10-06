@@ -10,6 +10,8 @@ import {
   DiscordCollector,
   DiscordRest,
   buildImagePrompt,
+  verifyWebhookSignature,
+  verifyNotionSignature,
 } from '@meeting/knowledge';
 import type { AppConfig } from '@meeting/providers';
 import type { Auth } from './auth.ts';
@@ -191,6 +193,68 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
       request: body.request,
       embeddings: ctx.embeddings,
     });
+  });
+
+  // ── webhook 수신 — 세션 대신 HMAC 서명 (Origin 면제 대상, §6.2/§6.1) ──
+  /** POST /api/knowledge/webhooks/github — push 등 신호 → refresh 잡으로 변환. */
+  app.post('/api/knowledge/webhooks/github', async (req, reply) => {
+    const secret = process.env.GITHUB_WEBHOOK_SECRET;
+    const c = await getCtx();
+    if (!c || !secret)
+      return reply.code(503).send({ error: { code: 'KNOWLEDGE_DISABLED' } });
+    const sig = (req.headers['x-hub-signature-256'] as string) ?? null;
+    if (!verifyWebhookSignature(secret, (req as any).rawBody ?? '', sig))
+      return reply.code(401).send({ error: { code: 'BAD_SIGNATURE' } });
+    const delivery = String(req.headers['x-github-delivery'] ?? crypto.randomUUID());
+    const event = String(req.headers['x-github-event'] ?? 'unknown');
+    const payload = req.body as any;
+    const repo = payload?.repository?.full_name;
+    const src = await first<{ id: string }>(
+      sql`SELECT id FROM knowledge_sources WHERE kind='github' AND status='ACTIVE' LIMIT 1`,
+      c.store.db,
+    );
+    if (!src || !repo) return { received: true, queued: false };
+    // dedupe: delivery id가 event_key — 재전송은 무시된다.
+    const eventId = await c.store.recordSourceEvent(src.id, delivery, `github.${event}`, payload);
+    if (eventId === null) return { received: true, duplicate: true };
+    const ref = typeof payload?.ref === 'string' ? payload.ref.replace('refs/heads/', '') : null;
+    if (event === 'push' && ref)
+      await c.store.enqueueJob(`gh-refresh:${delivery}`, 'refresh', {
+        source_kind: 'github',
+        repo,
+        ref,
+      });
+    return { received: true, queued: event === 'push' };
+  });
+
+  /** POST /api/knowledge/webhooks/notion — page 이벤트 → refresh 잡. */
+  app.post('/api/knowledge/webhooks/notion', async (req, reply) => {
+    const secret = process.env.NOTION_WEBHOOK_SECRET;
+    const c = await getCtx();
+    if (!c || !secret)
+      return reply.code(503).send({ error: { code: 'KNOWLEDGE_DISABLED' } });
+    const sig = (req.headers['x-notion-signature'] as string) ?? null;
+    if (!verifyNotionSignature(secret, (req as any).rawBody ?? '', sig))
+      return reply.code(401).send({ error: { code: 'BAD_SIGNATURE' } });
+    const payload = req.body as any;
+    const src = await first<{ id: string }>(
+      sql`SELECT id FROM knowledge_sources WHERE kind='notion' AND status='ACTIVE' LIMIT 1`,
+      c.store.db,
+    );
+    if (!src) return { received: true, queued: false };
+    const pageId = payload?.data?.page_id ?? payload?.data?.id ?? payload?.id;
+    await c.store.recordSourceEvent(
+      src.id,
+      `ntn:${payload?.id ?? crypto.randomUUID()}`,
+      `notion.${payload?.type ?? 'event'}`,
+      payload,
+    );
+    if (pageId)
+      await c.store.enqueueJob(`ntn-refresh:${payload?.id ?? pageId}`, 'refresh', {
+        source_kind: 'notion',
+        page_id: pageId,
+      });
+    return { received: true, queued: !!pageId };
   });
 
   /** GET /api/knowledge/search?q= — 디버그/탐색용 후보 청크 (검증 없음). */

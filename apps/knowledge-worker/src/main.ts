@@ -11,6 +11,8 @@ import {
   StaticTokenProvider,
   UpstageEmbeddings,
   ensureProfile,
+  NotionCollector,
+  NotionRest,
 } from '@meeting/knowledge';
 import { loadKnowledgeConfig } from '@meeting/providers';
 
@@ -21,6 +23,8 @@ import { loadKnowledgeConfig } from '@meeting/providers';
 const INDEX_MS = 3_000;
 const JUNCOY_MS = 5_000;
 const GITHUB_MS = 60_000;
+const NOTION_INCREMENTAL_MS = 120_000;
+const NOTION_STRUCTURE_MS = 900_000;
 
 const log = (m: string) => process.stdout.write(`knowledge-worker ${m}\n`);
 
@@ -122,6 +126,76 @@ const main = async () => {
     setInterval(() => void runGitHub(), GITHUB_MS);
     void runGitHub();
   } else log('github auth unset — github collector off');
+
+  // ── Notion 증분(2분)/구조(15분) 대조 루프 (§6.1) ────────────────
+  const notionToken = process.env.NOTION_TOKEN;
+  if (notionToken) {
+    const rest = new NotionRest(notionToken);
+    const workspace = process.env.NOTION_WORKSPACE ?? 'default';
+    const runNotion = async (structure: boolean) => {
+      try {
+        for (const src of await rows<{ id: string }>(
+          sql`SELECT id FROM knowledge_sources WHERE kind='notion' AND status='ACTIVE'`,
+          store.db,
+        )) {
+          const c = new NotionCollector(store, rest, workspace, src.id);
+          const r = structure ? await c.reconcileStructure() : await c.syncIncremental();
+          log(`notion ${structure ? 'structure' : 'incremental'} ${src.id}: ${JSON.stringify(r)}`);
+        }
+      } catch (e) {
+        process.stderr.write(`notion loop: ${e}\n`);
+      }
+    };
+    setInterval(() => void runNotion(false), NOTION_INCREMENTAL_MS);
+    setInterval(() => void runNotion(true), NOTION_STRUCTURE_MS);
+    void runNotion(true); // 첫 실행은 구조 동기로 seed
+  } else log('NOTION_TOKEN unset — notion collector off');
+
+  // ── webhook 'refresh' 잡 소비 — 수신 신호를 즉시 대조로 변환 ────────
+  const runRefresh = async () => {
+    try {
+      for (const job of await store.claimJobs(owner, ['refresh'], 4, 60_000)) {
+        try {
+          const p = job.payload as { source_kind?: string; repo?: string; ref?: string; page_id?: string };
+          if (p.source_kind === 'github' && p.repo && p.ref) {
+            const tokens =
+              ghApp && ghKey && ghInstall
+                ? new InstallationTokenProvider(ghApp, ghKey.replace(/\\n/g, '\n'), ghInstall)
+                : ghPat
+                  ? new StaticTokenProvider(ghPat)
+                  : null;
+            if (tokens) {
+              const src = await rows<{ id: string }>(
+                sql`SELECT id FROM knowledge_sources WHERE kind='github' AND status='ACTIVE' LIMIT 1`,
+                store.db,
+              );
+              if (src[0])
+                await new GitHubCollector(store, new GitHubRest(tokens), p.repo, p.repo, src[0].id).reconcileRef(p.ref);
+            }
+          } else if (p.source_kind === 'notion' && notionToken && p.page_id) {
+            const src = await rows<{ id: string }>(
+              sql`SELECT id FROM knowledge_sources WHERE kind='notion' AND status='ACTIVE' LIMIT 1`,
+              store.db,
+            );
+            if (src[0])
+              await new NotionCollector(
+                store,
+                new NotionRest(notionToken),
+                process.env.NOTION_WORKSPACE ?? 'default',
+                src[0].id,
+              ).ingestPage(p.page_id);
+          }
+          await store.finishJob(job, 'DONE');
+        } catch (e) {
+          await store.retryJob(job, new Date(Date.now() + 30_000), String(e).slice(0, 200));
+        }
+      }
+    } catch (e) {
+      process.stderr.write(`refresh loop: ${e}\n`);
+    }
+  };
+  setInterval(() => void runRefresh(), 5_000);
+  void runRefresh();
 };
 
 main().catch((e) => {
