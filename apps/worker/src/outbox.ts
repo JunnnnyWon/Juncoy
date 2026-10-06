@@ -29,7 +29,7 @@ export class Outbox {
     );
   }
   private footer(item: Item) {
-    return `Juncoy · ${Buffer.from(item.id.replaceAll('-', ''), 'hex').toString('base64url')}`;
+    return `23시 정시퇴근 · ${Buffer.from(item.id.replaceAll('-', ''), 'hex').toString('base64url')}`;
   }
   async payload(item: Item): Promise<any | null> {
     const base = this.config.APP_BASE_URL;
