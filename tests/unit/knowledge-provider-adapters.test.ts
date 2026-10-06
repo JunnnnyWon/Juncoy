@@ -91,6 +91,7 @@ describe('document and image provider adapters', () => {
     });
     expect(result.parserKind).toBe('local_pdfjs');
     expect(result.parseStatus).toBe('FALLBACK');
+    expect(result.parseLatencyMs).toBeGreaterThanOrEqual(0);
     expect(result.parseError).toBe('provider_timeout');
   });
 

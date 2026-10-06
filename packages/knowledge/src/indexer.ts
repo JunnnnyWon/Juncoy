@@ -31,6 +31,7 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string) {
     parserKind: extracted.parserKind,
     parserVersion: extracted.normalized.parser?.version,
     parseStatus: extracted.parseStatus,
+    parseLatencyMs: extracted.parseLatencyMs,
     parseRequestId: extracted.normalized.parser?.request_id,
     parseErrorCode: extracted.parseError,
     sourceSha256: upload.sha256,

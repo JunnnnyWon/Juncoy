@@ -110,6 +110,7 @@ export async function extractUpload(
   opts?: { documentParse?: UpstageDocumentParse; expectedSha256?: string },
 ) {
   if (mime === 'application/pdf' && opts?.documentParse) {
+    const startedAt = performance.now();
     try {
       const parsed = await opts.documentParse.parsePdf(buf, opts.expectedSha256);
       return {
@@ -131,6 +132,7 @@ export async function extractUpload(
         },
         parserKind: 'upstage_document_parse' as const,
         parseStatus: 'READY' as const,
+        parseLatencyMs: Math.round(performance.now() - startedAt),
       };
     } catch (error) {
       const text = await extractUploadText(buf, mime);
@@ -145,6 +147,7 @@ export async function extractUpload(
         },
         parserKind: 'local_pdfjs' as const,
         parseStatus: 'FALLBACK' as const,
+        parseLatencyMs: Math.round(performance.now() - startedAt),
         parseError: error instanceof Error ? error.message : String(error),
       };
     }
@@ -155,6 +158,7 @@ export async function extractUpload(
     normalized: { text, mime, parser: { kind: 'local' }, blocks: [], pages: [] },
     parserKind: 'local' as const,
     parseStatus: 'NOT_REQUESTED' as const,
+    parseLatencyMs: undefined,
   };
 }
 
