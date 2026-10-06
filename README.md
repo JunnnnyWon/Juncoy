@@ -96,6 +96,7 @@ packages/*     계약, 도메인 규칙, 외부 공급자 어댑터
 - [RAG 구현 점검표·우선순위·완료 기준](docs/RAG_IMPLEMENTATION_AUDIT_2026-10-06.md)
 - [웹 프로젝트 어시스턴트 개발 명세](docs/WEB_PROJECT_ASSISTANT_DEVELOPMENT_SPEC.md)
 - [아트 레퍼런스 캔버스 개발 명세](docs/ART_REFERENCE_CANVAS_DEVELOPMENT_SPEC.md)
+- [Upstage Document Parse 도입 개발 명세](docs/DOCUMENT_PARSE_DEVELOPMENT_SPEC.md)
 - [RAG 개발 명세](docs/RAG_DEVELOPMENT_SPEC.md)
 - [RAG 개발 플랜](docs/RAG_DEVELOPMENT_PLAN.md)
 - [아키텍처](docs/architecture.md)

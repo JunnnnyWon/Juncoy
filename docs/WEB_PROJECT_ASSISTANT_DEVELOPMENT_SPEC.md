@@ -169,13 +169,13 @@ preview card는 작업 종류, 대상, 현재 값, 변경 후 값, 근거, 예�
 3. 프로젝트 지식에 추가 명시
 4. MIME, 확장자, 크기, 위험 파일 검사
 5. private object storage 원본 저장
-6. 텍스트, PDF, DOCX, CSV, Markdown 추출·정규화·chunk·embedding
+6. 텍스트, PDF, DOCX, CSV, Markdown 추출·정규화·chunk·embedding. PDF 구조 보존은 [Document Parse 도입 명세](DOCUMENT_PARSE_DEVELOPMENT_SPEC.md)에 따라 선택 적용한다.
 7. 이미지 metadata와 OCR 또는 vision description, 원본 reference 저장
 8. UPLOADED, EXTRACTING, INDEXING, READY 상태 표시
 
 READY 이전 파일은 검색·답변·이미지 근거에 사용하지 않는다. 삭제는 tombstone과 파생 청크·embedding 차단을 적용한다.
 
-기본 제한: 파일당 50 MB, 요청당 10개, 프로젝트별 5 GB. 허용 형식은 PDF, DOCX, TXT, Markdown, CSV, PNG, JPEG, WEBP다. 실행 파일·스크립트·압축 파일은 기본 거부한다.
+기본 제한: 파일당 50 MB, 요청당 10개, 프로젝트별 5 GB. 허용 형식은 PDF, DOCX, TXT, Markdown, CSV, PNG, JPEG, WEBP다. 실행 파일·스크립트·압축 파일은 기본 거부한다. Document Parse는 PDF 파생 구조를 만드는 데만 사용하고, 이미지 파일은 Parse에 보내지 않으며 원본 픽셀을 별도로 보존한다.
 
 ## 10. Notion 일정·작업
 
@@ -315,7 +315,7 @@ conversation/message/run, SSE, source coverage UI, Notion 일정·작업 조회 
 
 ### Phase 2: 파일과 RAG
 
-private upload storage, PDF/DOCX/TXT/Markdown/CSV/image extractor, ingestion UI, file ACL과 tombstone을 만든다.
+private upload storage, PDF/DOCX/TXT/Markdown/CSV/image extractor, 선택적 Upstage Document Parse, ingestion UI, file ACL과 tombstone을 만든다. Parse 원본과 파생 결과는 분리하고, 이미지 원본은 Parse 경로에서 제외한다.
 
 ### Phase 3: Notion approval mutation
 
