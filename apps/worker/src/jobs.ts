@@ -44,14 +44,19 @@ export class Jobs {
       m = await this.store.meeting(guildId, id);
     if (!['FINALIZING', 'COMPLETED', 'PARTIAL', 'FAILED'].includes(m.status))
       throw new DomainError('NOT_FINALIZABLE');
+    const UNRECOVERABLE_SETTLE_MS = 10 * 60_000;
+    const endedAtMs = Date.parse(m.view.ended_at ?? '');
+    // Unrecoverable gaps only auto-close once late audio flushes had time to land.
+    const canSettle = Number.isFinite(endedAtMs) && Date.now() - endedAtMs >= UNRECOVERABLE_SETTLE_MS;
     await this.store.recoverPendingAudio(
       guildId,
       id,
       Math.max(
         0,
-        Date.parse(m.view.ended_at ?? new Date().toISOString()) -
+        (Number.isFinite(endedAtMs) ? endedAtMs : Date.now()) -
           Date.parse(m.view.started_at ?? new Date().toISOString()),
       ),
+      canSettle,
     );
     const pending = await first(
       sql<{
@@ -71,8 +76,26 @@ export class Jobs {
     const version = m.view.transcript_version,
       segments = await this.store.allSegments(guildId, id, version),
       snapshot = await this.store.snapshot(guildId, id);
+    const unresolvedGaps = snapshot.gaps.some((g) => !g.resolved && g.reason !== 'PAUSED');
+    // The summary keeps flagging lost coverage even after unrecoverable gaps auto-close.
     const partial =
-      snapshot.gaps.some((g) => !g.resolved && g.reason !== 'PAUSED') || Number(pending?.n) > 0;
+      unresolvedGaps ||
+      snapshot.gaps.some((g) => g.resolution === 'UNRECOVERABLE') ||
+      Number(pending?.n) > 0;
+    const awaiting = unresolvedGaps || Number(pending?.n) > 0;
+    if (
+      !canSettle &&
+      Number.isFinite(endedAtMs) &&
+      snapshot.gaps.some((g) => !g.resolved && g.reason !== 'PAUSED' && !g.recoverable)
+    )
+      await this.store.enqueue(
+        this.store.db,
+        `finalize-sweep:${id}:${version}`,
+        'FINALIZE',
+        id,
+        { guild_id: guildId },
+        new Date(endedAtMs + UNRECOVERABLE_SETTLE_MS),
+      );
     job.summary_input_version = version;
     if (this.config.PROVIDER_MODE === 'real' && this.config.SUMMARY_AUTOPUBLISH_ENABLED === 'false')
       throw new DomainError('SUMMARY_PUBLICATION_DISABLED');
@@ -138,6 +161,7 @@ export class Jobs {
       partial,
       job,
       proof,
+      awaiting,
     );
   }
   async retranscribe(job: Job) {
