@@ -32,8 +32,8 @@
 | P9 | ✅ PR #5 | answer 파이프라인(라이브 읽기→검색→Solar→근거 재검증), /api/knowledge/* + /ask UI |
 | P10 | ✅ PR #5 | 근거 기반 프롬프트 합성 API (생성은 provider 미설정) |
 | P11 | ✅ PR #5 | `infra/compose.knowledge.yml` + `.env.knowledge.example` — **미배포** |
-| P3 | ⏸ 사용자 | Discord MessageContent intent + Gateway 수신기 |
-| P5 | ⏸ 사용자 | Notion 읽기 전용 토큰 |
+| P3 | ✅ PR #5 | Gateway 클라이언트(heartbeat zombie/resume/seq gap → 재대조), discord-context 내 단일 작성자 — 실연결은 intent 확인 후 |
+| P5 | ✅ PR #5 | Notion 수집기(증분 2분/구조 15분/댓글/archive tombstone/webhook) — 토큰 확보, 실연결 시험 남음 |
 
 ## 1. PR 단위 실행 순서
 
