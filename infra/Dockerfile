@@ -7,10 +7,14 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/db/package.json packages/db/package.json
 COPY packages/providers/package.json packages/providers/package.json
+COPY packages/knowledge/package.json packages/knowledge/package.json
+COPY packages/knowledge-db/package.json packages/knowledge-db/package.json
 COPY apps/bot/package.json apps/bot/package.json
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY apps/worker/package.json apps/worker/package.json
+COPY apps/knowledge-worker/package.json apps/knowledge-worker/package.json
+COPY apps/discord-context/package.json apps/discord-context/package.json
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm check && pnpm build
