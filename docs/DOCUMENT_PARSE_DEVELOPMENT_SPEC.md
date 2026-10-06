@@ -2,9 +2,9 @@
 
 작성일: 2026-10-07 KST  
 대상 저장소: JunnnnyWon/Juncoy  
-기준 코드: 557491a88c94ff0970dea4655c295c0aa4cd07cc  
-문서 버전: v1.0  
-상태: 1차 구현 반영, 운영 검증 전
+기준 코드: 89473c0dcb44212340c4bee51567c5c6e20e1733
+문서 버전: v1.1
+상태: Document Parse 도입 명세 확정, 운영 검증 전
 
 ## 1. 목적
 
@@ -44,7 +44,7 @@ Upstage 공식 문서의 Document Parse 설명은 PDF를 layout-aware HTML 또�
 
 ## 3. 현재 구현 기준선
 
-기준 커밋 557491a에서 확인된 흐름은 다음과 같다.
+기준 커밋 89473c0에서 확인된 흐름은 다음과 같다.
 
     POST /api/assistant/files/init
       → 파일 바이트 complete
@@ -65,7 +65,19 @@ Upstage 공식 문서의 Document Parse 설명은 PDF를 layout-aware HTML 또�
 - packages/providers/src/knowledge-config.ts: Upstage key/model과 knowledge 환경 설정
 - packages/knowledge-db/migrations/003_assistant.sql: knowledge_uploads, knowledge_upload_versions
 
-현재 구현은 PDF에 활성화된 경우 Upstage Document Parse adapter를 시도하고, 실패하면 기존 pdfjs 로컬 추출로 fallback한다. PNG·JPEG·WEBP는 Parse에 보내지 않으며, OpenRouter Gemini 3.7 Flash 비전 분석은 원본 바이트를 별도 파생 텍스트로만 처리한다.
+현재 구현은 PDF에 활성화된 경우 Upstage Document Parse adapter를 HTTP 요청으로 시도하고, 실패하면 기존 pdfjs 로컬 추출로 fallback한다. PNG·JPEG·WEBP는 Parse에 보내지 않으며, 이미지 분석이 활성화된 경우에도 원본 바이트를 별도 파생 텍스트로만 처리한다. 이 구현은 아직 실제 Upstage 계정의 응답 fixture, durable worker 재처리, derived asset 저장, block-aware citation까지 운영 검증된 상태가 아니므로 아래 개발 플랜의 완료 기준을 충족하기 전에는 운영 완료로 표시하지 않는다.
+
+### 3.1 이번 도입에서 반드시 지키는 경계
+
+Document Parse는 PDF의 문서 구조를 RAG에 제공하는 ingestion adapter다. 다음 기능은 이번 도입의 성공 조건이 아니며, Parse 성공을 이유로 자동 실행하지 않는다.
+
+- PNG·JPEG·WEBP를 Parse에 전송하거나 Parse 결과로 교체하지 않는다.
+- Information Extraction을 추가하거나 구조화 필드를 자동으로 업무 데이터로 확정하지 않는다.
+- Parse 결과만으로 Notion, 일정, Discord, GitHub를 수정하지 않는다.
+- Parse 결과의 이미지·figure 파생물을 이미지 생성 reference로 자동 선택하지 않는다.
+- 실제 API 계약이 확인되기 전까지 응답 필드를 추측해 production 성공으로 표시하지 않는다.
+
+원본 보존 검증은 parser 성공 여부와 독립적으로 수행한다. parser가 실패해도 원본 hash가 업로드 시점과 동일하면 원본 보존 조건은 통과하고, parser가 성공해도 hash가 달라지면 전체 ingestion을 운영 성공으로 공개하지 않는다.
 
 ## 4. 처리 정책
 
