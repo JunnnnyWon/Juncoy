@@ -928,6 +928,11 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return { board, revision };
   });
 
+  app.get('/api/assistant/art-boards/:id/history', async (req) => {
+    const { session, ctx, projectId } = await requireSession(req);
+    return ctx.store.listArtBoardHistory(projectId, session.user_id, (req.params as any).id);
+  });
+
   app.post('/api/assistant/art-boards/:id/revisions', async (req, reply) => {
     const { session, ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });

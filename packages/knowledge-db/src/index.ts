@@ -467,6 +467,20 @@ export class KnowledgeStore {
         VALUES (${randomUUID()}, ${input.boardId}, ${revision}, ${input.ownerId}, ${json(input.snapshot)}, ${input.snapshotHash})`.execute(
         tx,
       );
+      const references = Array.isArray((input.snapshot as any)?.references)
+        ? (input.snapshot as any).references
+        : [];
+      await sql`DELETE FROM art_board_assets WHERE board_id=${input.boardId}`.execute(tx);
+      for (const ref of references) {
+        if (!ref || typeof ref.id !== 'string') continue;
+        await sql`INSERT INTO art_board_assets(
+          board_id, asset_key, source_upload_id, role, usage_strength, note, selected, source_sha256
+        ) VALUES (
+          ${input.boardId}, ${ref.id}, ${ref.upload_id ?? null},
+          ${ref.role ?? 'mood'}, ${ref.usage ?? 'REVIEW_REQUIRED'},
+          ${ref.note ?? ''}, ${Boolean(ref.selected)}, ${ref.sha256 ?? null}
+        )`.execute(tx);
+      }
       await sql`UPDATE art_boards SET current_revision=${revision}, updated_at=now() WHERE id=${input.boardId}`.execute(
         tx,
       );
@@ -487,6 +501,14 @@ export class KnowledgeStore {
       FROM art_board_revisions r WHERE r.board_id=${boardId} AND r.revision=${revision ?? board.current_revision}`,
       this.db,
     );
+  }
+
+  async listArtBoardHistory(projectId: string, ownerId: string, boardId: string) {
+    return rows<any>(sql`SELECT r.id, r.revision, r.created_by, r.snapshot_hash,
+        r.analysis_state, r.created_at
+      FROM art_board_revisions r JOIN art_boards b ON b.id=r.board_id
+      WHERE r.board_id=${boardId} AND b.project_id=${projectId} AND b.owner_id=${ownerId}
+      ORDER BY r.revision DESC LIMIT 100`, this.db);
   }
 
   async saveArtBoardAnalysis(input: {
