@@ -18,6 +18,7 @@ import {
   ensureUploadSource,
   extractUploadText,
   magicOk,
+  queueExtract,
   sha256,
   UPLOAD_MIMES,
   UPLOAD_MAX_BYTES,
@@ -728,15 +729,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
           sourceRevision: u.sha256,
           normalized: { text, filename: u.filename, mime: u.mime, upload_id: u.id },
         });
-        await ctx.store.enqueueJob(
-          `extract:${doc!.id}:${u.sha256}`,
-          'extract',
-          {
-            documentId: doc!.id,
-            contentHash: u.sha256,
-          },
-          { documentId: doc!.id },
-        );
+        await queueExtract(ctx.store, doc!.id, u.sha256);
         await ctx.store.updateUpload(u.id, { state: 'INDEXING', documentId: doc!.id });
       } catch (err: any) {
         await ctx.store.updateUpload(u.id, { state: 'FAILED', error: String(err?.message ?? err) });
@@ -765,15 +758,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
     const u = await ctx.store.getUpload(projectId, (req.params as any).id);
     if (!u?.document_id) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
-    await ctx.store.enqueueJob(
-      `extract:${u.document_id}:${u.sha256}`,
-      'extract',
-      {
-        documentId: u.document_id,
-        contentHash: u.sha256,
-      },
-      { documentId: u.document_id },
-    );
+    await queueExtract(ctx.store, u.document_id, u.sha256);
     await ctx.store.updateUpload(u.id, { state: 'INDEXING' });
     return { ok: true };
   });
