@@ -8,6 +8,7 @@ type Usage =
 interface RefCard {
   id: string;
   upload_id?: string;
+  art_asset_id?: string;
   name: string;
   url: string;
   role: Role;
@@ -150,6 +151,7 @@ export function ArtReferenceCanvas() {
             .map((b) => b.toString(16).padStart(2, '0'))
             .join('');
           let upload_id: string | undefined;
+          let art_asset_id: string | undefined;
           try {
             const init = await api<{ id: string; reused: boolean }>('/api/assistant/files/init', {
               method: 'POST',
@@ -167,12 +169,18 @@ export function ArtReferenceCanvas() {
                 headers: { 'Content-Type': 'application/octet-stream' },
                 body: bytes,
               });
+            const asset = await api<{ id: string }>('/api/assistant/art-assets/init', {
+              method: 'POST',
+              body: JSON.stringify({ upload_id: init.id, source_label: file.name }),
+            });
+            art_asset_id = asset.id;
           } catch {
             /* local draft remains usable when API is unavailable */
           }
           return {
             id: file.name + '-' + file.lastModified + '-' + index,
             upload_id,
+            art_asset_id,
             name: file.name,
             url: upload_id ? '/api/assistant/files/' + upload_id + '/content' : URL.createObjectURL(file),
             role: 'mood' as Role,
