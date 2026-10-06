@@ -197,6 +197,12 @@ export function sharedKnowledgeCtx(config: AppConfig) {
           : undefined;
       return { store, embeddings, discordRead, model: solarModel(config) };
     })());
+    // 초기화 실패(기동 직후 지식 DB 미응답 등)를 영구 캐시하지 않는다 —
+    // 캐시된 rejected promise는 이후 모든 지식 라우트를 503으로 만든다.
+    return (ctx as Promise<KnowledgeCtx | null>).catch((e) => {
+      ctx = null;
+      throw e;
+    });
   };
 }
 
