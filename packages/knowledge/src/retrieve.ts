@@ -127,7 +127,8 @@ export async function keywordSearch(
     : sql``;
   return rows<ChunkRow & { kw: number }>(
     sql`SELECT c.id AS chunk_id, d.id AS document_id, d.stable_key, src.kind AS source,
-          c.content, c.span, v.content_hash AS revision
+          c.content, c.span, v.content_hash AS revision,
+          similarity(c.content, ${q}) AS kw
         ${baseFrom(projectId, acl)}
           AND (c.content % ${q} ${identOr})
         ORDER BY kw DESC LIMIT ${limit}`,
