@@ -15,6 +15,7 @@ import { Id, Snapshot, SummaryResult } from '@meeting/contracts';
 import { Auth, type Session } from './auth.ts';
 import { exportMarkdown, exportText } from './export.ts';
 import { segmentAudio, type AudioChunk } from './segment-audio.ts';
+import { registerKnowledgeRoutes } from './knowledge.ts';
 export async function buildServer(config: AppConfig, store: Store) {
   const app = Fastify({
     logger:
@@ -505,6 +506,7 @@ export async function buildServer(config: AppConfig, store: Store) {
     await listener.query('UNLISTEN *').catch(() => {});
     listener.release();
   });
+  registerKnowledgeRoutes(app, { auth, config });
   const dist = resolve('apps/web/dist');
   if (existsSync(dist)) {
     await app.register(serveStatic, { root: dist, prefix: '/' });
