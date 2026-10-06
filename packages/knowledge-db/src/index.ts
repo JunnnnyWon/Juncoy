@@ -917,6 +917,15 @@ export class KnowledgeStore {
         AND a.state != 'DELETED' AND u.state != 'DELETED'`, this.db);
   }
 
+  async getLatestArtExtraction(projectId: string, assetId: string) {
+    return first<any>(sql`SELECT e.* FROM art_extractions e
+      JOIN art_reference_assets a ON a.id=e.asset_id
+      JOIN knowledge_uploads u ON u.id=a.upload_id
+      WHERE a.project_id=${projectId} AND a.id=${assetId}
+        AND a.state != 'DELETED' AND u.state != 'DELETED' AND e.asset_revision=u.sha256
+      ORDER BY e.created_at DESC, e.id DESC LIMIT 1`, this.db);
+  }
+
   async saveArtExtraction(input: { assetId: string; revision: string; model: string; observations: unknown; ocr?: unknown; confidence?: string }) {
     return this.db.transaction().execute(async (tx) => {
       const asset = await first<any>(sql`SELECT a.id FROM art_reference_assets a

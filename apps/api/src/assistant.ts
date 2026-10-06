@@ -877,6 +877,13 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     }
   });
 
+  app.get('/api/assistant/art-assets/:id/extraction', async (req, reply) => {
+    const { ctx, projectId } = await requireSession(req);
+    const extraction = await ctx.store.getLatestArtExtraction(projectId, (req.params as any).id);
+    if (!extraction) return reply.code(404).send({ error: { code: 'EXTRACTION_NOT_FOUND' } });
+    return extraction;
+  });
+
   app.post('/api/assistant/art-assets/:id/analyze', async (req, reply) => {
     const { ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
@@ -892,7 +899,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     ).analyzeImage(bytes, asset.mime);
     const extractionId = await ctx.store.saveArtExtraction({ assetId: asset.id, revision: asset.sha256, model: observation.model, observations: observation, ocr: { visible_text: observation.visible_text }, confidence: observation.confidence_note });
     if (!extractionId) return reply.code(409).send({ error: { code: 'ART_ASSET_UNAVAILABLE' } });
-    return { id: extractionId, status: 'DRAFT', model: observation.model, observations: observation };
+    return { id: extractionId, asset_id: asset.id, asset_revision: asset.sha256, status: 'DRAFT', model: observation.model, observations: observation };
   });
 
   app.post('/api/assistant/art-assets/:id/canonical-review', async (req, reply) => {

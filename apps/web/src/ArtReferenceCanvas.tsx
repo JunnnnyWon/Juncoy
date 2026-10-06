@@ -50,6 +50,7 @@ export function ArtReferenceCanvas() {
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [assetAnalysis, setAssetAnalysis] = useState<any>(null);
   const [assetAnalysisBusy, setAssetAnalysisBusy] = useState(false);
+  const assetAnalysisGeneration = useRef(0);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -58,8 +59,16 @@ export function ArtReferenceCanvas() {
   const selected = refs.find((ref) => ref.id === selectedId) ?? refs[0];
   const selectedCount = useMemo(() => refs.filter((ref) => ref.selected).length, [refs]);
   useEffect(() => {
+    const generation = ++assetAnalysisGeneration.current;
     setAssetAnalysis(null);
-  }, [selectedId]);
+    const assetId = selected?.art_asset_id;
+    if (assetId) {
+      void api<any>('/api/assistant/art-assets/' + assetId + '/extraction').then((result) => {
+        if (generation === assetAnalysisGeneration.current) setAssetAnalysis(result);
+      }).catch(() => {});
+    }
+    return () => { assetAnalysisGeneration.current++; };
+  }, [selected?.art_asset_id]);
   useEffect(() => {
     void (async () => {
       try {
@@ -155,10 +164,12 @@ export function ArtReferenceCanvas() {
   };
   const analyzeSelectedAsset = async () => {
     if (!selected?.art_asset_id || assetAnalysisBusy) return;
+    const assetId = selected.art_asset_id;
+    const generation = ++assetAnalysisGeneration.current;
     setAssetAnalysisBusy(true);
     try {
-      const result = await api<any>('/api/assistant/art-assets/' + selected.art_asset_id + '/analyze', { method: 'POST' });
-      setAssetAnalysis(result);
+      const result = await api<any>('/api/assistant/art-assets/' + assetId + '/analyze', { method: 'POST' });
+      if (generation === assetAnalysisGeneration.current) setAssetAnalysis(result);
     } catch {
       window.alert('이미지 분석을 실행할 수 없습니다. Gemini Vision 설정을 확인해 주세요.');
     } finally {
@@ -540,7 +551,7 @@ export function ArtReferenceCanvas() {
                   )}
                 </div>
               )}
-              {assetAnalysis && selected.art_asset_id && (
+              {assetAnalysis?.asset_id === selected.art_asset_id && selected.art_asset_id && (
                 <div className="asset-observation-card">
                   <span className="eyebrow">VISION OBSERVATION / DRAFT</span>
                   <p>{assetAnalysis.observations?.description}</p>

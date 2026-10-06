@@ -59,12 +59,17 @@ describe('knowledge-db semantics', () => {
     const assetId = (await store!.createArtReferenceAsset({ projectId, uploadId: upload.id, createdBy: 'owner' }))!;
     const extraction = { assetId, revision: hash, model: 'vision-test', observations: { description: 'wall' } };
     expect(await store!.saveArtExtraction(extraction)).not.toBeNull();
+    const saved = await store!.getLatestArtExtraction(projectId, assetId);
+    expect(saved.observations.description).toBe('wall');
+    expect(saved.asset_revision).toBe(hash);
+    expect(await store!.getLatestArtExtraction(randomUUID(), assetId)).toBeUndefined();
     await store!.reviewArtReferenceAsset(projectId, assetId, 'owner', 'ARCHIVED');
     expect(await store!.saveArtExtraction(extraction)).toBeNull();
     const archived = await store!.getArtReferenceAsset(projectId, assetId);
     expect(archived.canonical_state).toBe('ARCHIVED');
     await store!.updateUpload(upload.id, { state: 'DELETED' });
     expect(await store!.getArtReferenceAsset(projectId, assetId)).toBeUndefined();
+    expect(await store!.getLatestArtExtraction(projectId, assetId)).toBeUndefined();
     expect(await store!.saveArtExtraction(extraction)).toBeNull();
     expect(await store!.reviewArtReferenceAsset(projectId, assetId, 'owner', 'APPROVED_CANONICAL')).toBe(false);
     const count = await first<any>(sql`SELECT count(*)::int AS count FROM art_extractions WHERE asset_id=${assetId}`, store!.db);
