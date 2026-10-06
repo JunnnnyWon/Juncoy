@@ -40,6 +40,10 @@ export function ArtReferenceCanvas() {
   const [generated, setGenerated] = useState<any[]>([]);
   const [analysis, setAnalysis] = useState<any>(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragOrigin = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const inputRef = useRef<HTMLInputElement>(null);
   const selected = refs.find((ref) => ref.id === selectedId) ?? refs[0];
   const selectedCount = useMemo(() => refs.filter((ref) => ref.selected).length, [refs]);
@@ -210,6 +214,11 @@ export function ArtReferenceCanvas() {
         <button className="art-tool" onClick={() => inputRef.current?.click()}>
           ＋ 이미지 추가
         </button>
+        <span className="toolbar-spacer" />
+        <button className="art-tool viewport-button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.1))}>−</button>
+        <span className="zoom-readout">{Math.round(zoom * 100)}%</span>
+        <button className="art-tool viewport-button" onClick={() => setZoom((value) => Math.min(1.8, value + 0.1))}>＋</button>
+        <button className="art-tool" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>맞춤 보기</button>
         <input
           ref={inputRef}
           type="file"
@@ -230,12 +239,30 @@ export function ArtReferenceCanvas() {
             event.preventDefault();
             addFiles(event.dataTransfer.files);
           }}
+          onWheel={(event) => {
+            if (!event.ctrlKey && !event.metaKey) return;
+            event.preventDefault();
+            setZoom((value) => Math.min(1.8, Math.max(0.5, value - event.deltaY * 0.001)));
+          }}
+          onPointerDown={(event) => {
+            if ((event.target as HTMLElement).closest('.reference-card, button, input, select, textarea')) return;
+            setDragging(true);
+            dragOrigin.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
+            (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            if (!dragging) return;
+            setPan({ x: dragOrigin.current.panX + event.clientX - dragOrigin.current.x, y: dragOrigin.current.panY + event.clientY - dragOrigin.current.y });
+          }}
+          onPointerUp={() => setDragging(false)}
+          onPointerCancel={() => setDragging(false)}
         >
           <div className="board-grid" />
           <div className="board-label">
             <span>CHARACTER / ENVIRONMENT</span>
             <strong>{boardId ? '보드 revision ' + revision : '서버 연결 중'}</strong>
           </div>
+          <div className="board-stage" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
           {refs.length === 0 && (
             <div className="art-empty-state">
               <span className="eyebrow">REFERENCE BOARD</span>
@@ -284,6 +311,7 @@ export function ArtReferenceCanvas() {
               ))}
             </div>
           </div>}
+          </div>
         </section>
         <aside className="art-inspector">
           {brief && (

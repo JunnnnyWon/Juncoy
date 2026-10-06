@@ -2619,6 +2619,19 @@ small {
   background: #c7c1b6;
   margin: 0 5px;
 }
+.toolbar-spacer {
+  flex: 1;
+}
+.zoom-readout {
+  min-width: 42px;
+  color: #777970;
+  text-align: center;
+  font: 10px monospace;
+}
+.viewport-button {
+  min-width: 28px;
+  padding-inline: 5px;
+}
 .art-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
@@ -2629,6 +2642,16 @@ small {
   overflow: hidden;
   min-height: 650px;
   background: #d9d5cb;
+  cursor: grab;
+}
+.art-board:active {
+  cursor: grabbing;
+}
+.board-stage {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  transition: transform 120ms ease-out;
 }
 .board-grid {
   position: absolute;
