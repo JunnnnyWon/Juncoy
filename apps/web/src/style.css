@@ -2562,6 +2562,20 @@ small {
   align-items: center;
   gap: 18px;
 }
+.art-header-buttons {
+  display: flex;
+  gap: 8px;
+}
+.secondary-button {
+  padding: 9px 12px;
+  border: 1px solid #5d625d;
+  color: #d0d1c8;
+  font-size: 11px;
+}
+.secondary-button:hover {
+  border-color: #9d3735;
+  color: #f0d8d0;
+}
 .art-header-actions .primary-button {
   background: #9d3735;
   color: #f5ebe2;
@@ -2784,6 +2798,60 @@ small {
 }
 .brief-card .brief-error {
   color: #e19a8b;
+}
+.analysis-card {
+  padding: 14px;
+  margin-bottom: 20px;
+  background: #202326;
+  border: 1px solid #3b4741;
+}
+.analysis-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+}
+.analysis-card-head h3 {
+  margin-top: 6px;
+  color: #e8e4db;
+  font-size: 14px;
+}
+.analysis-card-head > span {
+  padding: 4px 6px;
+  color: #c2d9c9;
+  border: 1px solid #435248;
+  font-size: 9px;
+}
+.analysis-card > p {
+  margin-top: 12px;
+  color: #c0c2bb;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.analysis-rule-list {
+  margin-top: 12px;
+  border-top: 1px solid #303438;
+}
+.analysis-rule-list div {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid #303438;
+  font-size: 10px;
+}
+.analysis-rule-list strong {
+  color: #d7b1a8;
+  font-weight: 500;
+}
+.analysis-rule-list span {
+  color: #b7bbb3;
+  line-height: 1.45;
+}
+.analysis-card > small {
+  margin-top: 11px;
+  color: #8c928b;
+  font-size: 9px;
+  line-height: 1.5;
 }
 .inspector-title {
   display: flex;

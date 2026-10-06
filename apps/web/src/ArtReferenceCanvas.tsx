@@ -38,6 +38,8 @@ export function ArtReferenceCanvas() {
   const [syncState, setSyncState] = useState('로컬 초안');
   const [brief, setBrief] = useState<any>(null);
   const [generated, setGenerated] = useState<any[]>([]);
+  const [analysis, setAnalysis] = useState<any>(null);
+  const [analysisBusy, setAnalysisBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const selected = refs.find((ref) => ref.id === selectedId) ?? refs[0];
   const selectedCount = useMemo(() => refs.filter((ref) => ref.selected).length, [refs]);
@@ -115,6 +117,17 @@ export function ArtReferenceCanvas() {
       window.alert('ImageBrief 미리보기를 만들 수 없습니다.');
     }
   };
+  const analyzeBoard = async () => {
+    if (!boardId || !revision || analysisBusy) return;
+    setAnalysisBusy(true);
+    try {
+      setAnalysis(await api<any>('/api/assistant/art-boards/' + boardId + '/analyze', { method: 'POST' }));
+    } catch {
+      window.alert('보드 분석을 시작할 수 없습니다.');
+    } finally {
+      setAnalysisBusy(false);
+    }
+  };
   const addFiles = async (files: FileList | null) => {
     if (!files) return;
     const next = await Promise.all(
@@ -178,9 +191,14 @@ export function ArtReferenceCanvas() {
           <span className="save-state">
             <i /> {syncState}
           </span>
-          <button className="primary-button" onClick={() => void previewBrief()}>
-            ImageBrief 미리보기 ↗
-          </button>
+          <div className="art-header-buttons">
+            <button className="secondary-button" onClick={() => void analyzeBoard()} disabled={analysisBusy}>
+              {analysisBusy ? '분석 중…' : '보드 분석'}
+            </button>
+            <button className="primary-button" onClick={() => void previewBrief()}>
+              ImageBrief 미리보기 ↗
+            </button>
+          </div>
         </div>
       </header>
       <div className="art-toolbar">
@@ -302,6 +320,24 @@ export function ArtReferenceCanvas() {
               {brief.generation_not_executed && (
                 <small className="brief-error">생성 작업이 실행되지 않았습니다. provider와 권한 상태를 확인해 주세요.</small>
               )}
+            </div>
+          )}
+          {analysis && (
+            <div className="analysis-card">
+              <div className="analysis-card-head">
+                <div>
+                  <span className="eyebrow">ART BIBLE / DRAFT</span>
+                  <h3>보드 분석 초안</h3>
+                </div>
+                <span>DRAFT</span>
+              </div>
+              <p>{analysis.result?.summary}</p>
+              <div className="analysis-rule-list">
+                {(analysis.result?.common_rules ?? []).slice(0, 4).map((rule: any, index: number) => (
+                  <div key={index}><strong>{rule.category}</strong><span>{rule.statement}</span></div>
+                ))}
+              </div>
+              <small>AI 관찰은 초안입니다. 승인 전에는 생성 규칙이나 canonical reference로 사용되지 않습니다.</small>
             </div>
           )}
           <div className="inspector-title">

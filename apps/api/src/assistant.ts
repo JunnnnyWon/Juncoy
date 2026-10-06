@@ -939,6 +939,34 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return result;
   });
 
+  app.post('/api/assistant/art-boards/:id/analyze', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    if (!ctx.model) return reply.code(503).send({ error: { code: 'MODEL_NOT_CONFIGURED' } });
+    const board = await ctx.store.getArtBoard(projectId, session.user_id, (req.params as any).id);
+    if (!board) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    const revision = await ctx.store.getArtBoardRevision(projectId, session.user_id, board.id);
+    if (!revision) return reply.code(409).send({ error: { code: 'REVISION_NOT_FOUND' } });
+    const schema = z.object({
+      summary: z.string(),
+      common_rules: z.array(z.object({ category: z.string(), statement: z.string(), evidence_ids: z.array(z.string()) })),
+      conflicts: z.array(z.object({ statement: z.string(), evidence_ids: z.array(z.string()) })),
+      suggestions: z.array(z.object({ asset_id: z.string(), role: z.string(), usage: z.string(), observation: z.string() })),
+    });
+    const result = await ctx.model.structured(schema, { revision: revision.revision, references: (revision.snapshot as any)?.references ?? [] },
+      '현재 아트 보드의 레퍼런스 메모와 역할만 분석한다. 관찰은 초안이며 승인된 Art Bible 규칙으로 간주하지 않는다. 이미지에 보이지 않는 권리, 사실, 스타일을 추정하지 않는다. 공통 규칙과 충돌을 분리하고 각 항목에 asset id를 evidence_ids로 연결한다.');
+    const resultHash = createHash('sha256').update(JSON.stringify(result.result)).digest('hex');
+    const analysisId = await ctx.store.saveArtBoardAnalysis({ boardId: board.id, revision: revision.revision, userId: session.user_id, model: result.model, result: result.result, resultHash });
+    return { id: analysisId, board_id: board.id, revision: revision.revision, status: 'DRAFT', model: result.model, result: result.result, result_hash: resultHash };
+  });
+
+  app.get('/api/assistant/art-boards/:id/analysis/:revision', async (req, reply) => {
+    const { session, ctx, projectId } = await requireSession(req);
+    const analysis = await ctx.store.getArtBoardAnalysis(projectId, session.user_id, (req.params as any).id, Number((req.params as any).revision));
+    if (!analysis) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return analysis;
+  });
+
   app.post('/api/assistant/art-boards/:id/image-briefs/preview', async (req, reply) => {
     const { session, ctx, projectId, role } = await requireSession(req);
     const board = await ctx.store.getArtBoard(projectId, session.user_id, (req.params as any).id);

@@ -489,6 +489,28 @@ export class KnowledgeStore {
     );
   }
 
+  async saveArtBoardAnalysis(input: {
+    boardId: string;
+    revision: number;
+    userId: string;
+    model: string;
+    result: unknown;
+    resultHash: string;
+  }) {
+    const id = randomUUID();
+    await sql`INSERT INTO art_board_analyses(id, board_id, revision, status, model, result, result_hash, created_by)
+      VALUES (${id}, ${input.boardId}, ${input.revision}, 'DRAFT', ${input.model}, ${json(input.result)}, ${input.resultHash}, ${input.userId})
+      ON CONFLICT (board_id, revision) DO UPDATE SET status='DRAFT', model=excluded.model, result=excluded.result, result_hash=excluded.result_hash, created_by=excluded.created_by, created_at=now()`.execute(this.db);
+    return id;
+  }
+
+  async getArtBoardAnalysis(projectId: string, ownerId: string, boardId: string, revision: number) {
+    return first<any>(sql`SELECT a.* FROM art_board_analyses a
+      JOIN art_boards b ON b.id=a.board_id
+      WHERE a.board_id=${boardId} AND a.revision=${revision}
+        AND b.project_id=${projectId} AND b.owner_id=${ownerId}`, this.db);
+  }
+
   /** 대화는 owner+project 스코프로만 조회 — id만으로 타인 대화를 열지 않는다. */
   async getConversation(projectId: string, conversationId: string, ownerId: string) {
     return first<{ id: string; title: string; archived: boolean }>(
