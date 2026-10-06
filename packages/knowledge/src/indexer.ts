@@ -1,6 +1,8 @@
 import { KnowledgeStore, sql, first } from '@meeting/knowledge-db';
 import { chunkDocument } from './chunk.ts';
 import { UpstageEmbeddings, activeProfile, indexMissingEmbeddings } from './embeddings.ts';
+import { UpstageDocumentParse } from './document-parse-upstage.ts';
+import { UploadStorage, extractUpload, sha256 } from './uploads.ts';
 
 // 추출/인덱싱 워커 — publish된 current 버전을 청크로 만들고 비활성 set에 채운 뒤
 // swapChunkSet으로 원자 공개한다 (§8.1). 임베딩은 활성 profile 단위.
@@ -8,6 +10,44 @@ import { UpstageEmbeddings, activeProfile, indexMissingEmbeddings } from './embe
 export const EXTRACTOR_VERSION = 1;
 
 const CONTENT_MAX = 256 * 1024;
+
+export async function reparseUpload(store: KnowledgeStore, uploadId: string) {
+  const upload = await first<any>(sql`
+    SELECT id, project_id, document_id, filename, mime, sha256, storage_key
+    FROM knowledge_uploads WHERE id=${uploadId} AND state != 'DELETED'`, store.db);
+  if (!upload || upload.mime !== 'application/pdf' || !upload.document_id)
+    return { skipped: 'not_parseable' } as const;
+  const storage = new UploadStorage(process.env.KNOWLEDGE_UPLOAD_DIR ?? '/data/knowledge/uploads');
+  const bytes = await storage.read(upload.storage_key);
+  if (sha256(bytes) !== upload.sha256) throw new Error('upload_source_hash_mismatch');
+  const parser = process.env.UPSTAGE_DOCUMENT_PARSE_ENABLED === 'true' && process.env.UPSTAGE_API_KEY && process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT
+    ? new UpstageDocumentParse({ apiKey: process.env.UPSTAGE_API_KEY, endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT, timeoutMs: Number(process.env.UPSTAGE_DOCUMENT_PARSE_TIMEOUT_MS ?? 60_000) })
+    : undefined;
+  const extracted = await extractUpload(bytes, upload.mime, { documentParse: parser, expectedSha256: upload.sha256 });
+  const versionId = await store.createUploadVersion({
+    uploadId: upload.id,
+    extractorVersion: String(EXTRACTOR_VERSION + 1),
+    sourceRevision: upload.sha256,
+    parserKind: extracted.parserKind,
+    parserVersion: extracted.normalized.parser?.version,
+    parseStatus: extracted.parseStatus,
+    parseRequestId: extracted.normalized.parser?.request_id,
+    parseErrorCode: extracted.parseError,
+    sourceSha256: upload.sha256,
+    normalizedHash: sha256(JSON.stringify(extracted.normalized)),
+  });
+  await store.saveDocumentParseStructure(versionId, extracted.normalized);
+  const published = await store.publishVersion(upload.document_id, {
+    contentHash: upload.sha256,
+    sourceRevision: upload.sha256,
+    extractorVersion: EXTRACTOR_VERSION + 1,
+    normalized: { ...extracted.normalized, upload_id: upload.id, filename: upload.filename, mime: upload.mime },
+  });
+  if (!published) return { skipped: 'publish_rejected' } as const;
+  await store.enqueueJob('extract:' + upload.document_id + ':' + upload.sha256 + ':reparse', 'extract', { document_id: upload.document_id, content_hash: upload.sha256 });
+  await store.updateUpload(upload.id, { state: 'INDEXING' });
+  return { reparsed: true, parser: extracted.parserKind } as const;
+}
 
 /** publish 성공 직후 호출 — 같은 content_hash의 재추출은 job key로 dedupe된다. */
 export async function queueExtract(store: KnowledgeStore, documentId: string, contentHash: string) {
@@ -70,10 +110,13 @@ export async function indexerTick(
   opts?: { embeddings?: UpstageEmbeddings; extractLimit?: number; embedLimit?: number },
 ) {
   const done = { extracted: 0, embedded: 0, failed: 0 };
-  const jobs = await store.claimJobs(owner, ['extract', 'index'], opts?.extractLimit ?? 8, 60_000);
+  const jobs = await store.claimJobs(owner, ['parse', 'extract', 'index'], opts?.extractLimit ?? 8, 60_000);
   for (const job of jobs) {
     try {
-      if (job.kind === 'extract') {
+      if (job.kind === 'parse') {
+        await reparseUpload(store, job.payload.upload_id);
+        await store.finishJob(job, 'DONE');
+      } else if (job.kind === 'extract') {
         const r = await extractDocument(
           store,
           job.payload.document_id,

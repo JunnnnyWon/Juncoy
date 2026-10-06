@@ -232,6 +232,11 @@ export function Assistant() {
     );
     setApprovals(r.pending_approvals ?? []);
   };
+  const reparseFile = async (id: string) => {
+    await api('/api/assistant/files/' + id + '/reparse', { method: 'POST' });
+    const r = await api<any[]>('/api/assistant/files');
+    setFiles(r);
+  };
   useEffect(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), [messages, live]);
   useEffect(() => () => esRef.current?.close(), []);
 
@@ -479,6 +484,15 @@ export function Assistant() {
                 >
                   삭제
                 </button>
+                {f.mime === 'application/pdf' && f.document_id && (
+                  <button
+                    className="ghost-button"
+                    style={{ fontSize: 11 }}
+                    onClick={() => void reparseFile(f.id)}
+                  >
+                    Parse 재처리
+                  </button>
+                )}
               </div>
             ))}
           </>

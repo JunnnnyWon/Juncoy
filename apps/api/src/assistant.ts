@@ -842,6 +842,26 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return { upload_id: upload.id, source_sha256: upload.sha256, ...parsed };
   });
 
+  app.post('/api/assistant/files/:id/reparse', async (req, reply) => {
+    const { ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const upload = await ctx.store.getUpload(projectId, (req.params as any).id);
+    if (!upload) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    if (upload.mime !== 'application/pdf')
+      return reply.code(400).send({ error: { code: 'PARSE_PDF_ONLY' } });
+    if (!upload.document_id)
+      return reply.code(409).send({ error: { code: 'DOCUMENT_NOT_READY' } });
+    const key = 'parse:' + upload.id + ':' + upload.sha256 + ':' + Date.now();
+    await ctx.store.enqueueJob(key, 'parse', {
+      upload_id: upload.id,
+      project_id: projectId,
+      document_id: upload.document_id,
+      source_sha256: upload.sha256,
+    });
+    await ctx.store.updateUpload(upload.id, { state: 'EXTRACTING', error: null });
+    return { queued: true, upload_id: upload.id, source_sha256: upload.sha256 };
+  });
+
   app.post('/api/assistant/files/:id/ingest', async (req, reply) => {
     const { ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });

@@ -23,7 +23,7 @@ export const DocumentState = z.enum([
 ]);
 export type DocumentState = z.infer<typeof DocumentState>;
 
-export const KnowledgeJobKind = z.enum(['fetch', 'extract', 'index', 'refresh', 'delete']);
+export const KnowledgeJobKind = z.enum(['fetch', 'parse', 'extract', 'index', 'refresh', 'delete']);
 export type KnowledgeJobKind = z.infer<typeof KnowledgeJobKind>;
 
 export const KnowledgeJobStatus = z.enum([
