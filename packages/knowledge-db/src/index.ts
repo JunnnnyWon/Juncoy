@@ -37,8 +37,8 @@ export class KnowledgeStore {
     this.db = new Kysely<Database>({ dialect: new PostgresDialect({ pool: this.pool }) });
   }
   async close() {
+    // Kysely.destroy()가 이미 pool.end()를 호출한다 — 두 번 end하면 pg가 throw.
     await this.db.destroy();
-    await this.pool.end();
   }
 
   // 자체 migration 디렉터리 — 회의 DB와 별도 스키마/라이프사이클.
