@@ -27,9 +27,7 @@ const ModelOutput = z.object({
       }),
     )
     .default([]),
-  conflicts: z
-    .array(z.object({ text: z.string(), evidence_ids: z.array(z.string()) }))
-    .default([]),
+  conflicts: z.array(z.object({ text: z.string(), evidence_ids: z.array(z.string()) })).default([]),
   warnings: z.array(z.string()).default([]),
 });
 type ModelOutput = z.infer<typeof ModelOutput>;
@@ -40,7 +38,11 @@ export interface ChatModel {
     schema: z.ZodType<T>,
     input: unknown,
     system: string,
-  ): Promise<{ result: T; model: string }>;
+  ): Promise<{
+    result: T;
+    model: string;
+    usage?: { input_tokens: number; output_tokens: number };
+  }>;
 }
 
 /** Discord 라이브 읽기 결과 — 앱이 주입한다. */
@@ -177,6 +179,15 @@ export async function answerQuestion(
   const { store } = deps;
   const runId = crypto.randomUUID();
   const warnings: string[] = [];
+  // 단계별 latency 계측 (RAG-019) — 실행 끝에 audit로 남긴다.
+  const latency: Record<string, number> = {};
+  const startedAt = Date.now();
+  let stageAt = startedAt;
+  const markStage = (name: string) => {
+    const now = Date.now();
+    latency[name] = now - stageAt;
+    stageAt = now;
+  };
   const setPhase = (phase: string, status = 'PENDING') =>
     sql`UPDATE answer_runs SET phase=${phase}, status=${status} WHERE id=${runId}`.execute(
       store.db,
@@ -214,6 +225,7 @@ export async function answerQuestion(
       }
     }
 
+    markStage('discord_read');
     // 단계 5: 검색 — 질문자 ACL이 후보 SQL에 바인딩된다 (RAG-001).
     await setPhase('searching');
     const chunks = await retrieve(store, {
@@ -223,6 +235,7 @@ export async function answerQuestion(
       limit: 24,
       acl: deps.acl,
     });
+    markStage('search');
     const chunksBySource = new Map<string, RetrievedChunk[]>();
     for (const c of chunks)
       chunksBySource.set(c.source, [...(chunksBySource.get(c.source) ?? []), c]);
@@ -248,7 +261,9 @@ export async function answerQuestion(
       );
       modelOut = res.result;
       modelName = res.model;
+      usage = res.usage ?? usage; // 실제 provider usage를 기록한다 (RAG-019)
     }
+    markStage('generate');
 
     // 단계 8: 근거 재검증 — 캡처된 revision 대비 현재 상태 확인 (RAG-004).
     await setPhase('revalidating');
@@ -377,12 +392,28 @@ export async function answerQuestion(
       usage,
     };
 
+    markStage('revalidate');
+    latency.total = Date.now() - startedAt;
     // 검증 완료된 Answer만 body에 기록 + 근거 정규 저장 (§10)
     await sql`
       UPDATE answer_runs SET status=${status}, phase=${status === 'COMPLETE' ? 'complete' : status === 'FAILED' ? 'failed' : 'partial'},
         body=${JSON.stringify(answer)}::jsonb, model=${answer.model},
         corpus_generation=${answer.corpus_generation}, checked_at=now()
       WHERE id=${runId}`.execute(store.db);
+    // 단계별 latency + usage를 audit로 남긴다 (RAG-019) — 스키마가 strict라
+    // Answer body엔 넣지 못하므로 실행 단위 계측은 여기에 둔다.
+    await sql`
+      INSERT INTO knowledge_audit(id, project_id, actor, kind, data)
+      VALUES (${crypto.randomUUID()}, ${projectId}, ${deps.userId ?? 'system'},
+        'ANSWER_RUN',
+        ${JSON.stringify({
+          run_id: runId,
+          status,
+          latency_ms: latency,
+          usage,
+          model: answer.model,
+          chunks: chunks.length,
+        })}::jsonb)`.execute(store.db);
     for (const e of evidence)
       await sql`
         INSERT INTO answer_evidence(answer_run_id, document_id, source, url, quote, observed_at)

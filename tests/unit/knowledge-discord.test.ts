@@ -198,3 +198,32 @@ describe('DiscordGateway seq/직렬화 (RAG-011)', () => {
     expect(resyncs.some((r) => r.includes('10→5'))).toBe(true);
   });
 });
+
+// ── RAG-019: 출처별 후보 쿼터 ────────────────────────────────────
+import { perSourceQuota } from '@meeting/knowledge';
+
+describe('perSourceQuota (RAG-019)', () => {
+  const items = (kind: string, n: number, start = 0) =>
+    Array.from({ length: n }, (_, i) => ({ id: `${kind}${start + i}`, source: kind }));
+
+  it('한 출처가 결과를 독점하지 못한다', () => {
+    // github 20개가 전부 상위면 notion/meeting 결과가 잘린다
+    const merged = [...items('github', 30), ...items('notion', 2), ...items('meeting', 2)];
+    const out = perSourceQuota(merged, (m) => m.source, 12);
+    const byKind = (k: string) => out.filter((x) => x.source === k).length;
+    expect(byKind('github')).toBeLessThanOrEqual(12);
+    expect(byKind('notion')).toBe(2); // 최소 커버리지 보장
+    expect(byKind('meeting')).toBe(2);
+    expect(out).toHaveLength(12);
+  });
+
+  it('limit보다 후보가 적으면 전부 돌아온다', () => {
+    const merged = items('discord', 5);
+    expect(perSourceQuota(merged, (m) => m.source, 40)).toHaveLength(5);
+  });
+
+  it('출처가 하나뿐이면 그 출처로 채운다', () => {
+    const merged = items('github', 50);
+    expect(perSourceQuota(merged, (m) => m.source, 10)).toHaveLength(10);
+  });
+});

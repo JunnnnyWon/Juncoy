@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { hostname } from 'node:os';
-import { KnowledgeStore, sql, rows } from '@meeting/knowledge-db';
+import { KnowledgeStore, sql, rows, first } from '@meeting/knowledge-db';
 import {
   indexerTick,
   JuncoyCollector,
@@ -128,9 +128,13 @@ const main = async () => {
           if (!repo) continue;
           const ref = sc.scope_key.slice('ref:'.length);
           try {
-            const r = await new GitHubCollector(store, rest, repo, repoId, sc.source_id).reconcileRef(
-              ref,
-            );
+            const r = await new GitHubCollector(
+              store,
+              rest,
+              repo,
+              repoId,
+              sc.source_id,
+            ).reconcileRef(ref);
             if ((r as any)?.changed) log(`github ${repo}@${ref}: ${JSON.stringify(r)}`);
           } catch (e) {
             process.stderr.write(`github ${repo}@${ref}: ${e}\n`);
@@ -171,7 +175,26 @@ const main = async () => {
     try {
       for (const job of await store.claimJobs(owner, ['refresh'], 4, 60_000)) {
         try {
-          const p = job.payload as { source_kind?: string; repo?: string; ref?: string; page_id?: string };
+          const p = job.payload as {
+            source_kind?: string;
+            source_id?: string;
+            repo?: string;
+            ref?: string;
+            page_id?: string;
+          };
+          // 웹훅이 payload에 박아준 source_id를 우선한다 — "첫 ACTIVE 소스"로
+          // 잘못 매핑해 엉뚱한 소스에 쓰지 않는다 (RAG-014).
+          const boundSource = async (kind: string) => {
+            if (p.source_id)
+              return first<{ id: string }>(
+                sql`SELECT id FROM knowledge_sources WHERE id=${p.source_id} AND kind=${kind} AND status='ACTIVE'`,
+                store.db,
+              );
+            return first<{ id: string }>(
+              sql`SELECT id FROM knowledge_sources WHERE kind=${kind} AND status='ACTIVE' LIMIT 1`,
+              store.db,
+            );
+          };
           if (p.source_kind === 'github' && p.repo && p.ref) {
             const tokens =
               ghApp && ghKey && ghInstall
@@ -179,25 +202,23 @@ const main = async () => {
                 : ghPat
                   ? new StaticTokenProvider(ghPat)
                   : null;
-            if (tokens) {
-              const src = await rows<{ id: string }>(
-                sql`SELECT id FROM knowledge_sources WHERE kind='github' AND status='ACTIVE' LIMIT 1`,
-                store.db,
-              );
-              if (src[0])
-                await new GitHubCollector(store, new GitHubRest(tokens), p.repo, p.repo, src[0].id).reconcileRef(p.ref);
-            }
+            const src = await boundSource('github');
+            if (tokens && src)
+              await new GitHubCollector(
+                store,
+                new GitHubRest(tokens),
+                p.repo,
+                p.repo,
+                src.id,
+              ).reconcileRef(p.ref);
           } else if (p.source_kind === 'notion' && notionToken && p.page_id) {
-            const src = await rows<{ id: string }>(
-              sql`SELECT id FROM knowledge_sources WHERE kind='notion' AND status='ACTIVE' LIMIT 1`,
-              store.db,
-            );
-            if (src[0])
+            const src = await boundSource('notion');
+            if (src)
               await new NotionCollector(
                 store,
                 new NotionRest(notionToken),
                 process.env.NOTION_WORKSPACE ?? 'default',
-                src[0].id,
+                src.id,
               ).ingestPage(p.page_id);
           }
           await store.finishJob(job, 'DONE');

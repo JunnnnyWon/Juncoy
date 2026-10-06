@@ -48,6 +48,36 @@ interface ChunkRow {
   revision: string;
 }
 
+/**
+ * 출처별 최소 커버리지 (RAG-019): 한 출처가 후보를 독점하지 않도록
+ * 결과가 있는 출처끼리 limit를 균등 배당하고, 남는 자리는 순위대로 채운다.
+ * 순수 함수 — 단위 테스트 가능하도록 분리.
+ */
+export function perSourceQuota<T extends { id: string }>(
+  merged: T[],
+  sourceOf: (item: T) => string,
+  limit: number,
+): T[] {
+  const present = [...new Set(merged.map(sourceOf))];
+  const quota = Math.max(1, Math.floor(limit / Math.max(1, present.length)));
+  const counts = new Map<string, number>();
+  const taken = new Set<string>();
+  const ordered: T[] = [];
+  for (const m of merged) {
+    const s = sourceOf(m);
+    if ((counts.get(s) ?? 0) < quota) {
+      counts.set(s, (counts.get(s) ?? 0) + 1);
+      taken.add(m.id);
+      ordered.push(m);
+    }
+  }
+  for (const m of merged) {
+    if (ordered.length >= limit) break;
+    if (!taken.has(m.id)) ordered.push(m);
+  }
+  return ordered.slice(0, limit);
+}
+
 /** 질문자 권한 — OAuth guild 멤버십에서 도출된 guild id 목록. */
 export interface AclInput {
   guilds: string[];
@@ -161,7 +191,8 @@ export async function retrieve(
   ]);
   const byId = new Map<string, ChunkRow>();
   for (const c of [...kw, ...vec]) if (!byId.has(c.chunk_id)) byId.set(c.chunk_id, c);
-  return merged.slice(0, opts.limit ?? 40).map((m): RetrievedChunk => {
+  const ordered = perSourceQuota(merged, (m) => byId.get(m.id)!.source, opts.limit ?? 40);
+  return ordered.map((m): RetrievedChunk => {
     const r = byId.get(m.id)!;
     return {
       chunk_id: m.id,

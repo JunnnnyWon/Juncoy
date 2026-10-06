@@ -29,11 +29,19 @@ interface KnowledgeCtx {
   embeddings?: UpstageEmbeddings;
   discordRead?: (timeoutMs: number) => Promise<{ ok: boolean; gaps: string[] }>;
   model: {
-    structured<T>(s: z.ZodType<T>, input: unknown, system: string): Promise<{ result: T; model: string }>;
+    structured<T>(
+      s: z.ZodType<T>,
+      input: unknown,
+      system: string,
+    ): Promise<{
+      result: T;
+      model: string;
+      usage?: { input_tokens: number; output_tokens: number };
+    }>;
   };
 }
 
-/** Solar 래퍼 — structured 인자 키/usage 콜백을 버린다. */
+/** Solar 래퍼 — provider usage를 살려 계측에 기록한다 (RAG-019). */
 function solarModel(config: AppConfig) {
   const key = config.UPSTAGE_API_KEY;
   return {
@@ -66,6 +74,10 @@ function solarModel(config: AppConfig) {
       return {
         result: s.parse(JSON.parse(data.choices[0].message.content)) as T,
         model: (data.model ?? config.UPSTAGE_MODEL) as string,
+        usage: {
+          input_tokens: data.usage?.prompt_tokens ?? 0,
+          output_tokens: data.usage?.completion_tokens ?? 0,
+        },
       };
     },
   };
@@ -223,10 +235,33 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
   app.post('/api/knowledge/ask', async (req, reply) => {
     const { session, ctx } = await requireCtx(req);
     const body = QuestionRequest.parse(req.body ?? {});
+    // 미지원 질의 옵션을 조용히 무시하지 않는다 (RAG-017): 스키마는
+    // as_of/branch/conversation_id/history를 받지만 현재 구현은 active
+    // 버전 기준 current 모드뿐이다. 그 외는 명시적으로 거부한다.
+    const unsupported = (
+      [
+        ['temporal_mode', body.temporal_mode !== 'current'],
+        ['as_of', body.as_of !== undefined],
+        ['branch', body.branch !== undefined],
+        ['conversation_id', body.conversation_id !== undefined],
+      ] as const
+    )
+      .filter(([, bad]) => bad)
+      .map(([name]) => name);
+    if (unsupported.length)
+      return reply.code(400).send({
+        error: {
+          code: 'UNSUPPORTED_OPTION',
+          message: `지원하지 않는 질의 옵션입니다: ${unsupported.join(', ')}. 현재는 active 버전 기준 current 모드만 지원합니다.`,
+        },
+      });
     const project = await projectForAsker(ctx, deps.config.DISCORD_GUILD_ID);
     if (!project)
       return reply.code(403).send({
-        error: { code: 'PROJECT_SCOPE_DENIED', message: '이 길드에 허용된 지식 프로젝트가 없습니다.' },
+        error: {
+          code: 'PROJECT_SCOPE_DENIED',
+          message: '이 길드에 허용된 지식 프로젝트가 없습니다.',
+        },
       });
     const answer = await answerQuestion(
       {
@@ -305,22 +340,26 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
     };
   });
 
-  /** POST /api/knowledge/image-prompt — 코퍼스 근거로 이미지 프롬프트 합성 (§11.2). */
+  /** POST /api/knowledge/image-prompt — 코퍼스 근거로 이미지 프롬프트 합성 (§11.2).
+   *  응답은 항상 prompt_only — 생성 완료처럼 표시하지 않는다 (RAG-018). */
   app.post('/api/knowledge/image-prompt', async (req, reply) => {
     const { ctx } = await requireCtx(req);
     const body = z.object({ request: z.string().min(1).max(2000) }).parse(req.body ?? {});
-    const project = await first<{ id: string }>(
-      sql`SELECT id FROM knowledge_projects ORDER BY created_at LIMIT 1`,
-      ctx.store.db,
-    );
+    const project = await projectForAsker(ctx, deps.config.DISCORD_GUILD_ID);
     if (!project)
-      return reply.code(503).send({ error: { code: 'INDEX_NOT_READY' } });
+      return reply.code(403).send({
+        error: {
+          code: 'PROJECT_SCOPE_DENIED',
+          message: '이 길드에 허용된 지식 프로젝트가 없습니다.',
+        },
+      });
     if (process.env.IMAGE_GENERATION_ENABLED !== 'true')
       reply.header('X-Image-Generation', 'provider_unconfigured');
     return buildImagePrompt(ctx.store, {
       projectId: project.id,
       request: body.request,
       embeddings: ctx.embeddings,
+      acl: { guilds: [deps.config.DISCORD_GUILD_ID] },
     });
   });
 
@@ -329,8 +368,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
   app.post('/api/knowledge/webhooks/github', async (req, reply) => {
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
     const c = await getCtx();
-    if (!c || !secret)
-      return reply.code(503).send({ error: { code: 'KNOWLEDGE_DISABLED' } });
+    if (!c || !secret) return reply.code(503).send({ error: { code: 'KNOWLEDGE_DISABLED' } });
     const sig = (req.headers['x-hub-signature-256'] as string) ?? null;
     if (!verifyWebhookSignature(secret, (req as any).rawBody ?? '', sig))
       return reply.code(401).send({ error: { code: 'BAD_SIGNATURE' } });
@@ -366,7 +404,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
         ? {
             key: `gh-refresh:${delivery}`,
             kind: 'refresh',
-            payload: { source_kind: 'github', repo, ref },
+            payload: { source_kind: 'github', source_id: src.id, repo, ref },
           }
         : undefined,
     );
@@ -378,8 +416,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
   app.post('/api/knowledge/webhooks/notion', async (req, reply) => {
     const secret = process.env.NOTION_WEBHOOK_SECRET;
     const c = await getCtx();
-    if (!c || !secret)
-      return reply.code(503).send({ error: { code: 'KNOWLEDGE_DISABLED' } });
+    if (!c || !secret) return reply.code(503).send({ error: { code: 'KNOWLEDGE_DISABLED' } });
     const sig = (req.headers['x-notion-signature'] as string) ?? null;
     if (!verifyNotionSignature(secret, (req as any).rawBody ?? '', sig))
       return reply.code(401).send({ error: { code: 'BAD_SIGNATURE' } });
@@ -404,7 +441,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
         ? {
             key: `ntn-refresh:${payload?.id ?? pageId}`,
             kind: 'refresh',
-            payload: { source_kind: 'notion', page_id: pageId },
+            payload: { source_kind: 'notion', source_id: src.id, page_id: pageId },
           }
         : undefined,
     );
@@ -417,8 +454,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
     const { ctx } = await requireCtx(req);
     const q = z.object({ q: z.string().min(1).max(500) }).parse(req.query);
     const project = await projectForAsker(ctx, deps.config.DISCORD_GUILD_ID);
-    if (!project)
-      return reply.code(403).send({ error: { code: 'PROJECT_SCOPE_DENIED' } });
+    if (!project) return reply.code(403).send({ error: { code: 'PROJECT_SCOPE_DENIED' } });
     const chunks = await retrieve(ctx.store, {
       projectId: project.id,
       query: q.q,
