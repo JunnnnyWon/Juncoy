@@ -92,6 +92,10 @@ packages/*     계약, 도메인 규칙, 외부 공급자 어댑터
 
 ## 문서
 
+- [RAG 수정 작업 — 에이전트 전달용](docs/RAG_AGENT_HANDOFF.md)
+- [RAG 구현 점검표·우선순위·완료 기준](docs/RAG_IMPLEMENTATION_AUDIT_2026-10-06.md)
+- [RAG 개발 명세](docs/RAG_DEVELOPMENT_SPEC.md)
+- [RAG 개발 플랜](docs/RAG_DEVELOPMENT_PLAN.md)
 - [아키텍처](docs/architecture.md)
 - [API·SSE 계약](docs/api.md)
 - [사실 원장과 요약 평가](docs/fact-ledger.md)
