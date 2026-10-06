@@ -2,6 +2,7 @@ import { z } from 'zod';
 export * from './facts.ts';
 export * from './knowledge.ts';
 export * from './assistant.ts';
+export * from './art-board.ts';
 export const Snowflake = z.string().regex(/^\d{1,20}$/);
 export const Id = z.uuid();
 export const Cursor = z

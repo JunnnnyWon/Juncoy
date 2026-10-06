@@ -2653,6 +2653,65 @@ small {
   transform-origin: center center;
   transition: transform 120ms ease-out;
 }
+.canvas-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.canvas-edges line {
+  stroke: #9d3735;
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+.canvas-edges text {
+  fill: #8a3c39;
+  font: 9px monospace;
+  paint-order: stroke;
+  stroke: #d9d5cb;
+  stroke-width: 4px;
+}
+.canvas-node {
+  position: absolute;
+  z-index: 5;
+  padding: 9px;
+  background: #f5f1e8;
+  border: 1px solid #b7afa2;
+  box-shadow: 0 10px 25px rgba(74, 68, 59, 0.15);
+}
+.canvas-node.active {
+  border: 2px solid #9d3735;
+}
+.canvas-node.frame {
+  background: rgba(242, 238, 229, 0.56);
+  border-style: dashed;
+}
+.canvas-node-handle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #777970;
+  font: 9px monospace;
+  cursor: move;
+}
+.canvas-node-handle button {
+  color: #9d3735;
+  font-size: 15px;
+}
+.canvas-node textarea {
+  display: block;
+  width: 100%;
+  height: calc(100% - 22px);
+  margin-top: 6px;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: #30312f;
+  font-size: 11px;
+  line-height: 1.5;
+}
 .board-grid {
   position: absolute;
   inset: 0;

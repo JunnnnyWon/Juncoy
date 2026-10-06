@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api.ts';
+import type { ArtCanvasNode, ArtCanvasEdge } from '@meeting/contracts';
 
 type Role =
   'face_shape' | 'modeling_language' | 'material_surface' | 'texture' | 'lighting' | 'mood';
@@ -34,6 +35,11 @@ const usageLabels: Record<Usage, string> = {
 };
 export function ArtReferenceCanvas() {
   const [refs, setRefs] = useState<RefCard[]>([]);
+  const [nodes, setNodes] = useState<ArtCanvasNode[]>([]);
+  const [edges, setEdges] = useState<ArtCanvasEdge[]>([]);
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
+  const [connectSource, setConnectSource] = useState<string | null>(null);
+  const [edgeType, setEdgeType] = useState<ArtCanvasEdge['edge_type']>('supports');
   const [selectedId, setSelectedId] = useState('ref-1');
   const [boardId, setBoardId] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
@@ -64,6 +70,8 @@ export function ArtReferenceCanvas() {
           const detail = await api<any>('/api/assistant/art-boards/' + boards[0].id);
           const saved = detail.revision?.snapshot?.references;
           if (Array.isArray(saved)) setRefs(saved);
+          setNodes(detail.revision?.snapshot?.nodes ?? []);
+          setEdges(detail.revision?.snapshot?.edges ?? []);
           const savedViewport = detail.revision?.snapshot?.viewport;
           if (savedViewport) {
             if (typeof savedViewport.zoom === 'number') setZoom(savedViewport.zoom);
@@ -92,7 +100,7 @@ export function ArtReferenceCanvas() {
         '/api/assistant/art-boards/' + boardId + '/revisions',
         {
           method: 'POST',
-          body: JSON.stringify({ base_revision: revision, snapshot: { references: refs, viewport: { ...pan, zoom } } }),
+          body: JSON.stringify({ base_revision: revision, snapshot: { references: refs, nodes, edges, viewport: { ...pan, zoom } } }),
         },
       );
       setRevision(Number(result.revision));
@@ -108,7 +116,7 @@ export function ArtReferenceCanvas() {
     try {
       const saved = await api<{ revision: number }>(
         '/api/assistant/art-boards/' + boardId + '/revisions',
-        { method: 'POST', body: JSON.stringify({ base_revision: revision, snapshot: { references: refs, viewport: { ...pan, zoom } } }) },
+        { method: 'POST', body: JSON.stringify({ base_revision: revision, snapshot: { references: refs, nodes, edges, viewport: { ...pan, zoom } } }) },
       );
       savedRevision = Number(saved.revision);
       setRevision(savedRevision);
@@ -215,6 +223,18 @@ export function ArtReferenceCanvas() {
     setRefs((current) =>
       current.map((ref) => (ref.id === selected?.id ? { ...ref, ...patch } : ref)),
     );
+  const addNode = (node_type: ArtCanvasNode['node_type']) => {
+    const id = crypto.randomUUID();
+    setNodes((current) => [...current, { id, node_type, x: 60 + current.length * 30, y: 70 + current.length * 30, width: node_type === 'frame' ? 420 : 220, height: node_type === 'frame' ? 300 : 140, text: node_type === 'frame' ? '새 프레임' : '새 메모' }]);
+    setActiveNodeId(id);
+  };
+  const chooseNode = (id: string) => {
+    if (connectSource && connectSource !== id) {
+      setEdges((current) => current.some((e) => e.source === connectSource && e.target === id && e.edge_type === edgeType) ? current : [...current, { id: crypto.randomUUID(), source: connectSource, target: id, edge_type: edgeType }]);
+      setConnectSource(null);
+    }
+    setActiveNodeId(id);
+  };
   return (
     <div className="art-workspace">
       <header className="art-header">
@@ -239,9 +259,13 @@ export function ArtReferenceCanvas() {
       </header>
       <div className="art-toolbar">
         <button className="art-tool active">↖ 선택</button>
-        <button className="art-tool">▧ 프레임</button>
-        <button className="art-tool">T 메모</button>
-        <button className="art-tool">↗ 연결</button>
+        <button className="art-tool" onClick={() => addNode('frame')}>▧ 프레임</button>
+        <button className="art-tool" onClick={() => addNode('text_note')}>T 메모</button>
+        <button className={'art-tool ' + (connectSource ? 'active' : '')} disabled={!activeNodeId} onClick={() => setConnectSource(connectSource ? null : activeNodeId)}>↗ 연결</button>
+        <select aria-label="연결 관계" value={edgeType} onChange={(event) => setEdgeType(event.target.value as ArtCanvasEdge['edge_type'])}>
+          <option value="supports">뒷받침</option><option value="contradicts">충돌</option><option value="variant_of">변형</option><option value="uses_only">부분 채택</option><option value="derived_from">파생</option>
+        </select>
+        <button className="art-tool" disabled={!boardId} onClick={() => void saveRevision()}>저장</button>
         <span className="toolbar-rule" />
         <button className="art-tool" onClick={() => inputRef.current?.click()}>
           ＋ 이미지 추가
@@ -277,7 +301,7 @@ export function ArtReferenceCanvas() {
             setZoom((value) => Math.min(1.8, Math.max(0.5, value - event.deltaY * 0.001)));
           }}
           onPointerDown={(event) => {
-            if ((event.target as HTMLElement).closest('.reference-card, button, input, select, textarea')) return;
+            if ((event.target as HTMLElement).closest('.reference-card, .canvas-node, button, input, select, textarea')) return;
             setDragging(true);
             dragOrigin.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
             (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
@@ -295,6 +319,27 @@ export function ArtReferenceCanvas() {
             <strong>{boardId ? '보드 revision ' + revision : '서버 연결 중'}</strong>
           </div>
           <div className="board-stage" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+          <svg className="canvas-edges">
+            {edges.map((edge) => {
+              const source = nodes.find((n) => n.id === edge.source);
+              const target = nodes.find((n) => n.id === edge.target);
+              if (!source || !target) return null;
+              const x1 = source.x + source.width / 2, y1 = source.y + source.height / 2;
+              const x2 = target.x + target.width / 2, y2 = target.y + target.height / 2;
+              return <g key={edge.id}><line x1={x1} y1={y1} x2={x2} y2={y2} /><text x={(x1 + x2) / 2} y={(y1 + y2) / 2}>{edge.edge_type}</text></g>;
+            })}
+          </svg>
+          {nodes.map((node) => <div key={node.id} className={'canvas-node ' + node.node_type + (activeNodeId === node.id ? ' active' : '')} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={() => chooseNode(node.id)}>
+            <div className="canvas-node-handle" onPointerDown={(event) => {
+              event.stopPropagation();
+              const origin = { x: event.clientX, y: event.clientY, nodeX: node.x, nodeY: node.y };
+              const handle = event.currentTarget;
+              handle.setPointerCapture(event.pointerId);
+              handle.onpointermove = (move) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, x: origin.nodeX + (move.clientX - origin.x) / zoom, y: origin.nodeY + (move.clientY - origin.y) / zoom } : n));
+              handle.onpointerup = () => { handle.onpointermove = null; handle.onpointerup = null; };
+            }}>{node.node_type === 'frame' ? '프레임' : '메모'}<button aria-label="노드 삭제" onClick={(event) => { event.stopPropagation(); setNodes((current) => current.filter((n) => n.id !== node.id)); setEdges((current) => current.filter((e) => e.source !== node.id && e.target !== node.id)); }}>×</button></div>
+            <textarea aria-label="노드 내용" value={node.text} onChange={(event) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, text: event.target.value } : n))} />
+          </div>)}
           {refs.length === 0 && (
             <div className="art-empty-state">
               <span className="eyebrow">REFERENCE BOARD</span>

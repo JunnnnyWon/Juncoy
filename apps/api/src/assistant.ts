@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { sql, first, rows } from '@meeting/knowledge-db';
-import { AssistantMode } from '@meeting/contracts';
+import { AssistantMode, ArtBoardSnapshot } from '@meeting/contracts';
 import {
   ToolRegistry,
   registerReadTools,
@@ -995,7 +995,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const body = z
       .object({
         base_revision: z.number().int().nonnegative(),
-        snapshot: z.record(z.string(), z.any()),
+        snapshot: ArtBoardSnapshot,
       })
       .parse(req.body ?? {});
     const result = await ctx.store.saveArtBoardRevision({
@@ -1028,7 +1028,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       conflicts: z.array(z.object({ statement: z.string(), evidence_ids: z.array(z.string()) })),
       suggestions: z.array(z.object({ asset_id: z.string(), role: z.string(), usage: z.string(), observation: z.string() })),
     });
-    const result = await ctx.model.structured(schema, { revision: revision.revision, references: (revision.snapshot as any)?.references ?? [] },
+    const result = await ctx.model.structured(schema, { revision: revision.revision, references: (revision.snapshot as any)?.references ?? [], nodes: (revision.snapshot as any)?.nodes ?? [], edges: (revision.snapshot as any)?.edges ?? [] },
       '현재 아트 보드의 레퍼런스 메모와 역할만 분석한다. 관찰은 초안이며 승인된 Art Bible 규칙으로 간주하지 않는다. 이미지에 보이지 않는 권리, 사실, 스타일을 추정하지 않는다. 공통 규칙과 충돌을 분리하고 각 항목에 asset id를 evidence_ids로 연결한다.');
     const resultHash = createHash('sha256').update(JSON.stringify(result.result)).digest('hex');
     const analysisId = await ctx.store.saveArtBoardAnalysis({ boardId: board.id, revision: revision.revision, userId: session.user_id, model: result.model, result: result.result, resultHash });
