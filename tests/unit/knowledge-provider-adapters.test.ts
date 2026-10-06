@@ -93,4 +93,13 @@ describe('document and image provider adapters', () => {
     expect(result.parseStatus).toBe('FALLBACK');
     expect(result.parseError).toBe('provider_timeout');
   });
+
+  it('rejects an oversized Document Parse response before normalization', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ content: 'too large' }), { status: 200 }),
+    );
+    await expect(
+      new UpstageDocumentParse({ apiKey: 'secret', endpoint: 'https://parse.test', maxResponseBytes: 4 }).parsePdf(Buffer.from('%PDF-test')),
+    ).rejects.toThrow('upstage_document_parse_response_too_large');
+  });
 });

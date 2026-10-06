@@ -26,6 +26,7 @@ export interface DocumentParseOptions {
   timeoutMs?: number;
   outputFormat?: 'html' | 'markdown';
   coordinates?: boolean;
+  maxResponseBytes?: number;
 }
 
 function textFromHtml(html: string) {
@@ -67,7 +68,10 @@ export class UpstageDocumentParse {
       throw Object.assign(new Error('upstage_document_parse_' + response.status), {
         status: response.status,
       });
-    const body = (await response.json()) as Record<string, unknown>;
+    const raw = await response.arrayBuffer();
+    if (raw.byteLength > (this.options.maxResponseBytes ?? 25 * 1024 * 1024))
+      throw new Error('upstage_document_parse_response_too_large');
+    const body = JSON.parse(Buffer.from(raw).toString('utf8')) as Record<string, unknown>;
     const content = body.content;
     const contentObject = content && typeof content === 'object' ? (content as Record<string, unknown>) : undefined;
     const html = typeof body.html === 'string' ? body.html : typeof contentObject?.html === 'string' ? contentObject.html : undefined;
