@@ -38,17 +38,19 @@ export function ArtReferenceCanvas() {
   const [refs, setRefs] = useState<RefCard[]>([]);
   const [nodes, setNodes] = useState<ArtCanvasNode[]>([]);
   const [edges, setEdges] = useState<ArtCanvasEdge[]>([]);
-  const history = useRef<CanvasHistory<{ refs: RefCard[]; nodes: ArtCanvasNode[]; edges: ArtCanvasEdge[] }> | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const history = useRef<CanvasHistory<{ refs: RefCard[]; nodes: ArtCanvasNode[]; edges: ArtCanvasEdge[]; zoom: number; pan: { x: number; y: number } }> | null>(null);
   const restoring = useRef(false);
   const loadedBoard = useRef(false);
   const [, setHistoryVersion] = useState(0);
   useEffect(() => {
     if (!loadedBoard.current) return;
-    const present = { refs, nodes, edges };
+    const present = { refs, nodes, edges, zoom, pan };
     if (restoring.current) { restoring.current = false; return; }
     history.current = history.current ? changeCanvas(history.current, present) : { past: [], present, future: [] };
     setHistoryVersion((v) => v + 1);
-  }, [refs, nodes, edges]);
+  }, [refs, nodes, edges, zoom, pan]);
   const travel = (direction: 'undo' | 'redo') => {
     if (!history.current) return;
     const next = travelCanvas(history.current, direction);
@@ -56,6 +58,8 @@ export function ArtReferenceCanvas() {
     history.current = next;
     restoring.current = true;
     setRefs(next.present.refs); setNodes(next.present.nodes); setEdges(next.present.edges);
+    setZoom(next.present.zoom); setPan(next.present.pan);
+    setActiveNodeId(null); setConnectSource(null);
     setBrief(null); setAnalysis(null); setSyncState('미저장 변경');
     setHistoryVersion((v) => v + 1);
   };
@@ -83,8 +87,6 @@ export function ArtReferenceCanvas() {
   const [assetAnalysis, setAssetAnalysis] = useState<any>(null);
   const [assetAnalysisBusy, setAssetAnalysisBusy] = useState(false);
   const assetAnalysisGeneration = useRef(0);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragOrigin = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const inputRef = useRef<HTMLInputElement>(null);
@@ -110,7 +112,7 @@ export function ArtReferenceCanvas() {
           setRevision(Number(boards[0].current_revision ?? 0));
           const detail = await api<any>('/api/assistant/art-boards/' + boards[0].id);
           const saved = detail.revision?.snapshot?.references;
-          history.current = { past: [], present: { refs: Array.isArray(saved) ? saved : [], nodes: detail.revision?.snapshot?.nodes ?? [], edges: detail.revision?.snapshot?.edges ?? [] }, future: [] };
+          history.current = { past: [], present: { refs: Array.isArray(saved) ? saved : [], nodes: detail.revision?.snapshot?.nodes ?? [], edges: detail.revision?.snapshot?.edges ?? [], zoom: detail.revision?.snapshot?.viewport?.zoom ?? 1, pan: { x: detail.revision?.snapshot?.viewport?.x ?? 0, y: detail.revision?.snapshot?.viewport?.y ?? 0 } }, future: [] };
           if (Array.isArray(saved)) setRefs(saved);
           setNodes(detail.revision?.snapshot?.nodes ?? []);
           setEdges(detail.revision?.snapshot?.edges ?? []);
@@ -126,7 +128,7 @@ export function ArtReferenceCanvas() {
             body: JSON.stringify({ name: '비주얼 레퍼런스 보드' }),
           });
           setBoardId(created.id);
-          history.current = { past: [], present: { refs: [], nodes: [], edges: [] }, future: [] };
+          history.current = { past: [], present: { refs: [], nodes: [], edges: [], zoom: 1, pan: { x: 0, y: 0 } }, future: [] };
         }
         loadedBoard.current = true;
         setSyncState('서버에 연결됨');
@@ -275,7 +277,7 @@ export function ArtReferenceCanvas() {
     setActiveNodeId(id);
   };
   const chooseNode = (id: string) => {
-    if (connectSource && connectSource !== id) {
+    if (connectSource && connectSource !== id && nodes.some((node) => node.id === connectSource)) {
       setEdges((current) => current.some((e) => e.source === connectSource && e.target === id && e.edge_type === edgeType) ? current : [...current, { id: crypto.randomUUID(), source: connectSource, target: id, edge_type: edgeType }]);
       setConnectSource(null);
     }
