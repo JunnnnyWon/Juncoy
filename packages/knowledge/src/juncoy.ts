@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import { createHash } from 'node:crypto';
-import { KnowledgeStore, sql, first } from '@meeting/knowledge-db';
+import { KnowledgeStore, sql, first, rows } from '@meeting/knowledge-db';
 import { documentKeys } from '@meeting/contracts';
 import { queueExtract } from './indexer.ts';
 
@@ -54,6 +54,7 @@ export class MeetingReader {
                 WHERE r.previous_id = s.segment_id OR r.replacement_id = s.segment_id) AS replacements
          FROM transcript_segments s
         WHERE s.meeting_id = $1 AND s.canonical
+          AND (s.body->>'is_final' IS NULL OR (s.body->>'is_final')::boolean)
         ORDER BY s.source_start_ms`,
       [meetingId],
     );
@@ -77,13 +78,21 @@ export class JuncoyCollector {
       sql`SELECT cursor FROM connector_cursors WHERE source_id=${this.sourceId} AND scope_key=${this.cursorKey(meetingId)}`,
       this.store.db,
     );
-    return (row?.cursor ?? {}) as { transcript_version?: number };
+    return (row?.cursor ?? {}) as {
+      transcript_version?: number;
+      status?: string;
+      ended_at?: string | null;
+    };
   }
-  private async saveCursor(meetingId: string, version: number) {
+  private async saveCursor(meetingId: string, m: SharedMeeting) {
     await sql`
       INSERT INTO connector_cursors(source_id, scope_key, cursor, last_reconciled_at, updated_at)
       VALUES (${this.sourceId}, ${this.cursorKey(meetingId)},
-        ${JSON.stringify({ transcript_version: version })}::jsonb, now(), now())
+        ${JSON.stringify({
+          transcript_version: m.transcript_version,
+          status: m.status,
+          ended_at: m.ended_at,
+        })}::jsonb, now(), now())
       ON CONFLICT (source_id, scope_key) DO UPDATE
         SET cursor=EXCLUDED.cursor, last_reconciled_at=now(), updated_at=now()`.execute(
       this.store.db,
@@ -102,8 +111,13 @@ export class JuncoyCollector {
     }
     const last = await this.lastSyncedVersion(m.meeting_id);
     const revision = `tv:${m.transcript_version}`;
-    if (last.transcript_version === m.transcript_version && m.transcript_version > 0)
-      return { synced: false, unchanged: true };
+    // 버전만 같아도 status/ended_at 변화(RECORDING→COMPLETED 등)는 반영한다.
+    const stateUnchanged =
+      last.transcript_version === m.transcript_version &&
+      m.transcript_version > 0 &&
+      last.status === m.status &&
+      last.ended_at === m.ended_at;
+    if (stateUnchanged) return { synced: false, unchanged: true };
     const segments = await this.meetings.canonicalSegments(m.meeting_id);
     const contentHash = sha256(JSON.stringify(segments));
     // 버전은 올랐는데 내용이 동일하면 dirty를 세우지 않는다 — 검색에서 숨겨지지 않는다.
@@ -119,7 +133,7 @@ export class JuncoyCollector {
     );
     if (marked === 'tombstoned') return { synced: false, deleted: true };
     if (marked === 'unchanged') {
-      await this.saveCursor(m.meeting_id, m.transcript_version);
+      await this.saveCursor(m.meeting_id, m);
       return { synced: true, unchanged: true };
     }
     const doc = await first<{ id: string }>(
@@ -153,9 +167,35 @@ export class JuncoyCollector {
     }, revision);
     if (published) {
       await queueExtract(this.store, doc.id, contentHash);
-      await this.saveCursor(m.meeting_id, m.transcript_version);
+      await this.saveCursor(m.meeting_id, m);
     }
     return { synced: published };
+  }
+
+  /**
+   * 현재 공유 목록에 없는 과거 수집 회의를 tombstone한다 (RAG-012).
+   * workspace_meetings에서 행이 지워지면 sharedMeetings가 그 회의를 안 주므로,
+   * 지식 DB에 남은 meeting 문서와 목록을 대조해서 사라진 것을 차단한다.
+   */
+  private async reconcileUnshared(sharedIds: Set<string>) {
+    const docs = await rows<{ id: string; stable_key: string; meeting_id: string }>(
+      sql`SELECT id, stable_key, metadata->>'meeting_id' AS meeting_id
+          FROM documents
+          WHERE source_id=${this.sourceId} AND NOT deleted
+            AND metadata->>'meeting_id' IS NOT NULL`,
+      this.store.db,
+    );
+    let removed = 0;
+    for (const d of docs) {
+      if (sharedIds.has(d.meeting_id)) continue;
+      await this.store.applyTombstone(
+        d.stable_key,
+        this.sourceId,
+        'meeting_unshared_from_workspace',
+      );
+      removed++;
+    }
+    return removed;
   }
 
   /** 한 번 전체 대조 — 5초 주기 호출 (§6.4). */
@@ -166,6 +206,9 @@ export class JuncoyCollector {
       const r = await this.syncMeeting(m);
       if (r.synced) synced++;
     }
-    return { meetings: meetings.length, synced };
+    const unshared = await this.reconcileUnshared(
+      new Set(meetings.map((m) => m.meeting_id)),
+    );
+    return { meetings: meetings.length, synced, unshared };
   }
 }

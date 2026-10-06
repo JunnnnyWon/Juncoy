@@ -136,6 +136,27 @@ async function makeDiscordRead(store: KnowledgeStore, token: string, guildId: st
 }
 
 export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
+  // 지식 라우트는 외부 인프라(knowledge DB·Upstage·Discord REST) 의존이 크다.
+  // 알 수 없는 오류를 500으로 두면 클라이언트가 영구 실패로 오인한다 —
+  // 스코프 핸들러가 미분류 오류를 503 TEMPORARY_FAILURE로 내린다 (RAG-015).
+  app.setErrorHandler((error, _req, reply) => {
+    const e = error as any;
+    if (e instanceof z.ZodError)
+      return reply
+        .code(400)
+        .send({ error: { code: 'INVALID_ARGUMENT', message: '잘못된 요청입니다.' } });
+    const status =
+      e.code === 'KNOWLEDGE_DISABLED' || e.code === 'PROJECT_SCOPE_DENIED' || e.statusCode
+        ? (e.statusCode ?? (e.code === 'KNOWLEDGE_DISABLED' ? 503 : 403))
+        : 503;
+    return reply.code(status).send({
+      error: {
+        code: e.code ?? 'TEMPORARY_FAILURE',
+        message: e.code ? e.message : '지식 서비스가 일시적으로 불안정합니다.',
+      },
+    });
+  });
+
   let ctx: KnowledgeCtx | null | Promise<KnowledgeCtx | null> = null;
   const getCtx = async (): Promise<KnowledgeCtx | null> => {
     if (ctx) return ctx;

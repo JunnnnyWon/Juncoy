@@ -1,0 +1,15 @@
+# 회의 스택 api가 지식 DB에 붙을 때만 함께 적용하는 오버라이드 (RAG-015).
+# 지식 스택(compose.knowledge.yml)이 먼저 기동돼 있어야 외부 네트워크가 존재한다.
+#
+#   docker compose -f infra/compose.yml -f infra/compose.knowledge-attach.yml \
+#     --env-file .env.production up -d
+services:
+  api:
+    networks:
+      - default
+      - knowledge-net
+
+networks:
+  knowledge-net:
+    external: true
+    name: discord-knowledge_default

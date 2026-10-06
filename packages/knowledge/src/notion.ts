@@ -70,8 +70,10 @@ export class NotionRest {
       params: { page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) },
     });
   }
-  comments(blockId: string) {
-    return this.request('/comments', { params: { block_id: blockId, page_size: '100' } });
+  comments(blockId: string, cursor?: string) {
+    return this.request('/comments', {
+      params: { block_id: blockId, page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) },
+    });
   }
   /** 증분 목록 — data source query 대신 search API (페이지 단위, last_edited_time 정렬). */
   searchPages(editedAfter?: string, cursor?: string) {
@@ -125,6 +127,39 @@ export function pageTitle(page: any): string {
   return '';
 }
 
+/**
+ * 페이지 property를 스칼라 텍스트로 요약한다 (RAG-013).
+ * 제목/본문 바뀌지 않아도 DB 속성(status, date, people 등) 변화가
+ * contentHash에 반영되어야 재수집·재추출이 된다.
+ */
+export function propertySummary(page: any): string {
+  const out: string[] = [];
+  const scalar = (v: any): string | null => {
+    if (v == null) return null;
+    if (Array.isArray(v))
+      return v
+        .map((x) => scalar(x))
+        .filter(Boolean)
+        .join(',');
+    if (typeof v === 'object') {
+      if ('plain_text' in v) return v.plain_text ?? '';
+      if ('name' in v) return v.name ?? '';
+      if ('start' in v) return [v.start, v.end].filter(Boolean).join('~');
+      if ('id' in v) return v.id;
+      return null;
+    }
+    return String(v);
+  };
+  for (const [name, prop] of Object.entries(page.properties ?? {}) as any[]) {
+    const t = prop?.type;
+    if (!t || t === 'title') continue;
+    const v = prop[t];
+    const s = scalar(v) ?? (typeof v === 'object' && v ? JSON.stringify(v) : null);
+    if (s) out.push(`${name}=${s}`);
+  }
+  return out.sort().join('\n');
+}
+
 export class NotionCollector {
   constructor(
     private readonly store: KnowledgeStore,
@@ -132,6 +167,13 @@ export class NotionCollector {
     private readonly workspace: string, // notion workspace 식별자 (문서 키 prefix)
     private readonly sourceId: string,
   ) {}
+
+  /** 토큰 무효/워크스페이스 공유 해제 → 소스 상태를 ACCESS_LOST로 둔다 (RAG-013).
+   *  coverage는 source status를 읽으므로 이후 답변이 LIVE_READ를 주장하지 않는다. */
+  private async markAccessLost() {
+    await sql`UPDATE knowledge_sources SET status='ACCESS_LOST'
+              WHERE id=${this.sourceId}`.execute(this.store.db);
+  }
 
   private cursorKey(kind: 'incremental' | 'structure', ref = '') {
     return `notion:${kind}:${ref}`;
@@ -177,6 +219,7 @@ export class NotionCollector {
     const p = await this.rest.page(pageId);
     if (p.status === 404 || p.status === 403) {
       await this.store.applyTombstone(key, this.sourceId, 'notion_page_gone');
+      if (p.status === 403) await this.markAccessLost(); // 공유 해제/토큰 박탈
       return { stored: false, gone: true };
     }
     if (p.status !== 200) throw new Error(`page ${p.status}`);
@@ -186,19 +229,28 @@ export class NotionCollector {
       return { stored: false, gone: true };
     }
     const blocks = await this.pageText(pageId);
-    const comments = await this.rest.comments(pageId);
-    const commentLines =
-      comments.status === 200
-        ? (comments.body.results ?? []).map(
-            (c: any) => `[comment ${c.created_by?.name ?? ''}] ${rt(c.rich_text)}`,
-          )
-        : [];
-    const text = [...blocks, ...commentLines].join('\n');
+    // 댓글도 페이지네이션 — 첫 100개만 보면 이후 댓글이 영영 빠진다 (RAG-013).
+    const commentLines: string[] = [];
+    {
+      let cc: string | undefined;
+      do {
+        const comments = await this.rest.comments(pageId, cc);
+        if (comments.status !== 200) break;
+        for (const c of comments.body.results ?? [])
+          commentLines.push(`[comment ${c.created_by?.name ?? ''}] ${rt(c.rich_text)}`);
+        cc = comments.body.has_more ? comments.body.next_cursor : undefined;
+      } while (cc);
+    }
+    const title = pageTitle(page);
+    const props = propertySummary(page);
+    const text = [title ? `# ${title}` : '', props, ...blocks, ...commentLines]
+      .filter(Boolean)
+      .join('\n');
     const contentHash = sha256(text);
     const marked = await this.store.markDocumentDirty(
       this.sourceId,
       key,
-      { title: pageTitle(page), url: page.url },
+      { title, url: page.url },
       {
         unlessHash: contentHash,
         revision: page.last_edited_time ?? undefined,
@@ -218,7 +270,7 @@ export class NotionCollector {
       sourceModifiedAt: page.last_edited_time ? new Date(page.last_edited_time) : null,
       normalized: {
         text,
-        title: pageTitle(page),
+        title,
         url: page.url,
         last_edited_time: page.last_edited_time,
         comments: commentLines.length,
@@ -268,9 +320,16 @@ export class NotionCollector {
       try {
         if (s.scope_key === 'root:workspace') {
           // 워크스페이스 전체 — integration에 공유된 모든 페이지를 search로 열거.
+          // searchPages(editedAfter?, cursor?) — 첫 인자는 timestamp이므로
+          // 페이지 커서는 두 번째 인자다 (RAG-013: 이전엔 cursor가
+          // editedAfter 자리에 들어가 100개 이후 페이지가 누락됐다).
           let cursor: string | undefined;
           do {
-            const r = await this.rest.searchPages(cursor);
+            const r = await this.rest.searchPages(undefined, cursor);
+            if (r.status === 401 || r.status === 403) {
+              await this.markAccessLost();
+              break;
+            }
             if (r.status !== 200) break;
             for (const p of r.body.results ?? []) await this.ingestPage(p.id);
             cursor = r.body.has_more ? r.body.next_cursor : undefined;
@@ -279,6 +338,10 @@ export class NotionCollector {
           let cursor: string | undefined;
           do {
             const r = await this.rest.databaseQuery(id, cursor);
+            if (r.status === 401 || r.status === 403) {
+              await this.markAccessLost();
+              break;
+            }
             if (r.status !== 200) break;
             for (const row of r.body.results ?? []) await this.ingestPage(row.id);
             cursor = r.body.has_more ? r.body.next_cursor : undefined;

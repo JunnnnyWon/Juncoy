@@ -524,7 +524,9 @@ export async function buildServer(config: AppConfig, store: Store) {
     await listener.query('UNLISTEN *').catch(() => {});
     listener.release();
   });
-  registerKnowledgeRoutes(app, { auth, config });
+  // 캡슐화 플러그인으로 등록 — 지식 라우트 전용 에러핸들러(503 매핑)가
+  // 전역 핸들러를 덮지 않도록 컨텍스트를 분리한다 (RAG-015).
+  await app.register(async (k) => registerKnowledgeRoutes(k, { auth, config }));
   const dist = resolve('apps/web/dist');
   if (existsSync(dist)) {
     await app.register(serveStatic, { root: dist, prefix: '/' });

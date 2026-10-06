@@ -1,6 +1,11 @@
 # 지식(RAG) 파일럿 스택 — spec §10/§16: 기존 회의 스택과 분리된 DB·큐·워커.
 # 기동: docker compose -f infra/compose.knowledge.yml --env-file .env.knowledge up -d
 # api 쪽 지식 라우트 활성화는 .env.production의 KNOWLEDGE_* flag로 별도 제어한다.
+#
+# 회의 스택과 같은 머신에서 회의 수집도 할 때만 오버라이드를 함께 쓴다:
+#   docker compose -f infra/compose.knowledge.yml -f infra/compose.knowledge.meetingnet.yml \
+#     --env-file .env.production --env-file .env.knowledge --profile discord up -d
+# 오버라이드 없이 기동하면 외부 회의 네트워크 없이도 지식 스택이 독립으로 뜬다.
 name: discord-knowledge
 
 x-kapp: &kapp
@@ -26,9 +31,8 @@ x-kapp: &kapp
 
 networks:
   default:
-  meeting-net:
-    external: true
-    name: discord-meeting_default # 회의 DB 읽기 전용 수집용 (container DNS: postgres)
+  # meeting-net은 compose.knowledge.meetingnet.yml에서만 선언 — 외부 회의
+  # 네트워크가 없는 환경에서도 기본 파일만으로 기동된다 (RAG-015).
 
 services:
   postgres-knowledge:
@@ -58,7 +62,11 @@ services:
     <<: *kapp
     container_name: discord-knowledge-worker
     command: [node, --import, tsx, apps/knowledge-worker/src/main.ts]
-    networks: [default, meeting-net]
+    depends_on:
+      postgres-knowledge:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully # 스키마 없이 큐를 읽지 않는다 (RAG-015)
 
   discord-context:
     <<: *kapp

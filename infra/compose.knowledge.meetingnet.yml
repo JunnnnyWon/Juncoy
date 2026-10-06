@@ -1,0 +1,15 @@
+# 회의 스택 네트워크 연결 오버라이드 — 회의 DB를 container DNS(postgres)로
+# 읽을 때만 함께 적용한다. 외부 네트워크가 없으면 기본 compose만으로 뜬다.
+#
+#   docker compose -f infra/compose.knowledge.yml -f infra/compose.knowledge.meetingnet.yml \
+#     --env-file .env.production --env-file .env.knowledge --profile discord up -d
+#
+# MEETING_DATABASE_URL 은 이 오버라이드를 쓸 때 postgres:5432/meeting 을 가리키면 된다.
+services:
+  knowledge-worker:
+    networks: [default, meeting-net]
+
+networks:
+  meeting-net:
+    external: true
+    name: discord-meeting_default # 회의 DB 읽기 전용 수집용 (container DNS: postgres)
