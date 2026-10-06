@@ -37,6 +37,7 @@ export function ArtReferenceCanvas() {
   const [revision, setRevision] = useState(0);
   const [syncState, setSyncState] = useState('로컬 초안');
   const [brief, setBrief] = useState<any>(null);
+  const [generated, setGenerated] = useState<any[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const selected = refs.find((ref) => ref.id === selectedId) ?? refs[0];
   const selectedCount = useMemo(() => refs.filter((ref) => ref.selected).length, [refs]);
@@ -58,6 +59,7 @@ export function ArtReferenceCanvas() {
           setBoardId(created.id);
         }
         setSyncState('서버에 연결됨');
+        setGenerated(await api<any[]>('/api/assistant/images'));
       } catch {
         setSyncState('로컬 초안');
       }
@@ -281,6 +283,7 @@ export function ArtReferenceCanvas() {
                         body: JSON.stringify({ approval_id: brief.approval_id }),
                       });
                       setBrief({ ...brief, generated: result.executed === true, generation_not_executed: result.executed !== true });
+                      if (result.executed) setGenerated(await api<any[]>('/api/assistant/images'));
                     } catch {
                       setBrief({ ...brief, generation_error: true });
                     }
@@ -356,6 +359,27 @@ export function ArtReferenceCanvas() {
               </div>
             </>
           )}
+          <div className="art-output-panel">
+            <div className="output-heading">
+              <div>
+                <span className="eyebrow">GENERATED OUTPUTS</span>
+                <h3>생성 결과</h3>
+              </div>
+              <span>{generated.length}개</span>
+            </div>
+            {generated.length ? (
+              <div className="output-grid">
+                {generated.slice(0, 6).map((image) => (
+                  <a key={image.id} href={'/api/assistant/images/' + image.id} target="_blank" rel="noreferrer">
+                    <img src={'/api/assistant/images/' + image.id} alt="생성 결과" loading="lazy" />
+                    <small>DRAFT · {image.model}</small>
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <p className="output-empty">아직 생성된 결과가 없습니다. ImageBrief를 승인하면 이곳에 표시됩니다.</p>
+            )}
+          </div>
         </aside>
       </main>
     </div>

@@ -8,9 +8,11 @@ import {
   createImageJob,
   finishImageJob,
   imageCountToday,
+  getImageJobResult,
 } from '../image-openrouter.ts';
 import type { UploadStorage } from '../uploads.ts';
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 // 이미지 생성 — spec §12: preview는 프롬프트 합성만, generate는 명시적 승인 후 실행.
 // provider 미설정이면 "생성됐다"고 거짓 보고하지 않고 prompt_only로 보고한다.
@@ -105,7 +107,7 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
       const after = approval.after as any;
       if (after.model !== REQUIRED_IMAGE_MODEL)
         throw new DomainError('IMAGE_MODEL_MISMATCH', 'GPT Image 2.5 Flare만 사용할 수 있습니다.', 409);
-      const jobId = await createImageJob(ctx.store, {
+      const job = await createImageJob(ctx.store, {
         projectId: ctx.projectId,
         ownerId: ctx.userId,
         approvalId: approval.id,
@@ -115,6 +117,12 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
         evidence: after.evidence,
         idempotencyKey: `approval:${approval.id}`,
       });
+      const jobId = job.id;
+      const existingJob = await getImageJobResult(ctx.store, ctx.projectId, jobId);
+      if (existingJob?.status === 'DONE' && existingJob.result_id)
+        return { image_id: existingJob.result_id, model: after.model, reused: true };
+      if (!job.created && existingJob?.status !== 'FAILED')
+        return { job_id: jobId, model: after.model, status: existingJob.status, reused: true };
       try {
         const refs = await ctx.store.getUploadsByIds(
           ctx.projectId,
@@ -125,6 +133,9 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
         );
         if (missing.length)
           throw new DomainError('REFERENCE_NOT_FOUND', '이미지 레퍼런스를 찾을 수 없습니다.', 409);
+        const invalid = refs.filter((ref: any) => ref.state !== 'READY' || !/^image\/(png|jpeg|webp)$/.test(ref.mime));
+        if (invalid.length)
+          throw new DomainError('REFERENCE_NOT_READY', '준비되지 않은 이미지 레퍼런스가 포함되어 있습니다.', 409);
         const referenceInputs = await Promise.all(
           refs.map(async (ref: any) => ({
             bytes: await storage.read(ref.storage_key),
@@ -133,6 +144,11 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
             instruction: after.reference_instructions?.[ref.id],
           })),
         );
+        for (const [index, ref] of refs.entries()) {
+          const bytes = referenceInputs[index]!.bytes;
+          if (createHash('sha256').update(bytes).digest('hex') !== ref.sha256)
+            throw new DomainError('REFERENCE_HASH_MISMATCH', '레퍼런스 원본 hash가 변경되었습니다.', 409);
+        }
         const out = await provider.generate(after.prompt, after.negative, referenceInputs);
         const buf = Buffer.from(out.b64, 'base64');
         const resultKey = `img-${randomUUID()}.png`;

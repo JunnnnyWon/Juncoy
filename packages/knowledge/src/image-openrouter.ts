@@ -205,12 +205,21 @@ export async function createImageJob(
         RETURNING id`,
     store.db,
   );
-  if (r) return r.id;
+  if (r) return { id: r.id, created: true };
   const existing = await first<{ id: string; status: string }>(
     sql`SELECT id, status FROM image_jobs WHERE idempotency_key=${j.idempotencyKey}`,
     store.db,
   );
-  return existing!.id;
+  return { id: existing!.id, created: false };
+}
+
+export async function getImageJobResult(store: KnowledgeStore, projectId: string, jobId: string) {
+  return first<any>(sql`
+    SELECT j.id, j.status, j.error, r.id AS result_id
+    FROM image_jobs j
+    LEFT JOIN image_results r ON r.job_id=j.id
+    WHERE j.id=${jobId} AND j.project_id=${projectId}
+  `, store.db);
 }
 
 export async function finishImageJob(

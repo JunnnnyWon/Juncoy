@@ -2848,6 +2848,54 @@ small {
   text-align: right;
   font-weight: 500;
 }
+.art-output-panel {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid #303438;
+}
+.output-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  color: #858b84;
+  font-size: 10px;
+}
+.output-heading h3 {
+  margin-top: 6px;
+  color: #e8e4db;
+  font-size: 14px;
+}
+.output-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+.output-grid a {
+  overflow: hidden;
+  color: #a5aaa2;
+  background: #202326;
+  border: 1px solid #35393d;
+}
+.output-grid img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+}
+.output-grid small {
+  padding: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 8px;
+}
+.output-empty {
+  margin-top: 12px;
+  color: #7f857e;
+  font-size: 10px;
+  line-height: 1.6;
+}
 @media (max-width: 900px) {
   .art-layout {
     grid-template-columns: 1fr;
