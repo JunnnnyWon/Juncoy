@@ -18,7 +18,13 @@ export const ArtCanvasEdge = z.strictObject({
 });
 export type ArtCanvasEdge = z.infer<typeof ArtCanvasEdge>;
 export const ArtBoardSnapshot = z.object({
-  references: z.array(z.object({ id: z.string().min(1).max(200) }).passthrough()).max(200).default([]),
+  references: z.array(z.object({
+    id: z.string().min(1).max(200),
+    x: z.number().finite().optional(),
+    y: z.number().finite().optional(),
+    width: z.number().min(80).max(5000).optional(),
+    height: z.number().min(60).max(5000).optional(),
+  }).passthrough()).max(200).default([]),
   nodes: z.array(ArtCanvasNode).max(500).default([]),
   edges: z.array(ArtCanvasEdge).max(1000).default([]),
   viewport: z.object({ x: z.number().finite(), y: z.number().finite(), zoom: z.number().min(0.5).max(1.8) }).optional(),

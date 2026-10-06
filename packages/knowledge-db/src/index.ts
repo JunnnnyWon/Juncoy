@@ -4,7 +4,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DocumentState, KnowledgeJobKind, KnowledgeJobStatus } from '@meeting/contracts';
+import { ArtBoardSnapshot, type DocumentState, type KnowledgeJobKind, type KnowledgeJobStatus } from '@meeting/contracts';
 
 export { sql } from 'kysely';
 export type Database = Record<string, never>;
@@ -453,6 +453,7 @@ export class KnowledgeStore {
     snapshot: unknown;
     snapshotHash: string;
   }) {
+    const snapshot = ArtBoardSnapshot.parse(input.snapshot);
     return this.db.transaction().execute(async (tx) => {
       const board = await first<{ current_revision: number }>(
         sql`SELECT current_revision FROM art_boards
@@ -470,6 +471,18 @@ export class KnowledgeStore {
       const references = Array.isArray((input.snapshot as any)?.references)
         ? (input.snapshot as any).references
         : [];
+      const geometry = [
+        ...snapshot.nodes.map((node) => ({ ...node, data: { text: node.text } })),
+        ...snapshot.references.map((ref) => ({ id: ref.id, node_type: 'image_reference', x: Number(ref.x ?? 0), y: Number(ref.y ?? 0), width: Number(ref.width ?? 220), height: Number(ref.height ?? 180), data: ref })),
+      ];
+      for (const node of geometry) {
+        await sql`INSERT INTO art_board_nodes(board_id, revision, id, node_type, x, y, width, height, data)
+          VALUES (${input.boardId}, ${revision}, ${node.id}, ${node.node_type}, ${node.x}, ${node.y}, ${node.width}, ${node.height}, ${json(node.data)})`.execute(tx);
+      }
+      for (const edge of snapshot.edges) {
+        await sql`INSERT INTO art_board_edges(board_id, revision, id, source_node_id, target_node_id, edge_type)
+          VALUES (${input.boardId}, ${revision}, ${edge.id}, ${edge.source}, ${edge.target}, ${edge.edge_type})`.execute(tx);
+      }
       await sql`DELETE FROM art_board_assets WHERE board_id=${input.boardId}`.execute(tx);
       for (const ref of references) {
         if (!ref || typeof ref.id !== 'string') continue;

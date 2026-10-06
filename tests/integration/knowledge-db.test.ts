@@ -49,6 +49,23 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('persists revision geometry atomically and preserves previous revisions', async (ctx) => {
+    skipIf(ctx);
+    const projectId = randomUUID();
+    await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'geometry')`.execute(store!.db);
+    const boardId = await store!.createArtBoard(projectId, 'owner');
+    const node = { id: 'note', node_type: 'text_note', x: 40, y: 20, width: 200, height: 100, text: 'direction' };
+    const input = { projectId, ownerId: 'owner', boardId, baseRevision: 0, snapshotHash: 'geometry', snapshot: { references: [{ id: 'image' }], nodes: [node], edges: [{ id: 'edge', source: 'note', target: 'image', edge_type: 'supports' }] } };
+    expect((await store!.saveArtBoardRevision(input)).kind).toBe('SAVED');
+    expect((await store!.saveArtBoardRevision(input)).kind).toBe('CONFLICT');
+    const nodes = await rows<any>(sql`SELECT * FROM art_board_nodes WHERE board_id=${boardId}`, store!.db);
+    expect(nodes).toHaveLength(2);
+    expect(nodes.find((n) => n.id === 'note').x).toBe(40);
+    expect(await rows(sql`SELECT * FROM art_board_edges WHERE board_id=${boardId}`, store!.db)).toHaveLength(1);
+    await store!.saveArtBoardRevision({ ...input, baseRevision: 1, snapshot: { references: [], nodes: [], edges: [] } });
+    expect(await rows(sql`SELECT * FROM art_board_nodes WHERE board_id=${boardId} AND revision=1`, store!.db)).toHaveLength(2);
+    expect(await rows(sql`SELECT * FROM art_board_nodes WHERE board_id=${boardId} AND revision=2`, store!.db)).toHaveLength(0);
+  });
   it('marks uploads READY only after all current chunk embeddings are present', async (ctx) => {
     skipIf(ctx);
     const projectId = randomUUID(), sourceId = randomUUID(), docId = randomUUID();
