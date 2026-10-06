@@ -1,34 +1,47 @@
 import 'dotenv/config';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { KnowledgeStore, sql, first, rows } from '@meeting/knowledge-db';
 
 // 지식 스토어 시맨틱 검증. KNOWLEDGE_DATABASE_URL(또는 DATABASE_URL의 별도 스키마)과
-// pgvector 확장이 필요하다 — 없으면 전체 스킵.
+// pgvector 확장이 필요하다.
+// - URL 미설정: 개발 실행으로 간주해 명시적 skip (이유를 남긴다).
+// - URL 설정됨: 연결/migration 실패는 테스트 실패로 보고한다 — skip으로 숨기지 않는다.
 let store: KnowledgeStore | null = null;
-let ready = false;
+let admin: KnowledgeStore | null = null;
+let schema = '';
+let setupError: Error | null = null;
 const url = process.env.KNOWLEDGE_DATABASE_URL ?? process.env.DATABASE_URL;
 
 beforeAll(async () => {
   if (!url) return;
   try {
-    const admin = new KnowledgeStore(url);
-    const schema = 'ktest_' + randomUUID().replaceAll('-', '');
+    admin = new KnowledgeStore(url);
+    schema = 'ktest_' + randomUUID().replaceAll('-', '');
     await sql`CREATE SCHEMA ${sql.id(schema)}`.execute(admin.db);
     const u = new URL(url);
-    u.searchParams.set('options', '-c search_path=' + schema);
-    await admin.close();
+    u.searchParams.set('options', '-c search_path=' + schema + ',public');
     store = new KnowledgeStore(u.toString());
     await store.migrate();
-    ready = true;
-  } catch {
+  } catch (e) {
+    setupError = e instanceof Error ? e : new Error(String(e));
     store = null;
-    ready = false;
+  }
+}, 30_000);
+
+afterAll(async () => {
+  try {
+    if (store) await store.close();
+    if (admin && schema)
+      await sql`DROP SCHEMA ${sql.id(schema)} CASCADE`.execute(admin.db);
+  } finally {
+    if (admin) await admin.close();
   }
 }, 30_000);
 
 const skipIf = (ctx: any) => {
-  if (!ready) ctx.skip();
+  if (!url) ctx.skip(`no KNOWLEDGE_DATABASE_URL/DATABASE_URL — skipped by design (not a pass)`);
+  if (setupError) throw new Error(`test DB setup failed (URL was set — this is a failure, not a skip): ${setupError.message}`);
 };
 
 describe('knowledge-db semantics', () => {
