@@ -25,6 +25,7 @@ export interface DocumentParseOptions {
   endpoint: string;
   timeoutMs?: number;
   outputFormat?: 'html' | 'markdown';
+  coordinates?: boolean;
 }
 
 function textFromHtml(html: string) {
@@ -53,7 +54,9 @@ export class UpstageDocumentParse {
       throw new Error('document_parse_source_hash_mismatch');
     const form = new FormData();
     form.append('document', new Blob([new Uint8Array(bytes) as unknown as BlobPart]), 'source.pdf');
-    form.append('output_formats', this.options.outputFormat ?? 'html');
+    form.append('model', 'document-parse');
+    form.append('output_formats', JSON.stringify([this.options.outputFormat ?? 'html']));
+    form.append('coordinates', String(this.options.coordinates ?? true));
     const response = await fetch(this.options.endpoint, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + this.options.apiKey },
@@ -65,9 +68,11 @@ export class UpstageDocumentParse {
         status: response.status,
       });
     const body = (await response.json()) as Record<string, unknown>;
-    const html = typeof body.html === 'string' ? body.html : undefined;
-    const markdown = typeof body.markdown === 'string' ? body.markdown : undefined;
-    const rawText = typeof body.text === 'string' ? body.text : undefined;
+    const content = body.content;
+    const contentObject = content && typeof content === 'object' ? (content as Record<string, unknown>) : undefined;
+    const html = typeof body.html === 'string' ? body.html : typeof contentObject?.html === 'string' ? contentObject.html : undefined;
+    const markdown = typeof body.markdown === 'string' ? body.markdown : typeof contentObject?.markdown === 'string' ? contentObject.markdown : undefined;
+    const rawText = typeof body.text === 'string' ? body.text : typeof contentObject?.text === 'string' ? contentObject.text : typeof content === 'string' ? content : undefined;
     const text = rawText ?? markdown ?? (html ? textFromHtml(html) : '');
     if (!text.trim()) throw new Error('upstage_document_parse_empty_result');
     return {
@@ -78,24 +83,37 @@ export class UpstageDocumentParse {
       sourceSha256,
       requestId: response.headers.get('x-request-id') ?? undefined,
       warnings: [],
-      blocks: Array.isArray(body.blocks)
-        ? body.blocks.map((block: any, index: number) => ({
+      blocks: (Array.isArray(body.elements) ? body.elements : Array.isArray(body.blocks) ? body.blocks : []).map((block: any, index: number) => ({
             block_id: String(block.block_id ?? block.id ?? 'block-' + index),
-            page: typeof block.page === 'number' ? block.page : null,
+            page: typeof block.page === 'number' ? block.page : typeof block.page_number === 'number' ? block.page_number : null,
             ordinal: Number(block.ordinal ?? index),
-            block_type: String(block.block_type ?? block.type ?? 'unknown'),
-            text: String(block.text ?? ''),
+            block_type: String(block.block_type ?? block.category ?? block.type ?? 'unknown'),
+            text: String(block.text ?? (typeof block.content === 'string' ? block.content : block.content?.text ?? '')),
             html: typeof block.html === 'string' ? block.html : undefined,
-            metadata: block.metadata && typeof block.metadata === 'object' ? block.metadata : {},
-          }))
-        : [],
+            metadata: {
+              ...(block.metadata && typeof block.metadata === 'object' ? block.metadata : {}),
+              ...(block.coordinates ? { bbox: block.coordinates } : {}),
+            },
+          })),
       pages: Array.isArray(body.pages)
         ? body.pages.map((page: any, index: number) => ({
             page: Number(page.page ?? index + 1),
             text: String(page.text ?? ''),
             block_ids: Array.isArray(page.block_ids) ? page.block_ids.map(String) : [],
           }))
-        : [],
+        : (() => {
+            const grouped = new Map<number, { text: string; block_ids: string[] }>();
+            for (const block of (Array.isArray(body.elements) ? body.elements : Array.isArray(body.blocks) ? body.blocks : []) as any[]) {
+              const page = Number(block.page ?? block.page_number ?? 1);
+              const id = String(block.block_id ?? block.id ?? '');
+              const value = grouped.get(page) ?? { text: '', block_ids: [] };
+              const text = String(block.text ?? (typeof block.content === 'string' ? block.content : block.content?.text ?? ''));
+              value.text = [value.text, text].filter(Boolean).join('\n');
+              if (id) value.block_ids.push(id);
+              grouped.set(page, value);
+            }
+            return [...grouped.entries()].map(([page, value]) => ({ page, ...value }));
+          })(),
     };
   }
 }

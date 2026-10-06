@@ -30,38 +30,8 @@ const usageLabels: Record<Usage, string> = {
   PARTIAL_REFERENCE: '부분만 참고',
   REVIEW_REQUIRED: '검토 필요',
 };
-const demoRefs: RefCard[] = [
-  {
-    id: 'ref-1',
-    name: '복도 / 습기 표면',
-    url: '/generated/banli-image.png',
-    role: 'material_surface',
-    usage: 'STRONG_REFERENCE',
-    note: '벽면의 습기와 페인트 손상만 참고',
-    selected: true,
-  },
-  {
-    id: 'ref-2',
-    name: '인물 얼굴 비율',
-    url: '/generated/banli-image.png',
-    role: 'face_shape',
-    usage: 'PARTIAL_REFERENCE',
-    note: '얼굴 형태만. 의상과 배경은 제외',
-    selected: true,
-  },
-  {
-    id: 'ref-3',
-    name: '구형 호러 게임 감성',
-    url: '/generated/banli-image.png',
-    role: 'modeling_language',
-    usage: 'MOOD_ONLY',
-    note: '기하학과 시대감만 참고',
-    selected: false,
-  },
-];
-
 export function ArtReferenceCanvas() {
-  const [refs, setRefs] = useState<RefCard[]>(demoRefs);
+  const [refs, setRefs] = useState<RefCard[]>([]);
   const [selectedId, setSelectedId] = useState('ref-1');
   const [boardId, setBoardId] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
@@ -79,7 +49,7 @@ export function ArtReferenceCanvas() {
           setRevision(Number(boards[0].current_revision ?? 0));
           const detail = await api<any>('/api/assistant/art-boards/' + boards[0].id);
           const saved = detail.revision?.snapshot?.references;
-          if (Array.isArray(saved) && saved.length) setRefs(saved);
+          if (Array.isArray(saved)) setRefs(saved);
         } else {
           const created = await api<{ id: string }>('/api/assistant/art-boards', {
             method: 'POST',
@@ -104,15 +74,29 @@ export function ArtReferenceCanvas() {
           body: JSON.stringify({ base_revision: revision, snapshot: { references: refs } }),
         },
       );
-      setRevision(result.revision);
-      setSyncState('자동 저장됨');
+      setRevision(Number(result.revision));
+      setSyncState('서버에 저장됨');
     } catch {
       setSyncState('충돌 확인 필요');
     }
   };
   const previewBrief = async () => {
     if (!boardId) return;
-    await saveRevision();
+    setSyncState('저장 중');
+    let savedRevision = revision;
+    try {
+      const saved = await api<{ revision: number }>(
+        '/api/assistant/art-boards/' + boardId + '/revisions',
+        { method: 'POST', body: JSON.stringify({ base_revision: revision, snapshot: { references: refs } }) },
+      );
+      savedRevision = Number(saved.revision);
+      setRevision(savedRevision);
+      setSyncState('서버에 저장됨');
+    } catch {
+      setSyncState('저장 충돌');
+      window.alert('보드가 저장되지 않았습니다. 최신 revision을 다시 불러온 뒤 시도해 주세요.');
+      return;
+    }
     try {
       const brief = await api<any>(
         '/api/assistant/art-boards/' + boardId + '/image-briefs/preview',
@@ -120,7 +104,7 @@ export function ArtReferenceCanvas() {
           method: 'POST',
           body: JSON.stringify({
             request: '현재 보드 기준 캐릭터 컨셉 아트',
-            revision: revision + 1,
+            revision: savedRevision,
           }),
         },
       );
@@ -165,7 +149,7 @@ export function ArtReferenceCanvas() {
             id: file.name + '-' + file.lastModified + '-' + index,
             upload_id,
             name: file.name,
-            url: URL.createObjectURL(file),
+            url: upload_id ? '/api/assistant/files/' + upload_id + '/content' : URL.createObjectURL(file),
             role: 'mood' as Role,
             usage: 'REVIEW_REQUIRED' as Usage,
             note: '새 레퍼런스. 분석 전 검토 필요',
@@ -230,9 +214,17 @@ export function ArtReferenceCanvas() {
           <div className="board-grid" />
           <div className="board-label">
             <span>CHARACTER / ENVIRONMENT</span>
-            <strong>Draft board · revision 04</strong>
+            <strong>{boardId ? '보드 revision ' + revision : '서버 연결 중'}</strong>
           </div>
-          <div className="art-frame frame-character">
+          {refs.length === 0 && (
+            <div className="art-empty-state">
+              <span className="eyebrow">REFERENCE BOARD</span>
+              <h2>팀의 시각 언어를 이곳에 모아보세요</h2>
+              <p>PNG, JPEG, WEBP 원본은 그대로 보존되고, 검토한 레퍼런스만 ImageBrief에 포함됩니다.</p>
+              <button className="primary-button" onClick={() => inputRef.current?.click()}>첫 레퍼런스 추가</button>
+            </div>
+          )}
+          {refs.length > 0 && <div className="art-frame frame-character">
             <div className="frame-title">01 / CHARACTER LANGUAGE</div>
             <div className="ref-grid">
               {refs.slice(0, 2).map((ref) => (
@@ -251,8 +243,8 @@ export function ArtReferenceCanvas() {
                 />
               ))}
             </div>
-          </div>
-          <div className="art-frame frame-environment">
+          </div>}
+          {refs.length > 2 && <div className="art-frame frame-environment">
             <div className="frame-title">02 / SURFACE + ATMOSPHERE</div>
             <div className="ref-grid single">
               {refs.slice(2).map((ref) => (
@@ -271,7 +263,7 @@ export function ArtReferenceCanvas() {
                 />
               ))}
             </div>
-          </div>
+          </div>}
         </section>
         <aside className="art-inspector">
           {brief && (
@@ -284,17 +276,17 @@ export function ArtReferenceCanvas() {
                   className="primary-button"
                   onClick={async () => {
                     try {
-                      await api('/api/assistant/images/generate', {
+                      const result = await api<{ executed?: boolean }>('/api/assistant/images/generate', {
                         method: 'POST',
                         body: JSON.stringify({ approval_id: brief.approval_id }),
                       });
-                      setBrief({ ...brief, generated: true });
+                      setBrief({ ...brief, generated: result.executed === true, generation_not_executed: result.executed !== true });
                     } catch {
                       setBrief({ ...brief, generation_error: true });
                     }
                   }}
                 >
-                  {brief.generated ? '생성 요청 완료' : '승인하고 생성'}
+                  {brief.generated ? '생성 작업 완료' : '승인하고 생성'}
                 </button>
               ) : (
                 <small>
@@ -303,6 +295,9 @@ export function ArtReferenceCanvas() {
               )}
               {brief.generation_error && (
                 <small className="brief-error">생성 요청을 처리하지 못했습니다.</small>
+              )}
+              {brief.generation_not_executed && (
+                <small className="brief-error">생성 작업이 실행되지 않았습니다. provider와 권한 상태를 확인해 주세요.</small>
               )}
             </div>
           )}

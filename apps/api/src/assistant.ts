@@ -817,6 +817,22 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return u;
   });
 
+  app.get('/api/assistant/files/:id/content', async (req, reply) => {
+    const { ctx, projectId } = await requireSession(req);
+    const u = await ctx.store.getUpload(projectId, (req.params as any).id);
+    if (!u || u.state === 'DELETED') return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    try {
+      const bytes = await storage.read(u.storage_key);
+      return reply
+        .header('Content-Type', u.mime)
+        .header('Content-Length', String(bytes.length))
+        .header('Cache-Control', 'private, max-age=3600')
+        .send(bytes);
+    } catch {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    }
+  });
+
   app.post('/api/assistant/files/:id/ingest', async (req, reply) => {
     const { ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
@@ -913,9 +929,15 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const refs = Array.isArray((revision?.snapshot as any)?.references)
       ? (revision!.snapshot as any).references.filter((ref: any) => ref.selected)
       : [];
-    const referenceUploadIds = refs.map((ref: any) => ref.upload_id).filter(Boolean);
+    const candidateUploadIds = refs.map((ref: any) => ref.upload_id).filter(Boolean);
+    const uploads = await ctx.store.getUploadsByIds(projectId, candidateUploadIds);
+    const readyIds = new Set(uploads.filter((upload: any) => upload.state === 'READY').map((upload: any) => upload.id));
+    const usableRefs = refs.filter((ref: any) =>
+      Boolean(ref.upload_id) && readyIds.has(ref.upload_id) && ref.usage !== 'EXCLUDED' && ref.usage !== 'REVIEW_REQUIRED',
+    );
+    const referenceUploadIds = usableRefs.map((ref: any) => ref.upload_id).filter(Boolean);
     const referenceInstructions = Object.fromEntries(
-      refs.map((ref: any) => [ref.upload_id, ref.role + ': ' + ref.note]),
+      usableRefs.map((ref: any) => [ref.upload_id, ref.role + ': ' + ref.note]),
     );
     const providerReady =
       role !== 'reader' &&
@@ -936,9 +958,9 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
             prompt:
               body.request +
               '\n\nArt direction:\n' +
-              refs.map((ref: any) => ref.role + ': ' + ref.note).join('\n'),
+              usableRefs.map((ref: any) => ref.role + ': ' + ref.note).join('\n'),
             negative: '글자, 워터마크, 로고, 저해상도, 왜곡된 손, 어색한 비율',
-            model: process.env.OPENROUTER_IMAGE_MODEL ?? 'openai/gpt-image-2.5-flare',
+            model: 'openai/gpt-image-2.5-flare',
             reference_upload_ids: referenceUploadIds,
             reference_instructions: referenceInstructions,
             evidence: [
@@ -963,11 +985,13 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         role: ref.role,
         usage: ref.usage,
         note: ref.note,
+        ready: Boolean(ref.upload_id && readyIds.has(ref.upload_id)),
       })),
       reference_upload_ids: refs.map((ref: any) => ref.upload_id).filter(Boolean),
       approval_id: approvalId,
       generation_ready: Boolean(approvalId),
-      instructions: refs.map((ref: any) => ref.role + ': ' + ref.note).join('\n'),
+      blocked_reference_count: refs.length - usableRefs.length,
+      instructions: usableRefs.map((ref: any) => ref.role + ': ' + ref.note).join('\n'),
       note: 'ImageBrief 초안입니다. 승인 후 OpenRouter 이미지 생성으로 전달됩니다.',
     };
   });

@@ -4,7 +4,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { UploadStorage } from './uploads.ts';
 
 // 이미지 생성 — OpenRouter 경유 (사용자 지정: GPT image2.5 Flare 계열).
-// /images/generations 우선, 미지원 모델이면 chat/completions + modalities 로 폴백.
+// OpenRouter 전용 이미지 endpoint만 사용한다. 이미지 입력을 지원하지 않는
+// 모델로 chat/completions에 조용히 폴백하지 않는다.
 // 429/5xx는 지수 백오프 재시도, 일일 쿼터와 동시 실행 상한을 둔다 (spec §12).
 
 export interface ImageResult {
@@ -63,10 +64,6 @@ export class OpenRouterImages {
     await this.acquire();
     try {
       return await this.withRetry(() => this.callImages(fullPrompt, references));
-    } catch (e: any) {
-      if (e?.code === 'images_api_unsupported')
-        return this.withRetry(() => this.callChat(fullPrompt, references));
-      throw e;
     } finally {
       this.release();
     }
@@ -93,7 +90,7 @@ export class OpenRouterImages {
     prompt: string,
     references: ImageReferenceInput[],
   ): Promise<ImageResult> {
-    const r = await fetch(`${this.baseUrl}/images/generations`, {
+    const r = await fetch(`${this.baseUrl}/images`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
@@ -118,15 +115,8 @@ export class OpenRouterImages {
       }),
       signal: AbortSignal.timeout(180_000),
     });
-    if (r.status === 404 || r.status === 400) {
-      const body = await r.json().catch(() => ({}));
-      const msg = JSON.stringify(body);
-      if (/not.*support|unsupported|unknown.*endpoint|no.*route/i.test(msg))
-        throw Object.assign(new Error('images api unsupported'), {
-          code: 'images_api_unsupported',
-        });
+    if (r.status === 404 || r.status === 400)
       throw Object.assign(new Error(`openrouter_${r.status}`), { status: r.status });
-    }
     if (!r.ok) throw Object.assign(new Error(`openrouter_${r.status}`), { status: r.status });
     const body = (await r.json()) as any;
     const item = body.data?.[0];

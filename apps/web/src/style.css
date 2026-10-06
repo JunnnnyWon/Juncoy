@@ -2638,6 +2638,35 @@ small {
   letter-spacing: 0;
   margin-top: 5px;
 }
+.art-empty-state {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(420px, 76%);
+  transform: translate(-50%, -50%);
+  padding: 34px;
+  text-align: center;
+  background: rgba(245, 241, 232, 0.92);
+  border: 1px solid #bdb6aa;
+  box-shadow: 0 18px 42px rgba(74, 68, 59, 0.14);
+}
+.art-empty-state h2 {
+  margin-top: 12px;
+  color: #292b29;
+  font-size: 21px;
+  letter-spacing: -0.6px;
+}
+.art-empty-state p {
+  margin: 12px auto 18px;
+  max-width: 320px;
+  color: #70736d;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.art-empty-state .primary-button {
+  background: #9d3735;
+  color: #f5ebe2;
+}
 .art-frame {
   position: absolute;
   padding: 17px;

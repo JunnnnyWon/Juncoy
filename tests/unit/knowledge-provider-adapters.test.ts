@@ -11,7 +11,7 @@ describe('document and image provider adapters', () => {
 
   it('Document Parse preserves the source hash and normalizes HTML text', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ html: '<h1>제목</h1><p>본문</p>', model: 'parse-test' }), {
+      new Response(JSON.stringify({ content: '<h1>제목</h1><p>본문</p>', elements: [{ id: 'el-1', page: 1, category: 'heading', text: '제목' }, { id: 'el-2', page: 1, category: 'paragraph', text: '본문' }], model: 'parse-test' }), {
         status: 200,
         headers: { 'content-type': 'application/json', 'x-request-id': 'req-1' },
       }),
@@ -25,6 +25,8 @@ describe('document and image provider adapters', () => {
     expect(result.text).toContain('본문');
     expect(result.parserVersion).toBe('parse-test');
     expect(result.requestId).toBe('req-1');
+    expect(result.blocks).toHaveLength(2);
+    expect(result.pages).toEqual([{ page: 1, text: '제목\n본문', block_ids: ['el-1', 'el-2'] }]);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect((fetchMock.mock.calls[0]![1] as RequestInit).headers).toMatchObject({
       Authorization: 'Bearer secret',

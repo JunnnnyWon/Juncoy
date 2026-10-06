@@ -16,12 +16,14 @@ import { randomUUID } from 'node:crypto';
 // provider 미설정이면 "생성됐다"고 거짓 보고하지 않고 prompt_only로 보고한다.
 
 const ttl = () => Number(process.env.ASSISTANT_APPROVAL_TTL_MS ?? 600_000);
+const REQUIRED_IMAGE_MODEL = 'openai/gpt-image-2.5-flare';
 
 function imageProvider(): OpenRouterImages | null {
   const key = process.env.OPENROUTER_API_KEY;
-  const model = process.env.OPENROUTER_IMAGE_MODEL;
-  if (!key || !model || process.env.IMAGE_GENERATION_ENABLED !== 'true') return null;
-  return new OpenRouterImages(key, model, Number(process.env.IMAGE_CONCURRENCY ?? 2));
+  const model = process.env.OPENROUTER_IMAGE_MODEL ?? REQUIRED_IMAGE_MODEL;
+  if (!key || process.env.IMAGE_GENERATION_ENABLED !== 'true') return null;
+  if (model !== REQUIRED_IMAGE_MODEL) return null;
+  return new OpenRouterImages(key, REQUIRED_IMAGE_MODEL, Number(process.env.IMAGE_CONCURRENCY ?? 2));
 }
 
 export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
@@ -65,7 +67,7 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
         after: {
           prompt: built.prompt,
           negative: built.negative,
-          model: process.env.OPENROUTER_IMAGE_MODEL,
+          model: REQUIRED_IMAGE_MODEL,
           evidence: built.evidence,
         },
         expiresAt: new Date(Date.now() + ttl()),
@@ -101,6 +103,8 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
         throw new DomainError('QUOTA_EXCEEDED', `일일 생성 한도(${limit}장)에 도달했습니다.`, 429);
 
       const after = approval.after as any;
+      if (after.model !== REQUIRED_IMAGE_MODEL)
+        throw new DomainError('IMAGE_MODEL_MISMATCH', 'GPT Image 2.5 Flare만 사용할 수 있습니다.', 409);
       const jobId = await createImageJob(ctx.store, {
         projectId: ctx.projectId,
         ownerId: ctx.userId,
