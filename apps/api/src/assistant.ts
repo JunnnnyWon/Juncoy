@@ -863,16 +863,34 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return asset;
   });
 
+  app.get('/api/assistant/art-assets/:id/content', async (req, reply) => {
+    const { ctx, projectId } = await requireSession(req);
+    const asset = await ctx.store.getArtReferenceAsset(projectId, (req.params as any).id);
+    if (!asset || asset.upload_state === 'DELETED') return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    try {
+      const bytes = await storage.read(asset.storage_key);
+      if (sha256(bytes) !== asset.sha256) return reply.code(409).send({ error: { code: 'SOURCE_HASH_MISMATCH' } });
+      return reply.header('Content-Type', asset.mime).header('Content-Length', String(bytes.length)).header('Cache-Control', 'private, max-age=3600').send(bytes);
+    } catch {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    }
+  });
+
   app.post('/api/assistant/art-assets/:id/analyze', async (req, reply) => {
     const { ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
-    if (!ctx.model) return reply.code(503).send({ error: { code: 'MODEL_NOT_CONFIGURED' } });
     const asset = await ctx.store.getArtReferenceAsset(projectId, (req.params as any).id);
     if (!asset) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
-    const schema = z.object({ description: z.string(), visible_text: z.array(z.string()), subjects: z.array(z.string()), materials: z.array(z.string()), lighting: z.array(z.string()), palette: z.array(z.string()), confidence_note: z.string() });
-    const result = await ctx.model.structured(schema, { asset_id: asset.id, filename: asset.filename, mime: asset.mime, rights_note: asset.rights_note }, '이미지 자산 메타데이터와 이미 알려진 관찰만 바탕으로 아트 분석 초안을 작성한다. 권리, 승인, canonical 여부는 추정하지 않는다.');
-    const extractionId = await ctx.store.saveArtExtraction({ assetId: asset.id, revision: asset.sha256, model: result.model, observations: result.result, confidence: result.result.confidence_note });
-    return { id: extractionId, status: 'DRAFT', model: result.model, observations: result.result };
+    if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_VISION_ENABLED !== 'true')
+      return reply.code(503).send({ error: { code: 'VISION_NOT_CONFIGURED' } });
+    const bytes = await storage.read(asset.storage_key);
+    if (sha256(bytes) !== asset.sha256) return reply.code(409).send({ error: { code: 'SOURCE_HASH_MISMATCH' } });
+    const observation = await new OpenRouterVision(
+      process.env.OPENROUTER_API_KEY,
+      process.env.OPENROUTER_VISION_MODEL ?? 'google/gemini-3.7-flash',
+    ).analyzeImage(bytes, asset.mime);
+    const extractionId = await ctx.store.saveArtExtraction({ assetId: asset.id, revision: asset.sha256, model: observation.model, observations: observation, ocr: { visible_text: observation.visible_text }, confidence: observation.confidence_note });
+    return { id: extractionId, status: 'DRAFT', model: observation.model, observations: observation };
   });
 
   app.post('/api/assistant/art-assets/:id/canonical-review', async (req, reply) => {
