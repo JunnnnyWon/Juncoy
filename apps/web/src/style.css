@@ -2942,6 +2942,21 @@ small {
   background: #202326;
   border: 1px solid #3b4741;
 }
+.asset-review-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  color: #9ca39b;
+  font-size: 9px;
+}
+.asset-review-button {
+  padding: 5px 7px;
+  color: #e2c0b8;
+  border: 1px solid #6e3b39;
+  font-size: 9px;
+}
 .asset-observation-card p {
   margin-top: 9px;
   color: #c0c2bb;

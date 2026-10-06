@@ -9,6 +9,7 @@ interface RefCard {
   id: string;
   upload_id?: string;
   art_asset_id?: string;
+  canonical_state?: string;
   name: string;
   url: string;
   role: Role;
@@ -50,6 +51,9 @@ export function ArtReferenceCanvas() {
   const inputRef = useRef<HTMLInputElement>(null);
   const selected = refs.find((ref) => ref.id === selectedId) ?? refs[0];
   const selectedCount = useMemo(() => refs.filter((ref) => ref.selected).length, [refs]);
+  useEffect(() => {
+    setAssetAnalysis(null);
+  }, [selectedId]);
   useEffect(() => {
     void (async () => {
       try {
@@ -472,6 +476,25 @@ export function ArtReferenceCanvas() {
               >
                 {assetAnalysisBusy ? 'Gemini 분석 중…' : selected.art_asset_id ? 'Gemini로 이미지 분석' : '서버 업로드 후 분석 가능'}
               </button>
+              {selected.art_asset_id && (
+                <div className="asset-review-row">
+                  <span>자산 상태: {selected.canonical_state ?? 'NONE'}</span>
+                  {selected.canonical_state !== 'APPROVED_CANONICAL' && (
+                    <button
+                      className="asset-review-button"
+                      onClick={async () => {
+                        const result = await api<any>('/api/assistant/art-assets/' + selected.art_asset_id + '/canonical-review', {
+                          method: 'POST',
+                          body: JSON.stringify({ state: 'APPROVED_CANONICAL' }),
+                        });
+                        if (result.reviewed) update({ canonical_state: result.canonical_state });
+                      }}
+                    >
+                      canonical 승인
+                    </button>
+                  )}
+                </div>
+              )}
               {assetAnalysis && selected.art_asset_id && (
                 <div className="asset-observation-card">
                   <span className="eyebrow">VISION OBSERVATION / DRAFT</span>
