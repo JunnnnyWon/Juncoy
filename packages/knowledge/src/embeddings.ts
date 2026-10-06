@@ -18,6 +18,7 @@ export class UpstageEmbeddings {
         'content-type': 'application/json',
       },
       body: JSON.stringify({ model, input }),
+      signal: AbortSignal.timeout(60_000),
     });
     const body = (await res.json()) as any;
     if (!res.ok) throw new Error(`upstage embeddings ${res.status}: ${JSON.stringify(body)}`);
