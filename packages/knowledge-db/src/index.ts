@@ -511,6 +511,36 @@ export class KnowledgeStore {
         AND b.project_id=${projectId} AND b.owner_id=${ownerId}`, this.db);
   }
 
+  async approveArtBoardAnalysis(input: {
+    projectId: string;
+    ownerId: string;
+    boardId: string;
+    revision: number;
+    analysisId: string;
+    approvedBy: string;
+  }) {
+    return this.db.transaction().execute(async (tx) => {
+      const analysis = await first<any>(sql`SELECT a.* FROM art_board_analyses a
+        JOIN art_boards b ON b.id=a.board_id
+        WHERE a.id=${input.analysisId} AND a.board_id=${input.boardId} AND a.revision=${input.revision}
+          AND b.project_id=${input.projectId} AND b.owner_id=${input.ownerId} FOR UPDATE`, tx);
+      if (!analysis) return { kind: 'NOT_FOUND' as const };
+      const latest = await first<{ version: number }>(sql`SELECT coalesce(max(version), 0)::int AS version
+        FROM style_profiles WHERE project_id=${input.projectId}`, tx);
+      const version = Number(latest?.version ?? 0) + 1;
+      await sql`INSERT INTO style_profiles(id, project_id, version, body, approved_by, approved_at, epoch)
+        VALUES (${randomUUID()}, ${input.projectId}, ${version}, ${analysis.result}, ${input.approvedBy}, now(), ${version})`.execute(tx);
+      await sql`UPDATE art_board_analyses SET status='APPROVED' WHERE id=${analysis.id}`.execute(tx);
+      return { kind: 'APPROVED' as const, version, result: analysis.result };
+    });
+  }
+
+  async getApprovedStyleProfile(projectId: string) {
+    return first<any>(sql`SELECT version, body, approved_by, approved_at FROM style_profiles
+      WHERE project_id=${projectId} AND approved_by IS NOT NULL AND approved_at IS NOT NULL
+      ORDER BY version DESC LIMIT 1`, this.db);
+  }
+
   /** 대화는 owner+project 스코프로만 조회 — id만으로 타인 대화를 열지 않는다. */
   async getConversation(projectId: string, conversationId: string, ownerId: string) {
     return first<{ id: string; title: string; archived: boolean }>(

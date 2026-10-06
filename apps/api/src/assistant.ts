@@ -967,6 +967,22 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return analysis;
   });
 
+  app.post('/api/assistant/art-boards/:id/analysis/:revision/approve', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const body = z.object({ analysis_id: z.string().uuid() }).parse(req.body ?? {});
+    const result = await ctx.store.approveArtBoardAnalysis({
+      projectId,
+      ownerId: session.user_id,
+      boardId: (req.params as any).id,
+      revision: Number((req.params as any).revision),
+      analysisId: body.analysis_id,
+      approvedBy: session.user_id,
+    });
+    if (result.kind === 'NOT_FOUND') return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return result;
+  });
+
   app.post('/api/assistant/art-boards/:id/image-briefs/preview', async (req, reply) => {
     const { session, ctx, projectId, role } = await requireSession(req);
     const board = await ctx.store.getArtBoard(projectId, session.user_id, (req.params as any).id);

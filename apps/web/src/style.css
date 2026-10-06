@@ -2827,6 +2827,15 @@ small {
   font-size: 10px;
   line-height: 1.6;
 }
+.analysis-card .secondary-button {
+  margin-top: 13px;
+  width: 100%;
+}
+.analysis-approved {
+  margin-top: 12px;
+  color: #9fc7ab;
+  font-size: 10px;
+}
 .analysis-rule-list {
   margin-top: 12px;
   border-top: 1px solid #303438;

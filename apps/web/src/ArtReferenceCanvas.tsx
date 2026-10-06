@@ -332,6 +332,27 @@ export function ArtReferenceCanvas() {
                 <span>DRAFT</span>
               </div>
               <p>{analysis.result?.summary}</p>
+              {analysis.status === 'DRAFT' && (
+                <button
+                  className="secondary-button"
+                  onClick={async () => {
+                    try {
+                      const approved = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + revision + '/approve', {
+                        method: 'POST',
+                        body: JSON.stringify({ analysis_id: analysis.id }),
+                      });
+                      setAnalysis({ ...analysis, status: 'APPROVED', style_version: approved.version });
+                    } catch {
+                      window.alert('Art Bible 승인에 실패했습니다.');
+                    }
+                  }}
+                >
+                  이 분석을 Art Bible로 승인
+                </button>
+              )}
+              {analysis.status === 'APPROVED' && (
+                <small className="analysis-approved">Art Bible v{analysis.style_version}로 승인됨</small>
+              )}
               <div className="analysis-rule-list">
                 {(analysis.result?.common_rules ?? []).slice(0, 4).map((rule: any, index: number) => (
                   <div key={index}><strong>{rule.category}</strong><span>{rule.statement}</span></div>
