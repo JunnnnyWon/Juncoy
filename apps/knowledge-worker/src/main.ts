@@ -28,6 +28,22 @@ const NOTION_STRUCTURE_MS = 900_000;
 
 const log = (m: string) => process.stdout.write(`knowledge-worker ${m}\n`);
 
+/** 주기 루프 — 이전 실행이 아직 끝나지 않았으면 이번 틱은 건너뛴다(중첩 방지). */
+const every = (ms: number, fn: () => Promise<void>) => {
+  let busy = false;
+  const tick = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      await fn();
+    } finally {
+      busy = false;
+    }
+  };
+  setInterval(() => void tick(), ms);
+  void tick();
+};
+
 const main = async () => {
   const config = loadKnowledgeConfig();
   if (config.KNOWLEDGE_ENABLED !== 'true') {
@@ -64,8 +80,7 @@ const main = async () => {
       process.stderr.write(`indexer tick: ${e}\n`);
     }
   };
-  setInterval(() => void runIndex(), INDEX_MS);
-  void runIndex();
+  every(INDEX_MS, runIndex);
 
   // ── Juncoy 회의 동기화 루프 (§6.4, 5초) ────────────────────────
   if (config.MEETING_DATABASE_URL) {
@@ -84,8 +99,7 @@ const main = async () => {
         process.stderr.write(`meeting sync: ${e}\n`);
       }
     };
-    setInterval(() => void runMeetings(), JUNCOY_MS);
-    void runMeetings();
+    every(JUNCOY_MS, runMeetings);
   } else log('MEETING_DATABASE_URL unset — meeting collector off');
 
   // ── GitHub ref 대조 루프 (§6.2, 60초 — webhook 실시간은 신호로만) ──
@@ -126,8 +140,7 @@ const main = async () => {
         process.stderr.write(`github loop: ${e}\n`);
       }
     };
-    setInterval(() => void runGitHub(), GITHUB_MS);
-    void runGitHub();
+    every(GITHUB_MS, runGitHub);
   } else log('github auth unset — github collector off');
 
   // ── Notion 증분(2분)/구조(15분) 대조 루프 (§6.1) ────────────────
@@ -149,9 +162,8 @@ const main = async () => {
         process.stderr.write(`notion loop: ${e}\n`);
       }
     };
-    setInterval(() => void runNotion(false), NOTION_INCREMENTAL_MS);
-    setInterval(() => void runNotion(true), NOTION_STRUCTURE_MS);
-    void runNotion(true); // 첫 실행은 구조 동기로 seed
+    every(NOTION_INCREMENTAL_MS, () => runNotion(false));
+    every(NOTION_STRUCTURE_MS, () => runNotion(true));
   } else log('NOTION_TOKEN unset — notion collector off');
 
   // ── webhook 'refresh' 잡 소비 — 수신 신호를 즉시 대조로 변환 ────────
@@ -197,8 +209,7 @@ const main = async () => {
       process.stderr.write(`refresh loop: ${e}\n`);
     }
   };
-  setInterval(() => void runRefresh(), 5_000);
-  void runRefresh();
+  every(5_000, runRefresh);
 };
 
 main().catch((e) => {
