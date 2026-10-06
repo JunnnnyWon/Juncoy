@@ -875,6 +875,46 @@ export class KnowledgeStore {
     );
   }
 
+  async createArtReferenceAsset(input: {
+    projectId: string;
+    uploadId: string;
+    label?: string;
+    rightsNote?: string;
+    createdBy: string;
+  }) {
+    const upload = await first<any>(sql`SELECT id, mime, bytes, sha256, storage_key, state
+      FROM knowledge_uploads WHERE id=${input.uploadId} AND project_id=${input.projectId}`, this.db);
+    if (!upload || upload.state === 'DELETED' || !String(upload.mime).startsWith('image/')) return null;
+    const existing = await first<any>(sql`SELECT id FROM art_reference_assets
+      WHERE project_id=${input.projectId} AND upload_id=${input.uploadId}`, this.db);
+    if (existing) return existing.id;
+    const id = randomUUID();
+    await sql`INSERT INTO art_reference_assets(
+      id, project_id, upload_id, source_label, rights_note, state, canonical_state, created_by
+    ) VALUES (${id}, ${input.projectId}, ${input.uploadId}, ${input.label ?? ''}, ${input.rightsNote ?? ''}, ${upload.state === 'READY' ? 'READY' : 'ANALYZING'}, 'NONE', ${input.createdBy})`.execute(this.db);
+    return id;
+  }
+
+  async getArtReferenceAsset(projectId: string, assetId: string) {
+    return first<any>(sql`SELECT a.*, u.filename, u.mime, u.bytes, u.sha256, u.storage_key, u.state AS upload_state
+      FROM art_reference_assets a JOIN knowledge_uploads u ON u.id=a.upload_id
+      WHERE a.id=${assetId} AND a.project_id=${projectId}`, this.db);
+  }
+
+  async saveArtExtraction(input: { assetId: string; revision: string; model: string; observations: unknown; ocr?: unknown; confidence?: string }) {
+    const id = randomUUID();
+    await sql`INSERT INTO art_extractions(id, asset_id, asset_revision, extractor_version, observations, ocr, machine_confidence, status)
+      VALUES (${id}, ${input.assetId}, ${input.revision}, ${input.model}, ${json(input.observations)}, ${json(input.ocr ?? {})}, ${input.confidence ?? null}, 'DRAFT')`.execute(this.db);
+    await sql`UPDATE art_reference_assets SET state='READY', updated_at=now() WHERE id=${input.assetId}`.execute(this.db);
+    return id;
+  }
+
+  async reviewArtReferenceAsset(projectId: string, assetId: string, userId: string, state: string, rightsNote?: string) {
+    const result = await sql`UPDATE art_reference_assets SET canonical_state=${state}, rights_note=coalesce(${rightsNote ?? null}, rights_note), updated_at=now()
+      WHERE id=${assetId} AND project_id=${projectId}`.execute(this.db);
+    return Number(result.numAffectedRows ?? 0) > 0;
+  }
+
   async updateUpload(
     uploadId: string,
     patch: { state?: string; error?: string | null; storageKey?: string; documentId?: string },
