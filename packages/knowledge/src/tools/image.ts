@@ -70,6 +70,9 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
           prompt: built.prompt,
           negative: built.negative,
           model: REQUIRED_IMAGE_MODEL,
+          reference_upload_ids: q.reference_upload_ids,
+          reference_instructions: q.reference_instructions,
+          style_version: built.style_version,
           evidence: built.evidence,
         },
         expiresAt: new Date(Date.now() + ttl()),
@@ -81,6 +84,7 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
         negative: built.negative,
         evidence: built.evidence,
         style_approved: built.style_approved,
+        style_version: built.style_version,
         mode: 'preview',
       };
     },

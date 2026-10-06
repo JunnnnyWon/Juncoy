@@ -291,6 +291,10 @@ export function ArtReferenceCanvas() {
               <span className="eyebrow">IMAGEBRIEF / DRAFT</span>
               <strong>{brief.request}</strong>
               <p>{brief.instructions || '선택된 레퍼런스가 없습니다.'}</p>
+              <small className="brief-meta">
+                {brief.style_approved ? 'Art Bible v' + brief.style_version + ' 적용' : '승인된 Art Bible 없음'}
+                {' · '}레퍼런스 {brief.reference_upload_ids?.length ?? 0}개
+              </small>
               {brief.approval_id ? (
                 <button
                   className="primary-button"

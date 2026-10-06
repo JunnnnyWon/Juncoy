@@ -2773,6 +2773,11 @@ small {
 .brief-card small {
   display: block;
 }
+.brief-card .brief-meta {
+  color: #c6c9bf;
+  border-top: 1px solid #34373a;
+  padding-top: 9px;
+}
 .brief-card strong {
   margin: 10px 0 8px;
   font-size: 12px;
