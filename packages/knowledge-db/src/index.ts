@@ -92,7 +92,7 @@ export class KnowledgeStore {
     await sql`
       INSERT INTO knowledge_jobs(id, key, kind, document_id, payload, due_at)
       VALUES (${randomUUID()}, ${key}, ${kind}, ${opts?.documentId ?? null}, ${json(payload)},
-              ${opts?.dueAt ?? null})
+              ${opts?.dueAt ?? new Date()})
       ON CONFLICT (key) DO NOTHING`.execute(this.db);
   }
   /** 늦게 도착한 이전 세대 worker 결과가 current를 덮어쓰지 못하게 generation을 올린다. */
