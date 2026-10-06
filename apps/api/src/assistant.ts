@@ -778,7 +778,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
             vision,
           },
         });
-        await ctx.store.createUploadVersion({
+        const uploadVersionId = await ctx.store.createUploadVersion({
           uploadId: u.id,
           extractorVersion: '2',
           sourceRevision: u.sha256,
@@ -792,6 +792,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
             .update(JSON.stringify(extracted.normalized))
             .digest('hex'),
         });
+        await ctx.store.saveDocumentParseStructure(uploadVersionId, extracted.normalized);
         await queueExtract(ctx.store, doc!.id, u.sha256);
         await ctx.store.updateUpload(u.id, { state: 'INDEXING', documentId: doc!.id });
       } catch (err: any) {

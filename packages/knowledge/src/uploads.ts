@@ -126,6 +126,8 @@ export async function extractUpload(
             source_sha256: parsed.sourceSha256,
             request_id: parsed.requestId,
           },
+          blocks: parsed.blocks,
+          pages: parsed.pages,
         },
         parserKind: 'upstage_document_parse' as const,
         parseStatus: 'READY' as const,
@@ -138,6 +140,8 @@ export async function extractUpload(
           text,
           mime,
           parser: { kind: 'local_pdfjs', fallback: true },
+          blocks: [],
+          pages: [],
         },
         parserKind: 'local_pdfjs' as const,
         parseStatus: 'FALLBACK' as const,
@@ -148,7 +152,7 @@ export async function extractUpload(
   const text = await extractUploadText(buf, mime);
   return {
     text,
-    normalized: { text, mime, parser: { kind: 'local' } },
+    normalized: { text, mime, parser: { kind: 'local' }, blocks: [], pages: [] },
     parserKind: 'local' as const,
     parseStatus: 'NOT_REQUESTED' as const,
   };

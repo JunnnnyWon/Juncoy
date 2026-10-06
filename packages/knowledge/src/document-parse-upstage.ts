@@ -8,6 +8,16 @@ export interface DocumentParseResult {
   sourceSha256: string;
   requestId?: string;
   warnings: string[];
+  blocks: {
+    block_id: string;
+    page: number | null;
+    ordinal: number;
+    block_type: string;
+    text: string;
+    html?: string;
+    metadata: Record<string, unknown>;
+  }[];
+  pages: { page: number; text: string; block_ids: string[] }[];
 }
 
 export interface DocumentParseOptions {
@@ -68,6 +78,24 @@ export class UpstageDocumentParse {
       sourceSha256,
       requestId: response.headers.get('x-request-id') ?? undefined,
       warnings: [],
+      blocks: Array.isArray(body.blocks)
+        ? body.blocks.map((block: any, index: number) => ({
+            block_id: String(block.block_id ?? block.id ?? 'block-' + index),
+            page: typeof block.page === 'number' ? block.page : null,
+            ordinal: Number(block.ordinal ?? index),
+            block_type: String(block.block_type ?? block.type ?? 'unknown'),
+            text: String(block.text ?? ''),
+            html: typeof block.html === 'string' ? block.html : undefined,
+            metadata: block.metadata && typeof block.metadata === 'object' ? block.metadata : {},
+          }))
+        : [],
+      pages: Array.isArray(body.pages)
+        ? body.pages.map((page: any, index: number) => ({
+            page: Number(page.page ?? index + 1),
+            text: String(page.text ?? ''),
+            block_ids: Array.isArray(page.block_ids) ? page.block_ids.map(String) : [],
+          }))
+        : [],
     };
   }
 }

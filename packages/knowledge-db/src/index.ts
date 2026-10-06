@@ -818,16 +818,45 @@ export class KnowledgeStore {
     sourceSha256: string;
     normalizedHash: string;
   }) {
+    const id = randomUUID();
     await sql`INSERT INTO knowledge_upload_versions(
       id, upload_id, extractor_version, source_revision, state, parser_kind,
       parser_version, parse_status, parse_request_id, parse_latency_ms,
       parse_error_code, source_sha256, normalized_hash
     ) VALUES (
-      ${randomUUID()}, ${v.uploadId}, ${v.extractorVersion}, ${v.sourceRevision},
+      ${id}, ${v.uploadId}, ${v.extractorVersion}, ${v.sourceRevision},
       ${v.parseStatus}, ${v.parserKind}, ${v.parserVersion ?? null}, ${v.parseStatus},
       ${v.parseRequestId ?? null}, ${v.parseLatencyMs ?? null}, ${v.parseErrorCode ?? null},
       ${v.sourceSha256}, ${v.normalizedHash}
     )`.execute(this.db);
+    return id;
+  }
+
+  async saveDocumentParseStructure(uploadVersionId: string, normalized: any) {
+    const blocks = Array.isArray(normalized?.blocks) ? normalized.blocks : [];
+    const pages = Array.isArray(normalized?.pages) ? normalized.pages : [];
+    for (const block of blocks) {
+      await sql`INSERT INTO document_parse_blocks(id, upload_version_id, block_id, page_number, ordinal, block_type, text, html, metadata, content_hash)
+        VALUES (${randomUUID()}, ${uploadVersionId}, ${block.block_id}, ${block.page ?? null}, ${block.ordinal ?? 0}, ${block.block_type ?? 'unknown'}, ${block.text ?? ''}, ${block.html ?? null}, ${json(block.metadata ?? {})}, ${createHash(
+          'sha256',
+        )
+          .update(String(block.text ?? ''))
+          .digest('hex')})
+        ON CONFLICT (upload_version_id, block_id) DO UPDATE SET text=excluded.text, html=excluded.html, metadata=excluded.metadata, content_hash=excluded.content_hash`.execute(
+        this.db,
+      );
+    }
+    for (const page of pages) {
+      await sql`INSERT INTO document_parse_pages(id, upload_version_id, page_number, text, block_ids, page_hash)
+        VALUES (${randomUUID()}, ${uploadVersionId}, ${page.page}, ${page.text ?? ''}, ${json(page.block_ids ?? [])}, ${createHash(
+          'sha256',
+        )
+          .update(String(page.text ?? ''))
+          .digest('hex')})
+        ON CONFLICT (upload_version_id, page_number) DO UPDATE SET text=excluded.text, block_ids=excluded.block_ids, page_hash=excluded.page_hash`.execute(
+        this.db,
+      );
+    }
   }
 
   async uploadQuotaUsed(projectId: string) {
