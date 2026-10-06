@@ -80,7 +80,7 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
     name: 'image.generate',
     kind: 'commit',
     description: '승인된 이미지 생성을 OpenRouter로 실행한다',
-    input: z.strictObject({ approval_id: z.string().uuid() }),
+    input: z.strictObject({ approval_id: z.string().uuid(), after: z.any().optional() }),
     minRole: 'editor',
     auditKind: 'image.generate',
     async run(ctx, q) {

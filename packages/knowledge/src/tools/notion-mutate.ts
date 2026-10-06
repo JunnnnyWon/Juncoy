@@ -297,8 +297,11 @@ export function registerNotionMutateTools(reg: ToolRegistry) {
     },
   });
 
-  // ── commit — 승인 레코드의 after만 실행. 입력은 approval_id뿐. ──────
-  const commitInput = z.strictObject({ approval_id: z.string().uuid() });
+  // ── commit — 승인 레코드의 after만 실행. after는 호출자가 같이 넘길 수 있다. ──
+  const commitInput = z.strictObject({
+    approval_id: z.string().uuid(),
+    after: z.any().optional(),
+  });
 
   const commitCreateOrUpdate = async (ctx: ToolContext, approvalId: string, kindPrefix: string) => {
     const { approval, alreadyDone } = await approvalOrThrow(ctx, approvalId);
