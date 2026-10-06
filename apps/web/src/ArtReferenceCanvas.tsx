@@ -57,6 +57,12 @@ export function ArtReferenceCanvas() {
           const detail = await api<any>('/api/assistant/art-boards/' + boards[0].id);
           const saved = detail.revision?.snapshot?.references;
           if (Array.isArray(saved)) setRefs(saved);
+          const savedViewport = detail.revision?.snapshot?.viewport;
+          if (savedViewport) {
+            if (typeof savedViewport.zoom === 'number') setZoom(savedViewport.zoom);
+            if (typeof savedViewport.x === 'number' && typeof savedViewport.y === 'number')
+              setPan({ x: savedViewport.x, y: savedViewport.y });
+          }
         } else {
           const created = await api<{ id: string }>('/api/assistant/art-boards', {
             method: 'POST',
@@ -79,7 +85,7 @@ export function ArtReferenceCanvas() {
         '/api/assistant/art-boards/' + boardId + '/revisions',
         {
           method: 'POST',
-          body: JSON.stringify({ base_revision: revision, snapshot: { references: refs } }),
+          body: JSON.stringify({ base_revision: revision, snapshot: { references: refs, viewport: { ...pan, zoom } } }),
         },
       );
       setRevision(Number(result.revision));
@@ -95,7 +101,7 @@ export function ArtReferenceCanvas() {
     try {
       const saved = await api<{ revision: number }>(
         '/api/assistant/art-boards/' + boardId + '/revisions',
-        { method: 'POST', body: JSON.stringify({ base_revision: revision, snapshot: { references: refs } }) },
+        { method: 'POST', body: JSON.stringify({ base_revision: revision, snapshot: { references: refs, viewport: { ...pan, zoom } } }) },
       );
       savedRevision = Number(saved.revision);
       setRevision(savedRevision);
