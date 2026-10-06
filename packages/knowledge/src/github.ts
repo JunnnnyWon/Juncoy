@@ -1,4 +1,5 @@
 import { createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { KnowledgeStore, sql, first } from '@meeting/knowledge-db';
 import { documentKeys } from '@meeting/contracts';
 import { queueExtract } from './indexer.ts';
@@ -116,6 +117,23 @@ export class GitHubRest {
   blob(repo: string, sha: string) {
     return this.request(`/repos/${repo}/git/blobs/${sha}`);
   }
+  /** ref의 tarball — codeload 리다이렉트를 따라간다. 첫 백필용 대용량 응답. */
+  async tarball(repo: string, ref: string) {
+    const res = await this.fetchImpl(
+      `https://api.github.com/repos/${repo}/tarball/${encodeURIComponent(ref)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${await this.tokens.token()}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        signal: AbortSignal.timeout(300_000),
+        redirect: 'follow',
+      },
+    );
+    if (!res.ok) return { status: res.status, buf: null };
+    return { status: res.status, buf: Buffer.from(await res.arrayBuffer()) };
+  }
 }
 
 interface TreeEntry {
@@ -123,6 +141,41 @@ interface TreeEntry {
   type: 'blob' | 'tree' | 'commit';
   sha: string;
   size?: number;
+}
+
+/** 최소 ustar 파서 — ref tarball 백필용. prefix 디렉터리 엔트리를 벗겨 path→내용 맵을 만든다. */
+export function untar(buf: Buffer): Map<string, Buffer> {
+  const out = new Map<string, Buffer>();
+  let off = 0;
+  let prefix = '';
+  const norm = (p: string) => p.replace(/^\.\//, '').replace(/\/$/, '');
+  while (off + 512 <= buf.length) {
+    const name = buf.subarray(off, off + 100).toString('utf8').replace(/\0.*$/, '');
+    if (!name) break; // end blocks
+    const size = parseInt(buf.subarray(off + 124, off + 136).toString('utf8').trim(), 8) || 0;
+    const type = String.fromCharCode(buf[off + 156]);
+    const pfx = buf.subarray(off + 345, off + 500).toString('utf8').replace(/\0.*$/, '');
+    const full = norm(pfx ? `${pfx}/${name}` : name);
+    off += 512;
+    if ((type === '0' || type === '') && full) {
+      const content = buf.subarray(off, off + size);
+      // 첫 경로 구성 요소(<repo>-<sha>)를 벗긴 상대 경로로 저장한다.
+      const rel = prefix
+        ? full === prefix
+          ? ''
+          : full.startsWith(prefix + '/')
+            ? full.slice(prefix.length + 1)
+            : full
+        : full.includes('/')
+          ? full.slice(full.indexOf('/') + 1)
+          : full;
+      if (rel) out.set(rel, content);
+    } else if (type === '5' && !prefix && full) {
+      prefix = full; // 첫 디렉터리 엔트리가 <repo>-<sha>/ 형태의 루트
+    }
+    off += Math.ceil(size / 512) * 512;
+  }
+  return out;
 }
 
 export class GitHubCollector {
@@ -213,6 +266,17 @@ export class GitHubCollector {
       `github ${this.repo}@${ref} head=${head.slice(0, 8)} files=${Object.keys(tree).length} +${added.length} ~${modified.length} -${removed.length}\n`,
     );
     const work = [...added, ...modified];
+    // 첫 동기화(빈 cursor)는 blob GET × N 대신 tarball 1회 다운로드로 수집한다.
+    let tarContents: Map<string, Buffer> | null = null;
+    if (!prev.head_sha && work.length > 0) {
+      const t = await this.rest.tarball(this.repo, ref);
+      if (t.status === 200 && t.buf) {
+        tarContents = untar(gunzipSync(t.buf));
+        process.stdout.write(
+          `github ${this.repo}@${ref} tarball ${t.buf.length}B → ${tarContents.size} files\n`,
+        );
+      } else process.stderr.write(`github ${this.repo}@${ref} tarball ${t.status} — blob 경로로 대체\n`);
+    }
     // 파일당 REST 1회 + DB 왕복 수 회라 직렬은 느리다 — 8개씩 병렬 수집.
     const PAR = 8;
     for (let i = 0; i < work.length; i += PAR) {
@@ -220,7 +284,7 @@ export class GitHubCollector {
         process.stdout.write(`github ${this.repo}@${ref} ingest ${i}/${work.length}\n`);
       await Promise.all(
         work.slice(i, i + PAR).map((p) =>
-          this.ingestFile(ref, p, tree[p], head).catch((e) => {
+          this.ingestFile(ref, p, tree[p], head, tarContents?.get(p)).catch((e) => {
             process.stderr.write(`github ingest ${p}: ${e}\n`);
           }),
         ),
@@ -238,7 +302,13 @@ export class GitHubCollector {
   }
 
   /** blob 내용을 문서로 기록. LFS 포인터는 내용을 읽은 것으로 표시하지 않는다 (§6.2-8). */
-  private async ingestFile(ref: string, path: string, blobSha: string, head: string) {
+  private async ingestFile(
+    ref: string,
+    path: string,
+    blobSha: string,
+    head: string,
+    tarContent?: Buffer,
+  ) {
     const key = documentKeys.githubFile(this.repoId, ref, path);
     const ok = await this.store.markDocumentDirty(this.sourceId, key, {
       repo: this.repo,
@@ -263,12 +333,16 @@ export class GitHubCollector {
       );
       return;
     }
-    const b = await this.rest.blob(this.repo, blobSha);
+    let buf: Buffer | null = tarContent ?? null;
+    if (!buf) {
+      const b = await this.rest.blob(this.repo, blobSha);
+      if (b.status === 200 && b.body?.encoding === 'base64' && typeof b.body.content === 'string')
+        buf = Buffer.from(b.body.content.replace(/\n/g, ''), 'base64');
+    }
     let text: string | null = null;
     let lfsPointer = false;
     let oversize = false;
-    if (b.status === 200 && b.body?.encoding === 'base64' && typeof b.body.content === 'string') {
-      const buf = Buffer.from(b.body.content.replace(/\n/g, ''), 'base64');
+    if (buf) {
       // git-lfs pointer 판별 (version https://git-lfs.github.com/spec/v1 헤더)
       const head = buf.subarray(0, 200).toString('utf8');
       // NUL 바이트가 있으면 바이너리 — utf8 강제 변환은 pg text가 거부하는 \u0000을 만든다.
