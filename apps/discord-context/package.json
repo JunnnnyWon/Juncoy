@@ -1,0 +1,12 @@
+{
+  "name": "@meeting/discord-context",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@meeting/contracts": "workspace:*",
+    "@meeting/knowledge": "workspace:*",
+    "@meeting/knowledge-db": "workspace:*",
+    "@meeting/providers": "workspace:*"
+  }
+}
