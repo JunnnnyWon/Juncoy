@@ -264,7 +264,16 @@ export class NotionCollector {
     for (const s of scopes) {
       const id = s.scope_key.split(':').slice(1).join(':');
       try {
-        if (s.scope_key.startsWith('database:')) {
+        if (s.scope_key === 'root:workspace') {
+          // 워크스페이스 전체 — integration에 공유된 모든 페이지를 search로 열거.
+          let cursor: string | undefined;
+          do {
+            const r = await this.rest.searchPages(cursor);
+            if (r.status !== 200) break;
+            for (const p of r.body.results ?? []) await this.ingestPage(p.id);
+            cursor = r.body.has_more ? r.body.next_cursor : undefined;
+          } while (cursor);
+        } else if (s.scope_key.startsWith('database:')) {
           let cursor: string | undefined;
           do {
             const r = await this.rest.databaseQuery(id, cursor);
