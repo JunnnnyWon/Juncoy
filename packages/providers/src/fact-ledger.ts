@@ -323,16 +323,38 @@ export async function runFactLedger(
           },
           CLAIM_PROMPT,
         );
-        if (check.kind !== f.kind) throw new DomainError('FACT_SEMANTIC_REJECTED');
-        if (check.assignment !== 'EXPLICIT') {
+        // A kind disagreement downgrades the commitment instead of voiding the run.
+        if (check.kind !== f.kind) {
+          f.kind = check.kind;
+          f.verification = 'DOWNGRADED';
+          f.section =
+            check.kind === 'ACTION'
+              ? 'action_items'
+              : check.kind === 'DECISION'
+                ? 'decisions'
+                : check.kind === 'UNCERTAIN'
+                  ? 'open_questions'
+                  : 'topics';
+          f.reason_code = 'CLAIM_KIND_DOWNGRADED';
+        } else {
+          f.reason_code = 'INDEPENDENT_CLAIM_CHECK';
+        }
+        if (f.kind !== 'ACTION') {
           f.owner_user_id = null;
           f.owner_evidence = null;
-        }
-        if (check.deadline !== 'EXPLICIT') {
           f.due_date = null;
+          f.due_date_text = null;
           f.due_evidence = null;
+        } else {
+          if (check.assignment !== 'EXPLICIT') {
+            f.owner_user_id = null;
+            f.owner_evidence = null;
+          }
+          if (check.deadline !== 'EXPLICIT') {
+            f.due_date = null;
+            f.due_evidence = null;
+          }
         }
-        f.reason_code = 'INDEPENDENT_CLAIM_CHECK';
       },
     );
     let relations: { links: import('@meeting/contracts').FactRelationsDTO['links'] } = {
@@ -386,6 +408,7 @@ export async function runFactLedger(
           .sort((a, b) => a.later_fact_key - b.later_fact_key),
       };
     }
+    const confirmed: typeof relations.links = [];
     await orderedBatches(relations.links, engine.concurrency, async (link, index) => {
       const check = await stage(
         `relation-check:${index}`,
@@ -396,8 +419,10 @@ export async function runFactLedger(
         },
         'Judge whether the later Korean utterance explicitly cancels, replaces or changes THIS earlier decision or task. A possible future suggestion, hypothetical change, or a different task is UNRELATED. An explicit refusal of the assigned task is a change. Return JSON only; no reasoning.',
       );
-      if (check.verdict !== 'EXPLICIT_CHANGE') throw new DomainError('RELATION_SEMANTIC_REJECTED');
+      // Only confirmed links survive; a rejected link leaves both facts visible.
+      if (check.verdict === 'EXPLICIT_CHANGE') confirmed.push(link);
     });
+    relations = { links: confirmed.sort((a, b) => a.later_fact_key - b.later_fact_key) };
     const dispositions = integrateFacts(facts, relations, sources);
     const rendered = renderFactLedger(facts, dispositions, sorted, descriptor.transcript_version, {
       participants: input.participants,

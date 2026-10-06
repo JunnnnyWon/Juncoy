@@ -22,8 +22,8 @@ const schema = z.object({
   UPSTAGE_SUMMARY_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(3),
   UPSTAGE_MODEL: z
     .string()
-    .regex(/^solar-pro3(?:-\d+)?$/)
-    .default('solar-pro3-260323'),
+    .regex(/^solar-(?:pro|mini)\d+(?:-\d+)?$/)
+    .default('solar-pro4-260806'),
   RECORDING_STORAGE_PATH: z.string().default('.data/audio'),
   MEETING_TIMEZONE: z.literal('Asia/Seoul').default('Asia/Seoul'),
   ENABLE_AUTO_START: z.enum(['false']).default('false'),
