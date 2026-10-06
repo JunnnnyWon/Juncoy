@@ -25,6 +25,7 @@ export interface KnowledgeJob {
   payload: Record<string, any>;
   attempts: number;
   generation: number;
+  owner: string | null;
 }
 
 const MIGRATION_LOCK = 736121113;
@@ -82,6 +83,48 @@ export class KnowledgeStore {
       WHERE source_id=${sourceId} AND event_key=${eventKey}`.execute(this.db);
   }
 
+  /**
+   * 이벤트 기록과 후속 잡 enqueue를 한 트랜잭션으로 묶는다 (RAG-014) —
+   * 이벤트는 저장됐는데 잡이 빠지는 경유 상태가 없다.
+   * 반환: { eventId } — 중복 이벤트면 eventId=null이고 잡도 넣지 않는다.
+   */
+  async recordSourceEventWithJob(
+    sourceId: string,
+    eventKey: string,
+    kind: string,
+    body: Record<string, any>,
+    job?: {
+      key: string;
+      kind: KnowledgeJobKind;
+      payload: Record<string, any>;
+      documentId?: string;
+      dueAt?: Date;
+    },
+  ): Promise<{ eventId: string | null; jobId: string | null }> {
+    return this.db.transaction().execute(async (tx) => {
+      const eventId = randomUUID();
+      const hit = await first(
+        sql<{ id: string }>`
+          INSERT INTO source_events(id, source_id, event_key, kind, body)
+          VALUES (${eventId}, ${sourceId}, ${eventKey}, ${kind}, ${json(body)})
+          ON CONFLICT (source_id, event_key) DO NOTHING
+          RETURNING id`,
+        tx,
+      );
+      if (!hit) return { eventId: null, jobId: null };
+      let jobId: string | null = null;
+      if (job) {
+        jobId = randomUUID();
+        await sql`
+          INSERT INTO knowledge_jobs(id, key, kind, document_id, payload, due_at)
+          VALUES (${jobId}, ${job.key}, ${job.kind}, ${job.documentId ?? null},
+                  ${json(job.payload)}, ${job.dueAt ?? new Date()})
+          ON CONFLICT (key) DO NOTHING`.execute(tx);
+      }
+      return { eventId, jobId };
+    });
+  }
+
   // ── 작업 큐: lease + generation fencing (§8.1) ────────────────────
   async enqueueJob(
     key: string,
@@ -95,7 +138,11 @@ export class KnowledgeStore {
               ${opts?.dueAt ?? new Date()})
       ON CONFLICT (key) DO NOTHING`.execute(this.db);
   }
-  /** 늦게 도착한 이전 세대 worker 결과가 current를 덮어쓰지 못하게 generation을 올린다. */
+  /**
+   * 늦게 도착한 이전 세대 worker 결과가 current를 덮어쓰지 못하게 generation을 올린다.
+   * RUNNING이지만 lease가 만료된 잡은 worker 죽음으로 보고 재claim한다 —
+   * fencing generation이 올라가므로 구 owner의 쓰기는 전부 거절된다 (RAG-007).
+   */
   async claimJobs(owner: string, kinds: KnowledgeJobKind[], limit: number, leaseMs: number) {
     return rows<KnowledgeJob>(
       sql<KnowledgeJob>`
@@ -105,49 +152,82 @@ export class KnowledgeStore {
           attempts=attempts+1
         WHERE id IN (
           SELECT id FROM knowledge_jobs
-          WHERE status IN ('PENDING','RETRYABLE') AND due_at <= now() AND kind = ANY(${kinds})
+          WHERE (status IN ('PENDING','RETRYABLE') OR
+                 (status='RUNNING' AND lease_until < now()))
+            AND due_at <= now() AND kind = ANY(${kinds})
           ORDER BY due_at LIMIT ${limit} FOR UPDATE SKIP LOCKED
         )
-        RETURNING id, key, kind, document_id, payload, attempts, generation`,
+        RETURNING id, key, kind, document_id, payload, attempts, generation, owner`,
       this.db,
     );
   }
+  /**
+   * claim 이후 generation이 바뀐 잡(재claim/리셋)은 완료 쓰기를 거부한다.
+   * owner 일치까지 확인해 다른 worker의 완료 쓰기가 섞이지 않게 한다 (RAG-007).
+   */
   async finishJob(job: KnowledgeJob, status: KnowledgeJobStatus, errorCode?: string) {
-    // claim 이후 generation이 바뀐 잡(재claim/리셋)은 완료 쓰기를 거부한다.
-    await sql`
+    const res = await sql`
       UPDATE knowledge_jobs SET status=${status}, owner=null, lease_until=null,
         error_code=${errorCode ?? null}
-      WHERE id=${job.id} AND generation=${job.generation}`.execute(this.db);
+      WHERE id=${job.id} AND generation=${job.generation}
+        AND owner=${job.owner} AND status='RUNNING'`.execute(this.db);
+    return Number(res.numAffectedRows ?? 0) > 0;
   }
   async retryJob(job: KnowledgeJob, dueAt: Date, errorCode?: string) {
-    await sql`
+    const res = await sql`
       UPDATE knowledge_jobs SET status='RETRYABLE', owner=null, lease_until=null,
         due_at=${dueAt}, error_code=${errorCode ?? null}
-      WHERE id=${job.id} AND generation=${job.generation}`.execute(this.db);
+      WHERE id=${job.id} AND generation=${job.generation}
+        AND owner=${job.owner} AND status='RUNNING'`.execute(this.db);
+    return Number(res.numAffectedRows ?? 0) > 0;
   }
 
   // ── 문서/버전: dirty 표시와 current 전환 분리 (§8.1) ──────────────
   /**
    * 원본 변경을 알게 되는 즉시 호출. tombstone이 있으면 새 문서로 부활시키지 않고
-   * false를 반환한다 — 복원은 원본의 새 fetch 버전을 통해서만 가능하다.
+   * 'tombstoned'를 반환한다 — 복원은 원본의 새 fetch 버전을 통해서만 가능하다.
+   *
+   * `unlessHash`를 주면 현재 current 버전의 content_hash와 같은 수집은
+   * dirty를 세우지 않고 'unchanged'를 반환한다 — 동일 내용 재수집이 검색에서
+   * 문서를 숨기지 않는다 (RAG-005). `revision`은 원본의 최신 관측 revision으로
+   * pending_revision에 기록돼 publishVersion의 순서 검증 기준이 된다 (RAG-006).
    */
   async markDocumentDirty(
     sourceId: string,
     stableKey: string,
     metadata: Record<string, any> = {},
-  ): Promise<boolean> {
+    opts: { unlessHash?: string; revision?: string; acl?: Record<string, any> } = {},
+  ): Promise<'dirty' | 'unchanged' | 'tombstoned'> {
     const tomb = await first(
       sql`SELECT stable_key FROM deletion_tombstones WHERE stable_key=${stableKey}`,
       this.db,
     );
-    if (tomb) return false;
-    await sql`
-      INSERT INTO documents(id, source_id, stable_key, metadata)
-      VALUES (${randomUUID()}, ${sourceId}, ${stableKey}, ${json(metadata)})
+    if (tomb) return 'tombstoned';
+    const unlessHash = opts.unlessHash ?? null;
+    const row = await first<{ cur_hash: string | null; dirty: boolean }>(
+      sql`
+      INSERT INTO documents(id, source_id, stable_key, metadata, pending_revision, acl)
+      VALUES (${randomUUID()}, ${sourceId}, ${stableKey}, ${json(metadata)},
+        ${opts.revision ?? null}, ${json(opts.acl ?? {})})
       ON CONFLICT (source_id, stable_key) DO UPDATE
-        SET dirty=true, updated_at=now(),
-            metadata=documents.metadata || EXCLUDED.metadata`.execute(this.db);
-    return true;
+        SET updated_at=now(),
+            metadata=documents.metadata || EXCLUDED.metadata,
+            acl=documents.acl || coalesce(${json(opts.acl ?? {})}, '{}'::jsonb),
+            pending_revision=coalesce(${opts.revision ?? null}, documents.pending_revision),
+            dirty = documents.dirty OR (
+              ${unlessHash === null} OR coalesce(
+                (SELECT v.content_hash FROM document_versions v
+                  WHERE v.id=documents.current_version_id)
+                  IS DISTINCT FROM ${unlessHash}, true))
+      RETURNING (SELECT v.content_hash FROM document_versions v
+                  WHERE v.id=documents.current_version_id) AS cur_hash,
+                documents.dirty`,
+      this.db,
+    );
+    if (!row) return 'tombstoned'; // 방어적 — INSERT는 항상 행을 반환한다
+    if (unlessHash !== null && row.cur_hash === unlessHash && !row.dirty)
+      return 'unchanged';
+    return 'dirty';
   }
 
   /**
@@ -173,9 +253,7 @@ export class KnowledgeStore {
         state: DocumentState;
         pending_revision: string | null;
       }>(
-        sql`SELECT d.id, d.deleted, d.state,
-              (SELECT source_revision FROM document_versions
-                WHERE document_id=d.id ORDER BY fetched_at DESC LIMIT 1) AS pending_revision
+        sql`SELECT d.id, d.deleted, d.state, d.pending_revision
             FROM documents d WHERE d.id=${docId} FOR UPDATE`,
         tx,
       );
@@ -185,6 +263,14 @@ export class KnowledgeStore {
         tx,
       );
       if (tomb) return false;
+      // out-of-order 방지: 지정된 기대 revision이 있는데 원본이 이미 더 새
+      // revision으로 넘어갔다면 이 publish는 폐기한다 (RAG-006).
+      if (
+        expectedRevision !== undefined &&
+        doc.pending_revision !== null &&
+        doc.pending_revision !== expectedRevision
+      )
+        return false;
       const versionId = randomUUID();
       await sql`
         INSERT INTO document_versions(id, document_id, content_hash, extractor_version,
@@ -210,20 +296,27 @@ export class KnowledgeStore {
   }
 
   // ── active chunk_set 단일 트랜잭션 전환 (§8.1) ────────────────────
-  /** 비활성 set을 먼저 만들고 청크를 채운 뒤 swapChunkSet으로 원자 교체한다. */
-  async createChunkSet(documentId: string, extractorVersion: number) {
+  /** 비활성 set을 만들고 청크를 채운 뒤 swapChunkSet으로 원자 교체한다.
+   * versionId = 이 set을 만든 대상 document_version — 검색은
+   * version_id = current_version_id 결합을 요구한다 (RAG-006). */
+  async createChunkSet(documentId: string, extractorVersion: number, versionId: string) {
     const id = randomUUID();
     await sql`
-      INSERT INTO chunk_sets(id, document_id, extractor_version)
-      VALUES (${id}, ${documentId}, ${extractorVersion})`.execute(this.db);
+      INSERT INTO chunk_sets(id, document_id, extractor_version, version_id)
+      VALUES (${id}, ${documentId}, ${extractorVersion}, ${versionId})`.execute(this.db);
     return id;
   }
-  /** 단일 UPDATE로 활성 set을 바꿔 검색자가 부분 청크를 보지 않게 한다. */
+  /** 단일 UPDATE로 활성 set을 바꿔 검색자가 부분 청크를 보지 않게 한다.
+   * set이 바인딩된 버전이 더 이상 current가 아니면 교체를 거부한다 —
+   * 순서 역전으로 오래된 청크가 현재 근거를 가장하지 못한다 (RAG-006). */
   async swapChunkSet(documentId: string, chunkSetId: string) {
     return this.db.transaction().execute(async (tx) => {
       const set = await first<{ id: string }>(
-        sql`SELECT id FROM chunk_sets WHERE id=${chunkSetId}
-              AND document_id=${documentId} AND NOT active FOR UPDATE`,
+        sql`SELECT s.id FROM chunk_sets s
+              JOIN documents d ON d.id=s.document_id
+              AND d.current_version_id=s.version_id
+            WHERE s.id=${chunkSetId} AND s.document_id=${documentId}
+              AND NOT s.active FOR UPDATE OF s`,
         tx,
       );
       if (!set) return null;

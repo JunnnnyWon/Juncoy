@@ -195,22 +195,23 @@ export class NotionCollector {
         : [];
     const text = [...blocks, ...commentLines].join('\n');
     const contentHash = sha256(text);
-    const ok = await this.store.markDocumentDirty(this.sourceId, key, {
-      title: pageTitle(page),
-      url: page.url,
-    });
-    if (!ok) return { stored: false, tombstoned: true };
+    const marked = await this.store.markDocumentDirty(
+      this.sourceId,
+      key,
+      { title: pageTitle(page), url: page.url },
+      {
+        unlessHash: contentHash,
+        revision: page.last_edited_time ?? undefined,
+        acl: { scope: 'root:workspace' },
+      },
+    );
+    if (marked === 'tombstoned') return { stored: false, tombstoned: true };
+    if (marked === 'unchanged') return { stored: true, unchanged: true };
     const doc = await first<{ id: string }>(
       sql`SELECT id FROM documents WHERE source_id=${this.sourceId} AND stable_key=${key}`,
       this.store.db,
     );
     if (!doc) return { stored: false };
-    const existing = await first<{ content_hash: string }>(
-      sql`SELECT v.content_hash FROM documents d JOIN document_versions v ON v.id=d.current_version_id
-          WHERE d.id=${doc.id}`,
-      this.store.db,
-    );
-    if (existing?.content_hash === contentHash) return { stored: true, unchanged: true };
     const published = await this.store.publishVersion(doc.id, {
       contentHash,
       sourceRevision: page.last_edited_time,
@@ -222,7 +223,7 @@ export class NotionCollector {
         last_edited_time: page.last_edited_time,
         comments: commentLines.length,
       },
-    });
+    }, page.last_edited_time ?? undefined);
     if (published) await queueExtract(this.store, doc.id, contentHash);
     return { stored: published, changed: true };
   }

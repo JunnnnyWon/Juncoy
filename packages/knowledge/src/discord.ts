@@ -140,22 +140,27 @@ export class DiscordCollector {
     const key = documentKeys.discordMessage(this.guildId, channelId, m.id);
     const hash = messageHash(m);
     const revision = m.edited_timestamp ?? `create:${m.id}`;
-    const ok = await this.store.markDocumentDirty(sourceId, key, {
-      channel_id: channelId,
-      author_id: m.author?.id ?? null,
-    });
-    if (!ok) return { stored: false as const, changed: false as const }; // tombstoned
-    const doc = await first<{ id: string; current_version_id: string | null }>(
-      sql`SELECT id, current_version_id FROM documents WHERE source_id=${sourceId} AND stable_key=${key}`,
+    const marked = await this.store.markDocumentDirty(
+      sourceId,
+      key,
+      { channel_id: channelId, author_id: m.author?.id ?? null },
+      {
+        unlessHash: hash,
+        revision,
+        acl: {
+          guild: this.guildId,
+          channel: channelId,
+          scope: `channel:${channelId}`,
+        },
+      },
+    );
+    if (marked === 'tombstoned') return { stored: false as const, changed: false as const };
+    if (marked === 'unchanged') return { stored: true as const, changed: false as const };
+    const doc = await first<{ id: string }>(
+      sql`SELECT id FROM documents WHERE source_id=${sourceId} AND stable_key=${key}`,
       this.store.db,
     );
     if (!doc) return { stored: false as const, changed: false as const };
-    const existing = await first<{ content_hash: string }>(
-      sql`SELECT v.content_hash FROM documents d
-          JOIN document_versions v ON v.id=d.current_version_id WHERE d.id=${doc.id}`,
-      this.store.db,
-    );
-    if (existing?.content_hash === hash) return { stored: true as const, changed: false as const };
     // 빈 본문이 attachment-only인지 content 제한인지 구분 (§6.3).
     const contentRestricted =
       !m.content && !(m.attachments?.length ?? 0) && !m.author?.id;
@@ -172,7 +177,7 @@ export class DiscordCollector {
         content_restricted: contentRestricted,
         message_type: m.type ?? 0,
       },
-    });
+    }, revision);
     for (const a of m.attachments ?? [])
       await sql`
         INSERT INTO attachments(id, document_id, stable_key, mime, bytes, metadata)

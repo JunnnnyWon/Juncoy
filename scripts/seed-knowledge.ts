@@ -71,9 +71,14 @@ if (process.argv[1]?.endsWith('seed-knowledge.ts')) {
     // Notion: 워크스페이스 루트 — integration 연결 범위 전체.
     await upsertScope(notion, 'root:workspace');
 
-    // Discord: 지정되거나 열거된 텍스트 채널.
+    // Discord: 지정되거나 열거된 텍스트 채널 + 길드 범위 (질문자 ACL 매칭용).
     const channels = await guildChannels();
     for (const id of channels) await upsertScope(discord, `channel:${id}`);
+    if (process.env.DISCORD_GUILD_ID) {
+      await upsertScope(discord, `guild:${process.env.DISCORD_GUILD_ID}`);
+      // 회의 문서 acl.scope는 guild:<origin_guild_id> — meeting 소스에도 등록한다.
+      await upsertScope(meeting, `guild:${process.env.DISCORD_GUILD_ID}`);
+    }
 
     console.log(
       `seeded meeting=${meeting} github=${github} notion=${notion} discord=${discord} channels=${channels.length}`,

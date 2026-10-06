@@ -71,29 +71,65 @@ function solarModel(config: AppConfig) {
   };
 }
 
-/** Discord 라이브 읽기 — 질문마다 등록된 채널의 head를 재대조한다 (§11.1 단계 2). */
-async function makeDiscordRead(store: KnowledgeStore, token: string) {
+/**
+ * Discord 라이브 읽기 — 질문마다 **허용된 스코프(source_scopes)** 의 채널 head를
+ * 재대조한다 (§11.1 단계 2, RAG-008).
+ * - connector_cursors가 아니라 source_scopes에서 채널을 읽는다 — 등록 전 채널과
+ *   allowed=false 채널이 섞이지 않는다. 허용 채널 0개는 성공이 아니라 gap이다.
+ * - ACCESS_LOST 소스는 읽기를 시도하지 않고 gap으로 보고한다.
+ * - 채널 간 병렬(3개씩), 전체 예산은 timeoutMs — REST 단건 30s 타임아웃과
+ *   무관하게 호출자 예산 안에서 끝낸다.
+ * - 대조 후 짧게 인덱스 반영을 기다린다 — 방금 읽은 내용이 이번 질문 검색에
+ *   반영되도록 extract 잡 큐가 빌 때까지(최대 3s) 기다린다.
+ */
+async function makeDiscordRead(store: KnowledgeStore, token: string, guildId: string) {
   const rest = new DiscordRest(token);
   return async (timeoutMs: number) => {
     const gaps: string[] = [];
     const deadline = Date.now() + timeoutMs;
-    const channels = await kRows<{ channel_id: string; source_id: string }>(
-      sql`SELECT DISTINCT split_part(scope_key, ':', 2) AS channel_id, source_id
-          FROM connector_cursors
-          WHERE scope_key LIKE 'channel:%'
-            AND source_id IN (SELECT id FROM knowledge_sources WHERE kind='discord')`,
+    const channels = await kRows<{ channel_id: string; source_id: string; status: string }>(
+      sql`SELECT split_part(sc.scope_key, ':', 2) AS channel_id, s.id AS source_id, s.status
+          FROM source_scopes sc
+          JOIN knowledge_sources s ON s.id=sc.source_id
+          WHERE s.kind='discord' AND sc.allowed AND sc.scope_key LIKE 'channel:%'`,
       store.db,
     );
-    for (const c of channels) {
-      if (Date.now() > deadline) {
-        gaps.push(`timeout:${c.channel_id}`);
-        break;
-      }
-      try {
-        await new DiscordCollector(store, rest, '').reconcileHead(c.source_id, c.channel_id);
-      } catch {
-        gaps.push(`channel:${c.channel_id}`);
-      }
+    if (!channels.length) return { ok: false, gaps: ['no_allowed_channels'] };
+    const collector = new DiscordCollector(store, rest, guildId);
+    const CONCURRENCY = 3;
+    for (let i = 0; i < channels.length; i += CONCURRENCY) {
+      await Promise.all(
+        channels.slice(i, i + CONCURRENCY).map(async (c) => {
+          if (c.status !== 'ACTIVE') {
+            gaps.push(`source_${c.status.toLowerCase()}:${c.channel_id}`);
+            return;
+          }
+          if (Date.now() > deadline) {
+            gaps.push(`timeout:${c.channel_id}`);
+            return;
+          }
+          try {
+            await collector.reconcileHead(c.source_id, c.channel_id);
+          } catch {
+            gaps.push(`channel:${c.channel_id}`);
+          }
+        }),
+      );
+      if (Date.now() > deadline) break;
+    }
+    // 인덱스 반영 대기 — 방금 재대조로 생긴 extract 잡이 처리되길 최대 3s 기다린다.
+    const waitDeadline = Math.min(deadline, Date.now() + 3_000);
+    while (Date.now() < waitDeadline) {
+      const pending = await first<{ c: number }>(
+        sql`SELECT count(*)::int AS c FROM knowledge_jobs j
+            JOIN documents d ON d.id=j.document_id
+            JOIN knowledge_sources s ON s.id=d.source_id
+            WHERE s.kind='discord' AND j.kind='extract'
+              AND j.status IN ('PENDING','RETRYABLE','RUNNING')`,
+        store.db,
+      );
+      if (!pending?.c) break;
+      await new Promise((r) => setTimeout(r, 300));
     }
     return { ok: gaps.length === 0, gaps };
   };
@@ -104,14 +140,15 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
   const getCtx = async (): Promise<KnowledgeCtx | null> => {
     if (ctx) return ctx;
     return (ctx = (async () => {
+      // 기능 off면 DB에 아예 붙지 않는다 — 컨텍스트 없음 = 모든 라우트 503 (RAG-015).
+      if (process.env.KNOWLEDGE_ENABLED !== 'true') return null;
       const url = process.env.KNOWLEDGE_DATABASE_URL;
       if (!url) return null;
       const store = new KnowledgeStore(url);
       const on = (name: string) => process.env[name] === 'true';
-      const embeddings =
-        deps.config.UPSTAGE_API_KEY && on('KNOWLEDGE_ENABLED')
-          ? new UpstageEmbeddings(deps.config.UPSTAGE_API_KEY)
-          : undefined;
+      const embeddings = deps.config.UPSTAGE_API_KEY
+        ? new UpstageEmbeddings(deps.config.UPSTAGE_API_KEY)
+        : undefined;
       if (embeddings)
         await ensureProfile(
           store,
@@ -122,7 +159,11 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
         );
       const discordRead =
         on('DISCORD_CONTEXT_ENABLED') && deps.config.DISCORD_BOT_TOKEN
-          ? await makeDiscordRead(store, deps.config.DISCORD_BOT_TOKEN)
+          ? await makeDiscordRead(
+              store,
+              deps.config.DISCORD_BOT_TOKEN,
+              deps.config.DISCORD_GUILD_ID,
+            )
           : undefined;
       return { store, embeddings, discordRead, model: solarModel(deps.config) };
     })());
@@ -140,16 +181,32 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
     return { session, ctx: c };
   };
 
+  /**
+   * 질문자 권한으로 프로젝트를 결정한다 (RAG-001) — "첫 번째 프로젝트"가 아니라
+   * 질문자 guild를 scope로 등록한 소스를 가진 프로젝트만 선택한다.
+   * 매칭되는 프로젝트가 없으면 403 — 남의 프로젝트로 굴러가지 않는다.
+   */
+  const projectForAsker = async (ctx: KnowledgeCtx, guildId: string) =>
+    first<{ id: string }>(
+      sql`SELECT p.id FROM knowledge_projects p
+          WHERE EXISTS (
+            SELECT 1 FROM knowledge_sources s
+            JOIN source_scopes sc ON sc.source_id=s.id AND sc.allowed
+            WHERE s.project_id=p.id AND sc.scope_key=${`guild:${guildId}`}
+          )
+          ORDER BY p.created_at LIMIT 1`,
+      ctx.store.db,
+    );
+
   /** POST /api/knowledge/ask — 질문 → 검증된 Answer (§13.1). */
   app.post('/api/knowledge/ask', async (req, reply) => {
     const { session, ctx } = await requireCtx(req);
     const body = QuestionRequest.parse(req.body ?? {});
-    const project = await first<{ id: string }>(
-      sql`SELECT id FROM knowledge_projects ORDER BY created_at LIMIT 1`,
-      ctx.store.db,
-    );
+    const project = await projectForAsker(ctx, deps.config.DISCORD_GUILD_ID);
     if (!project)
-      return reply.code(503).send({ error: { code: 'INDEX_NOT_READY', message: '프로젝트가 없습니다.' } });
+      return reply.code(403).send({
+        error: { code: 'PROJECT_SCOPE_DENIED', message: '이 길드에 허용된 지식 프로젝트가 없습니다.' },
+      });
     const answer = await answerQuestion(
       {
         store: ctx.store,
@@ -157,6 +214,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
         embeddings: ctx.embeddings,
         discordRead: ctx.discordRead,
         userId: session.user_id,
+        acl: { guilds: [deps.config.DISCORD_GUILD_ID] },
       },
       project.id,
       body,
@@ -164,7 +222,12 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
     return answer;
   });
 
-  /** GET /api/knowledge/answer/:id — 완료된 실행의 Answer (§13.2 조회). */
+  /**
+   * GET /api/knowledge/answer/:id — 완료된 실행의 Answer (§13.2 조회).
+   * 저장된 body를 그대로 반환하지 않는다 (RAG-002): 근거 문서가 아직
+   * READY·비삭제·ACL 통과인지 재검증하고, 무효화된 근거는 빼고
+   * `evidence_stale` 표시를 붙여 반환한다.
+   */
   app.get('/api/knowledge/answer/:id', async (req) => {
     const { ctx } = await requireCtx(req);
     const id = z.uuid().parse((req.params as any).id);
@@ -173,7 +236,52 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
       ctx.store.db,
     );
     if (!run) return { status: 'FAILED' };
-    return run.body ?? { status: run.status, phase: run.phase };
+    const body = run.body;
+    if (!body?.evidence?.length) return body ?? { status: run.status, phase: run.phase };
+    // 저장 당시 근거 재검증 — 삭제/권한 회수/버전 변경이 있으면 캐시 그대로 안 쓴다.
+    const evIds = (body.evidence as any[]).map((e) => e.document_id).filter(Boolean);
+    const current = new Map(
+      (
+        await kRows<{ id: string; ok: boolean; hash: string | null }>(
+          sql`SELECT d.id,
+                (NOT d.deleted AND d.state='READY' AND NOT d.dirty
+                  AND src.status='ACTIVE'
+                  AND (d.acl->>'scope' IS NULL OR EXISTS(
+                    SELECT 1 FROM source_scopes sc
+                    WHERE sc.source_id=d.source_id
+                      AND sc.scope_key=d.acl->>'scope' AND sc.allowed))
+                  AND (d.acl->>'guild' IS NULL
+                       OR d.acl->>'guild' = ${deps.config.DISCORD_GUILD_ID})) AS ok,
+                v.content_hash AS hash
+              FROM documents d
+              JOIN knowledge_sources src ON src.id=d.source_id
+              LEFT JOIN document_versions v ON v.id=d.current_version_id
+              WHERE d.id = ANY(${evIds}::uuid[])`,
+          ctx.store.db,
+        )
+      ).map((r) => [r.id, r]),
+    );
+    const validEvidence = (body.evidence as any[]).filter((e) => {
+      const cur = current.get(e.document_id);
+      return cur?.ok && cur.hash === (e.revision ?? cur.hash);
+    });
+    if (validEvidence.length === body.evidence.length) return body;
+    const validIds = new Set(validEvidence.map((e: any) => e.id));
+    return {
+      ...body,
+      evidence: validEvidence,
+      claims: (body.claims ?? [])
+        .map((c: any) => ({
+          ...c,
+          evidence_ids: (c.evidence_ids ?? []).filter((id: string) => validIds.has(id)),
+        }))
+        .filter((c: any) => c.evidence_ids.length > 0),
+      evidence_stale: true,
+      warnings: [
+        ...(body.warnings ?? []),
+        '일부 근거가 저장 이후 변경·삭제·권한 회수되어 제외되었습니다.',
+      ],
+    };
   });
 
   /** POST /api/knowledge/image-prompt — 코퍼스 근거로 이미지 프롬프트 합성 (§11.2). */
@@ -209,22 +317,40 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
     const event = String(req.headers['x-github-event'] ?? 'unknown');
     const payload = req.body as any;
     const repo = payload?.repository?.full_name;
+    const ref = typeof payload?.ref === 'string' ? payload.ref.replace('refs/heads/', '') : null;
+    if (!repo) return { received: true, queued: false };
+    // source 바인딩 (RAG-014): "첫 ACTIVE 소스"가 아니라 이 repo를 scope로
+    // 등록한 github 소스를 찾는다. push면 ref 허용 스코프까지 확인한다.
     const src = await first<{ id: string }>(
-      sql`SELECT id FROM knowledge_sources WHERE kind='github' AND status='ACTIVE' LIMIT 1`,
+      sql`SELECT s.id FROM knowledge_sources s
+          WHERE s.kind='github' AND s.status='ACTIVE'
+            AND EXISTS (
+              SELECT 1 FROM source_scopes sc
+              WHERE sc.source_id=s.id AND sc.allowed
+                AND sc.scope_key LIKE 'ref:%'
+                AND sc.metadata->>'repo' = ${repo}
+                ${ref ? sql`AND sc.scope_key = ${`ref:${ref}`}` : sql``}
+            )
+          LIMIT 1`,
       c.store.db,
     );
-    if (!src || !repo) return { received: true, queued: false };
-    // dedupe: delivery id가 event_key — 재전송은 무시된다.
-    const eventId = await c.store.recordSourceEvent(src.id, delivery, `github.${event}`, payload);
+    if (!src) return { received: true, queued: false, ignored: 'unregistered_repo_or_ref' };
+    // dedupe + 잡 생성을 한 트랜잭션으로 — 이벤트만 저장되고 잡이 빠지지 않는다.
+    const { eventId } = await c.store.recordSourceEventWithJob(
+      src.id,
+      delivery,
+      `github.${event}`,
+      payload,
+      event === 'push' && ref
+        ? {
+            key: `gh-refresh:${delivery}`,
+            kind: 'refresh',
+            payload: { source_kind: 'github', repo, ref },
+          }
+        : undefined,
+    );
     if (eventId === null) return { received: true, duplicate: true };
-    const ref = typeof payload?.ref === 'string' ? payload.ref.replace('refs/heads/', '') : null;
-    if (event === 'push' && ref)
-      await c.store.enqueueJob(`gh-refresh:${delivery}`, 'refresh', {
-        source_kind: 'github',
-        repo,
-        ref,
-      });
-    return { received: true, queued: event === 'push' };
+    return { received: true, queued: event === 'push' && !!ref };
   });
 
   /** POST /api/knowledge/webhooks/notion — page 이벤트 → refresh 잡. */
@@ -237,40 +363,47 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
     if (!verifyNotionSignature(secret, (req as any).rawBody ?? '', sig))
       return reply.code(401).send({ error: { code: 'BAD_SIGNATURE' } });
     const payload = req.body as any;
-    const src = await first<{ id: string }>(
-      sql`SELECT id FROM knowledge_sources WHERE kind='notion' AND status='ACTIVE' LIMIT 1`,
+    // source 바인딩 (RAG-014): ACTIVE notion 소스가 정확히 하나일 때만 자동 매칭한다.
+    // 여럿이면 페이지를 어느 소스로 보낼지 알 수 없으므로 무시한다.
+    const sources = await kRows<{ id: string }>(
+      sql`SELECT id FROM knowledge_sources WHERE kind='notion' AND status='ACTIVE'`,
       c.store.db,
     );
-    if (!src) return { received: true, queued: false };
-    const pageId = payload?.data?.page_id ?? payload?.data?.id ?? payload?.id;
-    await c.store.recordSourceEvent(
+    if (sources.length !== 1)
+      return { received: true, queued: false, ignored: 'ambiguous_notion_source' };
+    const src = sources[0];
+    // payload.id는 이벤트 id — 페이지 id로 쓰면 안 된다. data 안의 page id만 신뢰.
+    const pageId = payload?.data?.page_id ?? payload?.data?.id ?? null;
+    const { eventId } = await c.store.recordSourceEventWithJob(
       src.id,
       `ntn:${payload?.id ?? crypto.randomUUID()}`,
       `notion.${payload?.type ?? 'event'}`,
       payload,
+      pageId
+        ? {
+            key: `ntn-refresh:${payload?.id ?? pageId}`,
+            kind: 'refresh',
+            payload: { source_kind: 'notion', page_id: pageId },
+          }
+        : undefined,
     );
-    if (pageId)
-      await c.store.enqueueJob(`ntn-refresh:${payload?.id ?? pageId}`, 'refresh', {
-        source_kind: 'notion',
-        page_id: pageId,
-      });
+    if (eventId === null) return { received: true, duplicate: true };
     return { received: true, queued: !!pageId };
   });
 
   /** GET /api/knowledge/search?q= — 디버그/탐색용 후보 청크 (검증 없음). */
-  app.get('/api/knowledge/search', async (req) => {
+  app.get('/api/knowledge/search', async (req, reply) => {
     const { ctx } = await requireCtx(req);
     const q = z.object({ q: z.string().min(1).max(500) }).parse(req.query);
-    const project = await first<{ id: string }>(
-      sql`SELECT id FROM knowledge_projects ORDER BY created_at LIMIT 1`,
-      ctx.store.db,
-    );
-    if (!project) return { chunks: [] };
+    const project = await projectForAsker(ctx, deps.config.DISCORD_GUILD_ID);
+    if (!project)
+      return reply.code(403).send({ error: { code: 'PROJECT_SCOPE_DENIED' } });
     const chunks = await retrieve(ctx.store, {
       projectId: project.id,
       query: q.q,
       embeddings: ctx.embeddings,
       limit: 20,
+      acl: { guilds: [deps.config.DISCORD_GUILD_ID] },
     });
     return {
       chunks: chunks.map((c) => ({

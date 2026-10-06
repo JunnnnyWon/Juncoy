@@ -336,29 +336,24 @@ export class GitHubCollector {
     tarContent?: Buffer,
   ) {
     const key = documentKeys.githubFile(this.repoId, ref, path);
-    const ok = await this.store.markDocumentDirty(this.sourceId, key, {
-      repo: this.repo,
-      ref,
-      path,
-    });
-    if (!ok) return;
-    const doc = await first<{ id: string; current_version_id: string | null }>(
-      sql`SELECT id, current_version_id FROM documents WHERE source_id=${this.sourceId} AND stable_key=${key}`,
+    const revision = `${head}:${blobSha}`;
+    // 동일 blob 재사용 — content_hash = blob SHA로 비교해 dirty를 세우지 않는다 (§6.2-5).
+    const marked = await this.store.markDocumentDirty(
+      this.sourceId,
+      key,
+      { repo: this.repo, ref, path },
+      {
+        unlessHash: blobSha,
+        revision,
+        acl: { repo: this.repo, ref, scope: `ref:${ref}` },
+      },
+    );
+    if (marked !== 'dirty') return;
+    const doc = await first<{ id: string }>(
+      sql`SELECT id FROM documents WHERE source_id=${this.sourceId} AND stable_key=${key}`,
       this.store.db,
     );
     if (!doc) return;
-    // 동일 blob 재사용 — 내용이 같으면 재조회 없이 revision만 갱신한다 (§6.2-5).
-    const cur = await first<{ content_hash: string }>(
-      sql`SELECT v.content_hash FROM documents d
-          JOIN document_versions v ON v.id=d.current_version_id WHERE d.id=${doc.id}`,
-      this.store.db,
-    );
-    if (cur?.content_hash === blobSha) {
-      await sql`UPDATE documents SET dirty=false, updated_at=now() WHERE id=${doc.id}`.execute(
-        this.store.db,
-      );
-      return;
-    }
     let buf: Buffer | null = tarContent ?? null;
     if (!buf) {
       const b = await this.rest.blob(this.repo, blobSha);
@@ -379,7 +374,7 @@ export class GitHubCollector {
     }
     const published = await this.store.publishVersion(doc.id, {
       contentHash: blobSha, // blob SHA 자체가 내용 해시 (§6.2-5)
-      sourceRevision: `${head}:${blobSha}`,
+      sourceRevision: revision,
       sourceModifiedAt: new Date(),
       normalized: {
         text: text ?? '',
@@ -390,7 +385,7 @@ export class GitHubCollector {
         oversize,
         sha: blobSha,
       },
-    });
+    }, revision);
     if (published) await queueExtract(this.store, doc.id, blobSha);
   }
 }

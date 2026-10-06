@@ -2,7 +2,9 @@ import { KnowledgeStore, sql, rows } from '@meeting/knowledge-db';
 import { UpstageEmbeddings, activeProfile } from './embeddings.ts';
 
 // 검색 — spec §11.1 단계 5: 출처별 키워드/벡터 후보 → ACL/current 필터 → dedupe/RRF.
-// ACL-first: 활성 chunk_set + 비삭제 + READY 문서만 대상으로 한다.
+// ACL-first (RAG-001): source가 ACTIVE이고 문서 acl.scope가 allowed scope에
+// 매칭되며 guild 바인딩이 질문자 guild와 일치하는 문서만 후보가 된다.
+// 버전 결속 (RAG-006): chunk_set.version_id = current_version_id인 청크만 대상.
 
 export interface RetrievedChunk {
   chunk_id: string;
@@ -11,6 +13,8 @@ export interface RetrievedChunk {
   source: string;
   content: string;
   span: Record<string, any>;
+  /** 후보 추출 시점의 current content_hash — 생성 전 캡처해 재검증 기준으로 쓴다 (RAG-004). */
+  revision: string;
   score: number;
   keyword_rank: number | null;
   vector_rank: number | null;
@@ -41,14 +45,38 @@ interface ChunkRow {
   source: string;
   content: string;
   span: any;
+  revision: string;
 }
 
-const baseFrom = (projectId: string) => sql`
+/** 질문자 권한 — OAuth guild 멤버십에서 도출된 guild id 목록. */
+export interface AclInput {
+  guilds: string[];
+}
+
+/** ACL + 버전 결속 + 가용성 조건. 모든 검색 경로가 공유한다 (RAG-001/RAG-006). */
+const aclClause = (acl?: AclInput) => sql`
+  AND src.status='ACTIVE'
+  AND s.version_id = d.current_version_id
+  AND (
+    ${!acl || !acl.guilds.length}
+    OR d.acl->>'guild' IS NULL
+    OR d.acl->>'guild' = ANY(${acl?.guilds ?? []}::text[])
+  )
+  AND (
+    d.acl->>'scope' IS NULL
+    OR EXISTS (SELECT 1 FROM source_scopes sc
+               WHERE sc.source_id=d.source_id
+                 AND sc.scope_key=d.acl->>'scope' AND sc.allowed)
+  )`;
+
+const baseFrom = (projectId: string, acl?: AclInput) => sql`
   FROM chunks c
   JOIN chunk_sets s ON s.id=c.chunk_set_id AND s.active
   JOIN documents d ON d.id=s.document_id
+    AND s.version_id = d.current_version_id
+  JOIN document_versions v ON v.id=d.current_version_id
   JOIN knowledge_sources src ON src.id=d.source_id AND src.project_id=${projectId}
-  WHERE NOT d.deleted AND d.state='READY' AND NOT d.dirty`;
+  WHERE NOT d.deleted AND d.state='READY' AND NOT d.dirty ${aclClause(acl)}`;
 
 /** 키워드 후보: pg_trgm 유사도 + 코드 식별자 정확 매칭 결합 (§10/R09). */
 export async function keywordSearch(
@@ -56,6 +84,7 @@ export async function keywordSearch(
   projectId: string,
   query: string,
   limit = 30,
+  acl?: AclInput,
 ) {
   const q = query.trim();
   if (!q) return [];
@@ -68,11 +97,8 @@ export async function keywordSearch(
     : sql``;
   return rows<ChunkRow & { kw: number }>(
     sql`SELECT c.id AS chunk_id, d.id AS document_id, d.stable_key, src.kind AS source,
-          c.content, c.span,
-          similarity(c.content, ${q})
-            + COALESCE((SELECT max(CASE WHEN c.content LIKE '%' || w.word || '%' THEN 0.5 ELSE 0 END)
-                        FROM unnest(${ident}::text[]) AS w(word)), 0) AS kw
-        ${baseFrom(projectId)}
+          c.content, c.span, v.content_hash AS revision
+        ${baseFrom(projectId, acl)}
           AND (c.content % ${q} ${identOr})
         ORDER BY kw DESC LIMIT ${limit}`,
     store.db,
@@ -86,6 +112,7 @@ export async function vectorSearch(
   projectId: string,
   query: string,
   limit = 30,
+  acl?: AclInput,
 ) {
   const profile = await activeProfile(store);
   if (!profile) return [];
@@ -93,14 +120,16 @@ export async function vectorSearch(
   const lit = `[${vec.join(',')}]`;
   return rows<ChunkRow & { dist: number }>(
     sql`SELECT c.id AS chunk_id, d.id AS document_id, d.stable_key, src.kind AS source,
-          c.content, c.span,
+          c.content, c.span, v.content_hash AS revision,
           (e.embedding <=> ${lit}::vector) AS dist
         FROM chunks c
         JOIN chunk_sets s ON s.id=c.chunk_set_id AND s.active
         JOIN documents d ON d.id=s.document_id
+          AND s.version_id = d.current_version_id
+        JOIN document_versions v ON v.id=d.current_version_id
         JOIN knowledge_sources src ON src.id=d.source_id AND src.project_id=${projectId}
         JOIN chunk_embeddings e ON e.chunk_id=c.id AND e.profile_id=${profile.id}
-        WHERE NOT d.deleted AND d.state='READY' AND NOT d.dirty
+        WHERE NOT d.deleted AND d.state='READY' AND NOT d.dirty ${aclClause(acl)}
         ORDER BY dist ASC LIMIT ${limit}`,
     store.db,
   );
@@ -118,12 +147,13 @@ export async function retrieve(
     embeddings?: UpstageEmbeddings;
     perSourceLimit?: number;
     limit?: number;
+    acl?: AclInput;
   },
 ) {
   const per = opts.perSourceLimit ?? 30;
-  const kw = await keywordSearch(store, opts.projectId, opts.query, per);
+  const kw = await keywordSearch(store, opts.projectId, opts.query, per, opts.acl);
   const vec = opts.embeddings
-    ? await vectorSearch(store, opts.embeddings, opts.projectId, opts.query, per)
+    ? await vectorSearch(store, opts.embeddings, opts.projectId, opts.query, per, opts.acl)
     : [];
   const merged = rrfMerge([
     kw.map((c) => ({ id: c.chunk_id, row: c as ChunkRow })),
@@ -143,6 +173,7 @@ export async function retrieve(
       score: m.score,
       keyword_rank: m.ranks[0],
       vector_rank: m.ranks[1],
+      revision: r.revision,
     };
   });
 }

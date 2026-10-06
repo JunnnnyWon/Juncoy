@@ -101,24 +101,35 @@ export class JuncoyCollector {
       return { synced: false, deleted: true };
     }
     const last = await this.lastSyncedVersion(m.meeting_id);
+    const revision = `tv:${m.transcript_version}`;
     if (last.transcript_version === m.transcript_version && m.transcript_version > 0)
       return { synced: false, unchanged: true };
-    const ok = await this.store.markDocumentDirty(this.sourceId, key, {
-      meeting_id: m.meeting_id,
-      origin_guild_id: m.guild_id,
-      status: m.status,
-    });
-    if (!ok) return { synced: false, deleted: true };
     const segments = await this.meetings.canonicalSegments(m.meeting_id);
+    const contentHash = sha256(JSON.stringify(segments));
+    // 버전은 올랐는데 내용이 동일하면 dirty를 세우지 않는다 — 검색에서 숨겨지지 않는다.
+    const marked = await this.store.markDocumentDirty(
+      this.sourceId,
+      key,
+      { meeting_id: m.meeting_id, origin_guild_id: m.guild_id, status: m.status },
+      {
+        unlessHash: contentHash,
+        revision,
+        acl: { guild: m.guild_id, scope: `guild:${m.guild_id}` },
+      },
+    );
+    if (marked === 'tombstoned') return { synced: false, deleted: true };
+    if (marked === 'unchanged') {
+      await this.saveCursor(m.meeting_id, m.transcript_version);
+      return { synced: true, unchanged: true };
+    }
     const doc = await first<{ id: string }>(
       sql`SELECT id FROM documents WHERE source_id=${this.sourceId} AND stable_key=${key}`,
       this.store.db,
     );
     if (!doc) return { synced: false };
-    const contentHash = sha256(JSON.stringify(segments));
     const published = await this.store.publishVersion(doc.id, {
       contentHash,
-      sourceRevision: `tv:${m.transcript_version}`,
+      sourceRevision: revision,
       sourceModifiedAt: m.ended_at ? new Date(m.ended_at) : null,
       normalized: {
         text: segments
@@ -139,7 +150,7 @@ export class JuncoyCollector {
           replacements: s.replacements ?? null,
         })),
       },
-    });
+    }, revision);
     if (published) {
       await queueExtract(this.store, doc.id, contentHash);
       await this.saveCursor(m.meeting_id, m.transcript_version);

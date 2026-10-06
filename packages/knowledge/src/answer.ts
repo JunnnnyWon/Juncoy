@@ -7,7 +7,7 @@ import {
   QuestionRequest,
   SourceCoverage,
 } from '@meeting/contracts';
-import { retrieve, RetrievedChunk } from './retrieve.ts';
+import { retrieve, RetrievedChunk, AclInput } from './retrieve.ts';
 import { UpstageEmbeddings } from './embeddings.ts';
 
 // 문답 파이프라인 — spec §11.1/§13.
@@ -84,8 +84,11 @@ export function stableKeyToUrl(stableKey: string): string {
 }
 
 async function sourceRows(store: KnowledgeStore, projectId: string) {
-  return rows<{ id: string; kind: string }>(
-    sql`SELECT id, kind FROM knowledge_sources WHERE project_id=${projectId}`,
+  return rows<{ id: string; kind: string; status: string; scopes: number }>(
+    sql`SELECT s.id, s.kind, s.status,
+          (SELECT count(*)::int FROM source_scopes sc
+            WHERE sc.source_id=s.id AND sc.allowed) AS scopes
+        FROM knowledge_sources s WHERE s.project_id=${projectId}`,
     store.db,
   );
 }
@@ -109,20 +112,50 @@ async function corpusGeneration(store: KnowledgeStore, projectId: string) {
   return row?.g ?? '0';
 }
 
-/** 근거 재검증 — 문서가 아직 READY + current revision이 같고 인용이 청크에 있어야 한다 (§11.1 단계 8). */
+/**
+ * 근거 재검증 (§11.1 단계 8, RAG-004) — 생성 시점에 캡처된 revision 대비
+ * 현재 상태를 확인한다: 문서 READY·비삭제·비-dirty, 청크의 chunk_set이 아직
+ * current 버전에 결속, 현재 버전의 정규화 본문에 청크 텍스트가 존재,
+ * 그리고 ACL(허용 scope/ACTIVE 소스)이 여전히 통과해야 한다.
+ */
 async function revalidateEvidence(
   store: KnowledgeStore,
   ev: { chunk: RetrievedChunk; revision: string },
+  acl?: AclInput,
 ) {
-  const doc = await first<{ state: string; deleted: boolean; content_hash: string | null }>(
-    sql`SELECT d.state, d.deleted, v.content_hash
-        FROM documents d LEFT JOIN document_versions v ON v.id=d.current_version_id
+  const doc = await first<{
+    state: string;
+    deleted: boolean;
+    dirty: boolean;
+    content_hash: string | null;
+    text: string | null;
+    bound: boolean;
+    allowed: boolean;
+  }>(
+    sql`SELECT d.state, d.deleted, d.dirty, v.content_hash,
+          left(v.normalized->>'text', 200000) AS text,
+          EXISTS(SELECT 1 FROM chunks c2
+                 JOIN chunk_sets s ON s.id=c2.chunk_set_id
+                   AND s.active AND s.version_id=d.current_version_id
+                 WHERE c2.id=${ev.chunk.chunk_id}) AS bound,
+          (src.status='ACTIVE' AND (
+            d.acl->>'scope' IS NULL OR EXISTS(
+              SELECT 1 FROM source_scopes sc
+              WHERE sc.source_id=d.source_id AND sc.scope_key=d.acl->>'scope'
+                AND sc.allowed))) AS allowed
+        FROM documents d
+        JOIN knowledge_sources src ON src.id=d.source_id
+        LEFT JOIN document_versions v ON v.id=d.current_version_id
         WHERE d.id=${ev.chunk.document_id}`,
     store.db,
   );
   if (!doc || doc.deleted || doc.state !== 'READY') return 'deleted_or_unavailable';
+  if (doc.dirty) return 'stale_pending';
+  if (!doc.bound) return 'EVIDENCE_SUPERSEDED';
+  if (!doc.allowed) return 'acl_revoked';
   if (doc.content_hash !== ev.revision) return 'EVIDENCE_CHANGED';
-  if (ev.chunk.content && !ev.chunk.content.includes('')) return 'quote_missing';
+  const probe = ev.chunk.content.trim().slice(0, 80);
+  if (probe && doc.text !== null && !doc.text.includes(probe)) return 'quote_missing';
   return null;
 }
 
@@ -132,6 +165,7 @@ export interface AnswerDeps {
   embeddings?: UpstageEmbeddings;
   discordRead?: DiscordLiveRead; // DISCORD_CONTEXT_ENABLED일 때만 주입
   userId?: string;
+  acl?: AclInput; // 질문자 권한 — 후보 SQL·모델 입력·저장 답변에 동일 적용 (RAG-001)
 }
 
 export async function answerQuestion(
@@ -180,21 +214,25 @@ export async function answerQuestion(
       }
     }
 
-    // 단계 5: 검색
+    // 단계 5: 검색 — 질문자 ACL이 후보 SQL에 바인딩된다 (RAG-001).
     await setPhase('searching');
     const chunks = await retrieve(store, {
       projectId,
       query: req.question,
       embeddings: deps.embeddings,
       limit: 24,
+      acl: deps.acl,
     });
     const chunksBySource = new Map<string, RetrievedChunk[]>();
     for (const c of chunks)
       chunksBySource.set(c.source, [...(chunksBySource.get(c.source) ?? []), c]);
 
     // 단계 6: 생성 — evidence에 chunk id·revision(content_hash)·url 부여
+    // revision은 검색 시점의 current content_hash — 모델 호출 *전*에 캡처해
+    // 생성 중 원본이 바뀐 근거를 재검증에서 걸러낸다 (RAG-004).
     await setPhase('generating');
     const revisions = new Map<string, string>();
+    for (const c of chunks) revisions.set(c.document_id, c.revision);
     const evidenceInput = chunks.map((c, i) => {
       const id = `e${i + 1}`;
       return { id, source: c.source, chunk: c.content.slice(0, 1200), stable_key: c.stable_key };
@@ -210,24 +248,15 @@ export async function answerQuestion(
       );
       modelOut = res.result;
       modelName = res.model;
-      // content_hash를 revision으로 캡처 (재검증 기준)
-      const docIds = chunks.map((c) => c.document_id);
-      for (const r of await rows<{ id: string; content_hash: string }>(
-        sql`SELECT d.id, v.content_hash FROM documents d
-            JOIN document_versions v ON v.id=d.current_version_id
-            WHERE d.id = ANY(${docIds}::uuid[])`,
-        store.db,
-      ))
-        revisions.set(r.id, r.content_hash);
     }
 
-    // 단계 8: 근거 재검증
+    // 단계 8: 근거 재검증 — 캡처된 revision 대비 현재 상태 확인 (RAG-004).
     await setPhase('revalidating');
     const evidence: Answer['evidence'] = [];
     let evidenceFailed = false;
     for (const [i, c] of chunks.entries()) {
       const rev = revisions.get(c.document_id) ?? '';
-      const reason = await revalidateEvidence(store, { chunk: c, revision: rev });
+      const reason = await revalidateEvidence(store, { chunk: c, revision: rev }, deps.acl);
       if (reason) {
         evidenceFailed = true;
         warnings.push(`근거가 응답 생성 중 변경/삭제되었습니다 (${c.stable_key}: ${reason}).`);
@@ -245,8 +274,18 @@ export async function answerQuestion(
     }
     const validIds = new Set(evidence.map((e) => e.id));
 
-    // coverage — 네 출처 정확히 하나씩 (§13)
+    // coverage — 네 출처 정확히 하나씩 (§13, RAG-003).
+    // 소스의 실제 상태를 보고한다: ACCESS_LOST/DISABLED → FAILED,
+    // 스코프 없음 → scope_complete=false, 대조 이력 없음/정체 → PARTIAL.
+    // "등록만 됐다"고 LIVE_READ로 분류하지 않는다.
+    const STALE_MS: Record<string, number> = {
+      meeting: 3 * 60_000,
+      notion: 45 * 60_000,
+      github: 45 * 60_000,
+      discord: 45 * 60_000,
+    };
     const coverage: SourceCoverage[] = [];
+    let coverageOk = true;
     for (const kind of SOURCES) {
       const src = sources.find((s) => s.kind === kind);
       if (!src) {
@@ -260,22 +299,52 @@ export async function answerQuestion(
         });
         continue;
       }
+      const gaps: string[] = [];
+      const lastAt = await lastReconciled(store, src.id);
+      let read: SourceCoverage['read_status'] = 'LIVE_READ';
+      let scopeComplete = true;
+      if (src.status !== 'ACTIVE') {
+        read = 'FAILED';
+        gaps.push(`source_${src.status.toLowerCase()}`);
+      }
+      if (src.scopes === 0) {
+        scopeComplete = false;
+        gaps.push('no_allowed_scopes');
+        if (read === 'LIVE_READ') read = 'PARTIAL';
+      }
+      if (read !== 'FAILED') {
+        if (!lastAt) {
+          read = 'PARTIAL';
+          scopeComplete = false;
+          gaps.push('never_reconciled');
+        } else if (Date.now() - new Date(lastAt).getTime() > (STALE_MS[kind] ?? 45 * 60_000)) {
+          read = 'PARTIAL';
+          gaps.push('stale_index');
+        }
+      }
+      if (kind === 'discord') {
+        if (!discordOk) {
+          read = 'PARTIAL';
+          scopeComplete = false;
+          gaps.push(...discordGaps);
+        }
+      }
+      if (read !== 'LIVE_READ') coverageOk = false;
       coverage.push({
         source: kind,
-        read_status:
-          kind === 'discord' ? (discordOk ? 'LIVE_READ' : 'PARTIAL') : 'LIVE_READ',
+        read_status: read,
         search_status: chunksBySource.has(kind) ? 'MATCH' : 'NO_MATCH',
-        scope_complete: kind === 'discord' ? discordOk : true,
-        last_reconciled_at: await lastReconciled(store, src.id),
-        gaps: kind === 'discord' ? discordGaps : [],
+        scope_complete: scopeComplete,
+        last_reconciled_at: lastAt,
+        gaps,
       });
     }
 
-    // 상태 판정 (§13.1/§13.3)
+    // 상태 판정 (§13.1/§13.3) — 어느 출처든 읽기 실패/정체면 COMPLETE 불가.
     let status: AnswerStatus;
     if (!chunks.length) status = 'NEEDS_CLARIFICATION';
     else if (!modelOut) status = 'FAILED';
-    else if (!discordOk || evidenceFailed) status = 'PARTIAL';
+    else if (!coverageOk || evidenceFailed) status = 'PARTIAL';
     else status = 'COMPLETE';
     const claims = (modelOut?.claims ?? [])
       .map((c) => ({

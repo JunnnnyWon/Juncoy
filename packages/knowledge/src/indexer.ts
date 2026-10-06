@@ -17,15 +17,28 @@ export async function queueExtract(store: KnowledgeStore, documentId: string, co
   });
 }
 
-/** 문서의 current 버전 → 청크 set 생성→삽입→활성화. */
-export async function extractDocument(store: KnowledgeStore, documentId: string) {
+/**
+ * 문서의 current 버전 → 청크 set 생성→삽입→활성화.
+ * expectedHash(잡 생성 시점의 content_hash)와 현재 버전이 달라졌으면
+ * 'superseded'로 건너뛴다 — 오래된 버전의 청크를 만들어 어겹지 않게 한다.
+ * chunk_set은 version_id에 결속돼 있어도 활성화는 swapChunkSet의
+ * version = current 검증을 통과해야 한다 (RAG-006).
+ */
+export async function extractDocument(
+  store: KnowledgeStore,
+  documentId: string,
+  expectedHash?: string,
+) {
   const doc = await first<{
     id: string;
     stable_key: string;
     kind: string;
     normalized: any;
+    version_id: string;
+    content_hash: string;
   }>(
-    sql`SELECT d.id, d.stable_key, src.kind, v.normalized
+    sql`SELECT d.id, d.stable_key, src.kind, v.normalized, v.id AS version_id,
+          v.content_hash
         FROM documents d
         JOIN knowledge_sources src ON src.id=d.source_id
         JOIN document_versions v ON v.id=d.current_version_id
@@ -33,13 +46,16 @@ export async function extractDocument(store: KnowledgeStore, documentId: string)
     store.db,
   );
   if (!doc) return { skipped: 'not_ready' } as const;
+  if (expectedHash && doc.content_hash !== expectedHash)
+    return { skipped: 'superseded' } as const;
   const chunks = chunkDocument(doc.kind, doc.stable_key, doc.normalized);
   if (!chunks.length) return { skipped: 'empty' } as const;
   const oversized = chunks.find((c) => c.content.length > CONTENT_MAX);
   if (oversized) return { skipped: 'oversize_chunk' } as const;
-  const setId = await store.createChunkSet(doc.id, EXTRACTOR_VERSION);
+  const setId = await store.createChunkSet(doc.id, EXTRACTOR_VERSION, doc.version_id);
   await store.insertChunks(setId, chunks);
-  await store.swapChunkSet(doc.id, setId);
+  const swapped = await store.swapChunkSet(doc.id, setId);
+  if (!swapped) return { skipped: 'superseded' } as const; // 버전이 더 진행됨
   await store.enqueueJob(`index:${doc.id}:${setId}`, 'index', { document_id: doc.id });
   return { document_id: doc.id, chunk_set_id: setId, chunks: chunks.length } as const;
 }
@@ -58,7 +74,11 @@ export async function indexerTick(
   for (const job of jobs) {
     try {
       if (job.kind === 'extract') {
-        const r = await extractDocument(store, job.payload.document_id);
+        const r = await extractDocument(
+          store,
+          job.payload.document_id,
+          job.payload.content_hash,
+        );
         if ('skipped' in r) await store.finishJob(job, 'DONE', r.skipped);
         else {
           done.extracted++;
