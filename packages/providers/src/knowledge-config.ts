@@ -55,7 +55,7 @@ const schema = z.object({
 
   // 이미지 생성 — OpenRouter 경유 (GPT image2.5 Flare 계열)
   OPENROUTER_API_KEY: z.string().default(''),
-  OPENROUTER_IMAGE_MODEL: z.string().default(''),
+  OPENROUTER_IMAGE_MODEL: z.string().default('openai/gpt-image-2.5-flare'),
   IMAGE_DAILY_LIMIT: z.coerce.number().int().min(1).default(50),
   IMAGE_CONCURRENCY: z.coerce.number().int().min(1).default(2),
 });

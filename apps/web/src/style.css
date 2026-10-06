@@ -2718,6 +2718,44 @@ small {
   background: #17191c;
   color: #e8e4db;
 }
+.brief-card {
+  padding: 14px;
+  margin-bottom: 20px;
+  background: #242629;
+  border: 1px solid #6e3b39;
+  color: #e8e4db;
+}
+.brief-card strong,
+.brief-card p,
+.brief-card small {
+  display: block;
+}
+.brief-card strong {
+  margin: 10px 0 8px;
+  font-size: 12px;
+}
+.brief-card p {
+  color: #b9b8b1;
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.brief-card .primary-button {
+  width: 100%;
+  margin-top: 12px;
+  background: #9d3735;
+  color: #f5ebe2;
+  font-size: 11px;
+}
+.brief-card small {
+  margin-top: 11px;
+  color: #a5aaa2;
+  font-size: 9px;
+  line-height: 1.5;
+}
+.brief-card .brief-error {
+  color: #e19a8b;
+}
 .inspector-title {
   display: flex;
   justify-content: space-between;

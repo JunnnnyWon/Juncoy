@@ -66,6 +66,7 @@ export function ArtReferenceCanvas() {
   const [boardId, setBoardId] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [syncState, setSyncState] = useState('로컬 초안');
+  const [brief, setBrief] = useState<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const selected = refs.find((ref) => ref.id === selectedId) ?? refs[0];
   const selectedCount = useMemo(() => refs.filter((ref) => ref.selected).length, [refs]);
@@ -123,7 +124,7 @@ export function ArtReferenceCanvas() {
           }),
         },
       );
-      window.alert('ImageBrief 초안\n\n' + (brief.instructions || '선택된 레퍼런스가 없습니다.'));
+      setBrief(brief);
     } catch {
       window.alert('ImageBrief 미리보기를 만들 수 없습니다.');
     }
@@ -273,6 +274,38 @@ export function ArtReferenceCanvas() {
           </div>
         </section>
         <aside className="art-inspector">
+          {brief && (
+            <div className="brief-card">
+              <span className="eyebrow">IMAGEBRIEF / DRAFT</span>
+              <strong>{brief.request}</strong>
+              <p>{brief.instructions || '선택된 레퍼런스가 없습니다.'}</p>
+              {brief.approval_id ? (
+                <button
+                  className="primary-button"
+                  onClick={async () => {
+                    try {
+                      await api('/api/assistant/images/generate', {
+                        method: 'POST',
+                        body: JSON.stringify({ approval_id: brief.approval_id }),
+                      });
+                      setBrief({ ...brief, generated: true });
+                    } catch {
+                      setBrief({ ...brief, generation_error: true });
+                    }
+                  }}
+                >
+                  {brief.generated ? '생성 요청 완료' : '승인하고 생성'}
+                </button>
+              ) : (
+                <small>
+                  이미지 provider가 꺼져 있거나 editor 권한이 없어 prompt-only 상태입니다.
+                </small>
+              )}
+              {brief.generation_error && (
+                <small className="brief-error">생성 요청을 처리하지 못했습니다.</small>
+              )}
+            </div>
+          )}
           <div className="inspector-title">
             <div>
               <span className="eyebrow">REFERENCE INSPECTOR</span>

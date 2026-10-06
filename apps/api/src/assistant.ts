@@ -395,7 +395,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
 
   // ── 대화 ──────────────────────────────────────────────────────────
   app.post('/api/assistant/conversations', async (req) => {
-    const { session, ctx, projectId } = await requireSession(req);
+    const { session, ctx, projectId, role } = await requireSession(req);
     const body = z.object({ title: z.string().max(120).optional() }).parse(req.body ?? {});
     const id = await ctx.store.createConversation(projectId, session.user_id, body.title);
     return { id };
@@ -895,7 +895,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
   });
 
   app.post('/api/assistant/art-boards/:id/image-briefs/preview', async (req, reply) => {
-    const { session, ctx, projectId } = await requireSession(req);
+    const { session, ctx, projectId, role } = await requireSession(req);
     const board = await ctx.store.getArtBoard(projectId, session.user_id, (req.params as any).id);
     if (!board) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
     const body = z
@@ -913,6 +913,43 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const refs = Array.isArray((revision?.snapshot as any)?.references)
       ? (revision!.snapshot as any).references.filter((ref: any) => ref.selected)
       : [];
+    const referenceUploadIds = refs.map((ref: any) => ref.upload_id).filter(Boolean);
+    const referenceInstructions = Object.fromEntries(
+      refs.map((ref: any) => [ref.upload_id, ref.role + ': ' + ref.note]),
+    );
+    const providerReady =
+      role !== 'reader' &&
+      process.env.IMAGE_GENERATION_ENABLED === 'true' &&
+      Boolean(process.env.OPENROUTER_API_KEY);
+    const approvalId = providerReady
+      ? await ctx.store.createApproval({
+          projectId,
+          userId: session.user_id,
+          kind: 'image_generate',
+          target: {
+            board_id: board.id,
+            board_revision: revision?.revision ?? board.current_revision,
+            reference_upload_ids: referenceUploadIds,
+          },
+          beforeHash: null,
+          after: {
+            prompt:
+              body.request +
+              '\n\nArt direction:\n' +
+              refs.map((ref: any) => ref.role + ': ' + ref.note).join('\n'),
+            negative: '글자, 워터마크, 로고, 저해상도, 왜곡된 손, 어색한 비율',
+            model: process.env.OPENROUTER_IMAGE_MODEL ?? 'openai/gpt-image-2.5-flare',
+            reference_upload_ids: referenceUploadIds,
+            reference_instructions: referenceInstructions,
+            evidence: [
+              { board_id: board.id, revision: revision?.revision ?? board.current_revision },
+            ],
+          },
+          expiresAt: new Date(
+            Date.now() + Number(process.env.ASSISTANT_APPROVAL_TTL_MS ?? 600_000),
+          ),
+        })
+      : undefined;
     return {
       status: 'DRAFT',
       board_id: board.id,
@@ -928,6 +965,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         note: ref.note,
       })),
       reference_upload_ids: refs.map((ref: any) => ref.upload_id).filter(Boolean),
+      approval_id: approvalId,
+      generation_ready: Boolean(approvalId),
       instructions: refs.map((ref: any) => ref.role + ': ' + ref.note).join('\n'),
       note: 'ImageBrief 초안입니다. 승인 후 OpenRouter 이미지 생성으로 전달됩니다.',
     };
