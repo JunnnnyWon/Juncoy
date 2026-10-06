@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { reparseUpload, UploadStorage, UpstageDocumentParse, sha256 } from '@meeting/knowledge';
+import { reparseUpload, UploadStorage, UpstageDocumentParse, sha256, extractDocument, indexerTick, ensureProfile, UpstageEmbeddings } from '@meeting/knowledge';
 import { randomUUID } from 'node:crypto';
 import { KnowledgeStore, sql, first, rows } from '@meeting/knowledge-db';
 
@@ -49,6 +49,29 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('marks uploads READY only after all current chunk embeddings are present', async (ctx) => {
+    skipIf(ctx);
+    const projectId = randomUUID(), sourceId = randomUUID(), docId = randomUUID();
+    await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'upload ready')`.execute(store!.db);
+    await sql`INSERT INTO knowledge_sources(id,project_id,kind,auth_ref) VALUES(${sourceId},${projectId},'upload','local')`.execute(store!.db);
+    await sql`INSERT INTO documents(id,source_id,stable_key) VALUES(${docId},${sourceId},'upload:ready-test')`.execute(store!.db);
+    const upload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'ready.txt', mime: 'text/plain', bytes: 3, sha256: 'readyhash', storageKey: 'ready-key' });
+    await store!.updateUpload(upload.id, { state: 'INDEXING', documentId: docId });
+    await store!.publishVersion(docId, { contentHash: 'readyhash', sourceRevision: 'readyhash', normalized: { text: 'ready text' } });
+    await extractDocument(store!, docId);
+    await ensureProfile(store!, 'upstage', 'query-test', 'passage-test', 4096);
+    const embeddings = new UpstageEmbeddings('test');
+    const spy = vi.spyOn(embeddings, 'embedDocuments').mockRejectedValue(new Error('temporary failure'));
+    try {
+      await indexerTick(store!, 'ready-worker', { embeddings });
+      expect((await store!.getUpload(projectId, upload.id)).state).toBe('INDEXING');
+      await sql`UPDATE knowledge_jobs SET due_at=now() WHERE kind='index' AND payload->>'document_id'=${docId}`.execute(store!.db);
+      const vector = Array(4096).fill(0); vector[0] = 1;
+      spy.mockImplementation(async (texts) => texts.map(() => vector));
+      await indexerTick(store!, 'ready-worker', { embeddings });
+      expect((await store!.getUpload(projectId, upload.id)).state).toBe('READY');
+    } finally { spy.mockRestore(); }
+  });
   it('does not revive revoked art assets with late vision results', async (ctx) => {
     skipIf(ctx);
     const projectId = randomUUID();

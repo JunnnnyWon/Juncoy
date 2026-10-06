@@ -92,7 +92,17 @@ export async function extractDocument(
   if (expectedHash && doc.content_hash !== expectedHash)
     return { skipped: 'superseded' } as const;
   const chunks = chunkDocument(doc.kind, doc.stable_key, doc.normalized);
-  if (!chunks.length) return { skipped: 'empty' } as const;
+  if (!chunks.length) {
+    if (doc.kind === 'upload' && ['image/png', 'image/jpeg', 'image/webp'].includes(doc.normalized.mime)) {
+      await sql`UPDATE knowledge_uploads SET state='READY', error=null
+        WHERE document_id=${doc.id} AND state='INDEXING'
+          AND EXISTS (SELECT 1 FROM documents WHERE id=${doc.id} AND current_version_id=${doc.version_id} AND NOT deleted AND NOT dirty)`.execute(store.db);
+      await sql`UPDATE art_reference_assets a SET state='READY', updated_at=now()
+        FROM knowledge_uploads u WHERE a.upload_id=u.id AND u.document_id=${doc.id}
+          AND u.state='READY' AND a.state='ANALYZING' AND a.canonical_state NOT IN ('REJECTED','ARCHIVED')`.execute(store.db);
+    }
+    return { skipped: 'empty' } as const;
+  }
   const oversized = chunks.find((c) => c.content.length > CONTENT_MAX);
   if (oversized) return { skipped: 'oversize_chunk' } as const;
   const setId = await store.createChunkSet(doc.id, EXTRACTOR_VERSION, doc.version_id);
@@ -144,6 +154,22 @@ export async function indexerTick(
           limit: opts?.embedLimit ?? 256,
         });
         done.embedded += r.indexed;
+        const pending = await first<{ missing: string }>(sql`SELECT count(*)::text AS missing
+          FROM chunks c JOIN chunk_sets s ON s.id=c.chunk_set_id AND s.active
+          JOIN documents d ON d.id=s.document_id AND d.current_version_id=s.version_id
+          WHERE d.id=${job.payload.document_id} AND NOT EXISTS (
+            SELECT 1 FROM chunk_embeddings e WHERE e.chunk_id=c.id AND e.profile_id=${profile.id})`, store.db);
+        if (Number(pending?.missing ?? 0) > 0) {
+          await store.retryJob(job, new Date(Date.now() + 30_000), 'EMBEDDINGS_PENDING');
+          continue;
+        }
+        await sql`UPDATE knowledge_uploads u SET state='READY', error=null
+          FROM documents d WHERE u.document_id=d.id AND d.id=${job.payload.document_id}
+            AND u.state='INDEXING' AND NOT d.deleted AND NOT d.dirty
+            AND EXISTS (SELECT 1 FROM chunk_sets s WHERE s.document_id=d.id AND s.active AND s.version_id=d.current_version_id)`.execute(store.db);
+        await sql`UPDATE art_reference_assets a SET state='READY', updated_at=now()
+          FROM knowledge_uploads u WHERE a.upload_id=u.id AND u.document_id=${job.payload.document_id}
+            AND u.state='READY' AND a.state='ANALYZING' AND a.canonical_state NOT IN ('REJECTED','ARCHIVED')`.execute(store.db);
         await store.finishJob(job, 'DONE');
       }
     } catch (err) {
