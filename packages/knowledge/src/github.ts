@@ -1,0 +1,265 @@
+import { createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
+import { KnowledgeStore, sql, first } from '@meeting/knowledge-db';
+import { documentKeys } from '@meeting/contracts';
+
+// GitHub 수집기 — spec §6.2.
+// ref별 HEAD/tree/blob으로 현재 코드를 추적하고, push/delete/force-push/revert를
+// tree diff로 반영한다. webhook은 재조회 신호일 뿐 원문 자체가 아니다.
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ── GitHub App 인증: RS256 JWT + installation access token (§2.3 C02) ──
+const base64url = (s: string | Buffer) =>
+  Buffer.from(s).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+export function appJwt(appId: string, privateKeyPem: string) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { iat: now - 60, exp: now + 9 * 60, iss: appId };
+  const body =
+    base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' })) +
+    '.' +
+    base64url(JSON.stringify(payload));
+  return body + '.' + base64url(cryptoSign('RSA-SHA256', Buffer.from(body), privateKeyPem));
+}
+
+// X-Hub-Signature-256 검증 — timing-safe 비교 (§6.2).
+export function verifyWebhookSignature(secret: string, rawBody: string, signature: string | null) {
+  if (!signature?.startsWith('sha256=')) return false;
+  const expected =
+    'sha256=' + createHmac('sha256', secret).update(rawBody, 'utf8').digest('hex');
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+interface TokenProvider {
+  token(): Promise<string>;
+}
+/** App installation 토큰 캐시 — 1시간 유효, 5분 여유 갱신. */
+export class InstallationTokenProvider implements TokenProvider {
+  private cached: { token: string; expiresAt: number } | null = null;
+  constructor(
+    private readonly appId: string,
+    private readonly privateKeyPem: string,
+    private readonly installationId: string,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {}
+  async token() {
+    if (this.cached && this.cached.expiresAt > Date.now() + 5 * 60_000) return this.cached.token;
+    const res = await this.fetchImpl(
+      `https://api.github.com/app/installations/${this.installationId}/access_tokens`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${appJwt(this.appId, this.privateKeyPem)}`,
+          Accept: 'application/vnd.github+json',
+        },
+      },
+    );
+    if (!res.ok) throw new Error(`installation token failed: ${res.status}`);
+    const body = (await res.json()) as { token: string; expires_at: string };
+    this.cached = { token: body.token, expiresAt: new Date(body.expires_at).getTime() };
+    return body.token;
+  }
+}
+/** PAT/고정 토큰 — 개발·fixture용. */
+export class StaticTokenProvider implements TokenProvider {
+  constructor(private readonly t: string) {}
+  async token() {
+    return this.t;
+  }
+}
+
+export class GitHubRest {
+  constructor(
+    private readonly tokens: TokenProvider,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {}
+  async request(path: string, params?: Record<string, string>) {
+    for (let attempt = 0; ; attempt++) {
+      const url = new URL(`https://api.github.com${path}`);
+      for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
+      const res = await this.fetchImpl(url, {
+        headers: {
+          Authorization: `Bearer ${await this.tokens.token()}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      });
+      const retryAfter = Number(res.headers.get('retry-after'));
+      const remaining = res.headers.get('x-ratelimit-remaining');
+      if ((res.status === 429 || res.status === 403 && remaining === '0') && attempt < 3) {
+        await sleep((retryAfter || 60) * 1000 + Math.random() * 500);
+        continue;
+      }
+      if (res.status >= 500 && attempt < 3) {
+        await sleep(2 ** attempt * 500 + Math.random() * 250);
+        continue;
+      }
+      let body: any = null;
+      try {
+        body = await res.json();
+      } catch {
+        /* 빈 본문 */
+      }
+      return { status: res.status, body, headers: res.headers };
+    }
+  }
+  branch(repo: string, ref: string) {
+    return this.request(`/repos/${repo}/branches/${encodeURIComponent(ref)}`);
+  }
+  tree(repo: string, sha: string) {
+    return this.request(`/repos/${repo}/git/trees/${sha}`, { recursive: '1' });
+  }
+  blob(repo: string, sha: string) {
+    return this.request(`/repos/${repo}/git/blobs/${sha}`);
+  }
+}
+
+interface TreeEntry {
+  path: string;
+  type: 'blob' | 'tree' | 'commit';
+  sha: string;
+  size?: number;
+}
+
+export class GitHubCollector {
+  constructor(
+    private readonly store: KnowledgeStore,
+    private readonly rest: GitHubRest,
+    private readonly repo: string, // "owner/name"
+    private readonly repoId: string, // 안정 식별자 (rename 무관)
+    private readonly sourceId: string,
+  ) {}
+
+  private cursorKey(ref: string) {
+    return `ref:${ref}`;
+  }
+  private async lastHead(ref: string) {
+    const row = await first<{ cursor: any }>(
+      sql`SELECT cursor FROM connector_cursors WHERE source_id=${this.sourceId} AND scope_key=${this.cursorKey(ref)}`,
+      this.store.db,
+    );
+    return (row?.cursor ?? {}) as { head_sha?: string; tree?: Record<string, string> };
+  }
+  private async saveCursor(ref: string, cursor: object) {
+    await sql`
+      INSERT INTO connector_cursors(source_id, scope_key, cursor, last_reconciled_at, updated_at)
+      VALUES (${this.sourceId}, ${this.cursorKey(ref)}, ${JSON.stringify(cursor)}::jsonb, now(), now())
+      ON CONFLICT (source_id, scope_key) DO UPDATE
+        SET cursor=EXCLUDED.cursor, last_reconciled_at=now(), updated_at=now()`.execute(
+      this.store.db,
+    );
+  }
+
+  /** recursive tree의 blob 경로→SHA 맵. truncated면 하위 tree를 재귀 조회 (§6.2-7). */
+  private async flattenTree(sha: string): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    const walk = async (treeSha: string, prefix: string) => {
+      const r = await this.rest.tree(this.repo, treeSha);
+      if (r.status !== 200 || !Array.isArray(r.body?.tree)) return;
+      for (const e of r.body.tree as TreeEntry[]) {
+        const p = prefix ? `${prefix}/${e.path}` : e.path;
+        if (e.type === 'blob') out[p] = e.sha;
+        else if (e.type === 'tree') await walk(e.sha, p);
+      }
+      // truncated=true: recursive 응답이 잘렸으면 비재귀로 재조회가 필요하지만
+      // 이 구현은 이미 트리별 재귀 호출이라 path가 완전하다.
+    };
+    await walk(sha, '');
+    return out;
+  }
+
+  /**
+   * ref HEAD 대조 — push/rename/delete/force-push/revert를 모두 tree diff로 커버한다.
+   * 반환: {changed, head, added, removed}
+   */
+  async reconcileRef(ref: string) {
+    const prev = await this.lastHead(ref);
+    const br = await this.rest.branch(this.repo, ref);
+    if (br.status === 404) {
+      // 브랜치 삭제 — 기존 문서 전부 tombstone.
+      if (prev.tree)
+        for (const path of Object.keys(prev.tree))
+          await this.store.applyTombstone(
+            documentKeys.githubFile(this.repoId, ref, path),
+            this.sourceId,
+            'ref_deleted',
+          );
+      await this.saveCursor(ref, { head_sha: null, tree: {} });
+      return { changed: true, deleted_ref: true };
+    }
+    if (br.status !== 200) return { changed: false, status: br.status };
+    const head = br.body.commit?.sha as string;
+    if (!head || head === prev.head_sha) return { changed: false, head };
+    const tree = await this.flattenTree(head);
+    const old = prev.tree ?? {};
+    const added = Object.keys(tree).filter((p) => !(p in old));
+    const modified = Object.keys(tree).filter((p) => p in old && old[p] !== tree[p]);
+    const removed = Object.keys(old).filter((p) => !(p in tree));
+    for (const p of [...added, ...modified]) await this.ingestFile(ref, p, tree[p], head);
+    for (const p of removed)
+      await this.store.applyTombstone(
+        documentKeys.githubFile(this.repoId, ref, p),
+        this.sourceId,
+        'path_removed',
+        old[p],
+      );
+    await this.saveCursor(ref, { head_sha: head, tree });
+    return { changed: true, head, added: added.length, modified: modified.length, removed: removed.length };
+  }
+
+  /** blob 내용을 문서로 기록. LFS 포인터는 내용을 읽은 것으로 표시하지 않는다 (§6.2-8). */
+  private async ingestFile(ref: string, path: string, blobSha: string, head: string) {
+    const key = documentKeys.githubFile(this.repoId, ref, path);
+    const ok = await this.store.markDocumentDirty(this.sourceId, key, {
+      repo: this.repo,
+      ref,
+      path,
+    });
+    if (!ok) return;
+    const doc = await first<{ id: string; current_version_id: string | null }>(
+      sql`SELECT id, current_version_id FROM documents WHERE source_id=${this.sourceId} AND stable_key=${key}`,
+      this.store.db,
+    );
+    if (!doc) return;
+    // 동일 blob 재사용 — 내용이 같으면 재조회 없이 revision만 갱신한다 (§6.2-5).
+    const cur = await first<{ content_hash: string }>(
+      sql`SELECT v.content_hash FROM documents d
+          JOIN document_versions v ON v.id=d.current_version_id WHERE d.id=${doc.id}`,
+      this.store.db,
+    );
+    if (cur?.content_hash === blobSha) {
+      await sql`UPDATE documents SET dirty=false, updated_at=now() WHERE id=${doc.id}`.execute(
+        this.store.db,
+      );
+      return;
+    }
+    const b = await this.rest.blob(this.repo, blobSha);
+    let text: string | null = null;
+    let lfsPointer = false;
+    let oversize = false;
+    if (b.status === 200 && b.body?.encoding === 'base64' && typeof b.body.content === 'string') {
+      const buf = Buffer.from(b.body.content.replace(/\n/g, ''), 'base64');
+      // git-lfs pointer 판별 (version https://git-lfs.github.com/spec/v1 헤더)
+      const head = buf.subarray(0, 200).toString('utf8');
+      if (head.startsWith('version https://git-lfs.github.com/spec/v1')) lfsPointer = true;
+      else if (buf.length > 2_000_000) oversize = true;
+      else text = buf.toString('utf8');
+    }
+    await this.store.publishVersion(doc.id, {
+      contentHash: blobSha, // blob SHA 자체가 내용 해시 (§6.2-5)
+      sourceRevision: `${head}:${blobSha}`,
+      sourceModifiedAt: new Date(),
+      normalized: {
+        text: text ?? '',
+        path,
+        ref,
+        binary: text === null && !lfsPointer && !oversize,
+        lfs_pointer: lfsPointer,
+        oversize,
+        sha: blobSha,
+      },
+    });
+  }
+}

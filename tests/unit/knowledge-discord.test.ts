@@ -16,22 +16,25 @@ const msg = (over: Partial<DiscordMessage>): DiscordMessage => ({
 });
 
 describe('DiscordRest', () => {
+  const fetchUrl = (spy: { mock: { calls: any[] } }, i: number) =>
+    new URL(String(spy.mock.calls[i][0]));
+
   it('sends before/after only one at a time as snowflake strings', async () => {
-    const spy = vi.fn(async () => res([]));
+    const spy = vi.fn(async (_u: any, _o?: any) => res([]));
     const rest = new DiscordRest('t', spy as any);
     await rest.messages('ch1', { before: '1234567890123456789', limit: 50 });
-    const url = new URL(spy.mock.calls[0][0] as string);
+    const url = fetchUrl(spy, 0);
     expect(url.searchParams.get('before')).toBe('1234567890123456789');
     expect(url.searchParams.get('after')).toBeNull();
     await rest.messages('ch1', { after: '999' });
-    const url2 = new URL(spy.mock.calls[1][0] as string);
+    const url2 = fetchUrl(spy, 1);
     expect(url2.searchParams.get('after')).toBe('999');
     expect(url2.searchParams.get('before')).toBeNull();
   });
 
   it('retries on 429 honoring retry-after, then returns', async () => {
     const spy = vi
-      .fn()
+      .fn(async (_u: any, _o?: any) => res([]))
       .mockResolvedValueOnce(res({ retry_after: 0.01 }, 429, { 'retry-after': '0.01' }))
       .mockResolvedValueOnce(res([{ id: 'm1' }]));
     const rest = new DiscordRest('t', spy as any);
@@ -42,7 +45,7 @@ describe('DiscordRest', () => {
   });
 
   it('does not retry 403 (access lost is surfaced, not hidden)', async () => {
-    const spy = vi.fn(async () => res({ message: 'Missing Access' }, 403));
+    const spy = vi.fn(async (_u: any, _o?: any) => res({ message: 'Missing Access' }, 403));
     const rest = new DiscordRest('t', spy as any);
     const r = await rest.messages('ch', {});
     expect(r.status).toBe(403);
