@@ -213,10 +213,18 @@ export class GitHubCollector {
       `github ${this.repo}@${ref} head=${head.slice(0, 8)} files=${Object.keys(tree).length} +${added.length} ~${modified.length} -${removed.length}\n`,
     );
     const work = [...added, ...modified];
-    for (let i = 0; i < work.length; i++) {
+    // 파일당 REST 1회 + DB 왕복 수 회라 직렬은 느리다 — 8개씩 병렬 수집.
+    const PAR = 8;
+    for (let i = 0; i < work.length; i += PAR) {
       if (i && i % 200 === 0)
         process.stdout.write(`github ${this.repo}@${ref} ingest ${i}/${work.length}\n`);
-      await this.ingestFile(ref, work[i], tree[work[i]], head);
+      await Promise.all(
+        work.slice(i, i + PAR).map((p) =>
+          this.ingestFile(ref, p, tree[p], head).catch((e) => {
+            process.stderr.write(`github ingest ${p}: ${e}\n`);
+          }),
+        ),
+      );
     }
     for (const p of removed)
       await this.store.applyTombstone(
