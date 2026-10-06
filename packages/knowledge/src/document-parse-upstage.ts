@@ -80,6 +80,16 @@ async function readResponseWithinLimit(response: Response, maxBytes: number) {
   return bytes.buffer;
 }
 
+function elementText(element: any): string {
+  if (typeof element.text === 'string') return element.text;
+  if (typeof element.content === 'string') return textFromHtml(element.content);
+  if (typeof element.content?.text === 'string') return element.content.text;
+  if (typeof element.content?.html === 'string') return textFromHtml(element.content.html);
+  if (typeof element.content?.markdown === 'string') return element.content.markdown;
+  if (typeof element.html === 'string') return textFromHtml(element.html);
+  return '';
+}
+
 export class UpstageDocumentParse {
   constructor(private options: DocumentParseOptions) {}
 
@@ -127,8 +137,8 @@ export class UpstageDocumentParse {
             page: typeof block.page === 'number' ? block.page : typeof block.page_number === 'number' ? block.page_number : null,
             ordinal: Number(block.ordinal ?? index),
             block_type: String(block.block_type ?? block.category ?? block.type ?? 'unknown'),
-            text: String(block.text ?? (typeof block.content === 'string' ? block.content : block.content?.text ?? '')),
-            html: typeof block.html === 'string' ? block.html : undefined,
+            text: elementText(block),
+            html: typeof block.html === 'string' ? block.html : typeof block.content?.html === 'string' ? block.content.html : undefined,
             metadata: {
               ...(block.metadata && typeof block.metadata === 'object' ? block.metadata : {}),
               ...(block.coordinates ? { bbox: block.coordinates } : {}),
@@ -146,7 +156,7 @@ export class UpstageDocumentParse {
               const page = Number(block.page ?? block.page_number ?? 1);
               const id = String(block.block_id ?? block.id ?? '');
               const value = grouped.get(page) ?? { text: '', block_ids: [] };
-              const text = String(block.text ?? (typeof block.content === 'string' ? block.content : block.content?.text ?? ''));
+              const text = elementText(block);
               value.text = [value.text, text].filter(Boolean).join('\n');
               if (id) value.block_ids.push(id);
               grouped.set(page, value);

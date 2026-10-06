@@ -95,6 +95,18 @@ describe('document and image provider adapters', () => {
     expect(result.parseError).toBe('provider_timeout');
   });
 
+  it('normalizes nested HTML into blocks and pages', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      content: { html: '<p>cell</p>' },
+      elements: [{ id: 'nested', page: 2, content: { html: '<h2>title</h2><p>cell</p>' } }],
+    }), { status: 200 }));
+    const result = await new UpstageDocumentParse({ apiKey: 'secret', endpoint: 'https://parse.test' }).parsePdf(Buffer.from('%PDF-test'));
+    expect(result.blocks[0].text).toContain('title');
+    expect(result.blocks[0].html).toContain('<h2>');
+    expect(result.pages[0].text).toContain('cell');
+    expect(result.pages[0].block_ids).toEqual(['nested']);
+  });
+
   it('rejects an oversized Document Parse response before normalization', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ content: 'too large' }), { status: 200 }),
