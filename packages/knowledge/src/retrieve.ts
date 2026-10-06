@@ -95,9 +95,12 @@ export async function vectorSearch(
     sql`SELECT c.id AS chunk_id, d.id AS document_id, d.stable_key, src.kind AS source,
           c.content, c.span,
           (e.embedding <=> ${lit}::vector) AS dist
-        ${baseFrom(projectId)}
-          AND EXISTS (SELECT 1 FROM chunk_embeddings e
-                      WHERE e.chunk_id=c.id AND e.profile_id=${profile.id})
+        FROM chunks c
+        JOIN chunk_sets s ON s.id=c.chunk_set_id AND s.active
+        JOIN documents d ON d.id=s.document_id
+        JOIN knowledge_sources src ON src.id=d.source_id AND src.project_id=${projectId}
+        JOIN chunk_embeddings e ON e.chunk_id=c.id AND e.profile_id=${profile.id}
+        WHERE NOT d.deleted AND d.state='READY' AND NOT d.dirty
         ORDER BY dist ASC LIMIT ${limit}`,
     store.db,
   );
