@@ -114,7 +114,10 @@ const main = async () => {
           if (!repo) continue;
           const ref = sc.scope_key.slice('ref:'.length);
           try {
-            await new GitHubCollector(store, rest, repo, repoId, sc.source_id).reconcileRef(ref);
+            const r = await new GitHubCollector(store, rest, repo, repoId, sc.source_id).reconcileRef(
+              ref,
+            );
+            if ((r as any)?.changed) log(`github ${repo}@${ref}: ${JSON.stringify(r)}`);
           } catch (e) {
             process.stderr.write(`github ${repo}@${ref}: ${e}\n`);
           }

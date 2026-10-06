@@ -50,6 +50,7 @@ export class DiscordRest {
       for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
       const res = await this.fetchImpl(url, {
         headers: { Authorization: `Bot ${this.token}` },
+        signal: AbortSignal.timeout(30_000),
       });
       const retryAfter = Number(res.headers.get('retry-after')) || undefined;
       if (res.status === 429 && attempt < this.maxRetries) {

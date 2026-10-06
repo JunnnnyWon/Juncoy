@@ -42,6 +42,7 @@ export class NotionRest {
           'content-type': 'application/json',
         },
         body: opts?.body ? JSON.stringify(opts.body) : undefined,
+        signal: AbortSignal.timeout(30_000),
       });
       const retryAfter = Number(res.headers.get('retry-after'));
       if (res.status === 429 && attempt < 4) {
