@@ -1,0 +1,220 @@
+import { sql } from 'kysely';
+import { first, rows, type KnowledgeStore } from '@meeting/knowledge-db';
+import { createHash, randomUUID } from 'node:crypto';
+import type { UploadStorage } from './uploads.ts';
+
+// 이미지 생성 — OpenRouter 경유 (사용자 지정: GPT image2.5 Flare 계열).
+// /images/generations 우선, 미지원 모델이면 chat/completions + modalities 로 폴백.
+// 429/5xx는 지수 백오프 재시도, 일일 쿼터와 동시 실행 상한을 둔다 (spec §12).
+
+export interface ImageResult {
+  b64: string;
+  width?: number;
+  height?: number;
+}
+
+export class OpenRouterImages {
+  private running = 0;
+  private queue: (() => void)[] = [];
+
+  constructor(
+    private apiKey: string,
+    private model: string,
+    private concurrency = 2,
+    private baseUrl = 'https://openrouter.ai/api/v1',
+  ) {}
+
+  private async acquire() {
+    if (this.running < this.concurrency) {
+      this.running++;
+      return;
+    }
+    await new Promise<void>((r) => this.queue.push(r));
+    this.running++;
+  }
+  private release() {
+    this.running--;
+    this.queue.shift()?.();
+  }
+
+  /** 모델 카탈로그에서 slug 존재 여부 확인 — 설정 검증용. */
+  async checkModel(): Promise<boolean> {
+    const r = await fetch(`${this.baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+    });
+    if (!r.ok) return false;
+    const body = (await r.json()) as any;
+    return (body.data ?? []).some((m: any) => m.id === this.model);
+  }
+
+  /** 실제 생성. 결과는 base64 png/jpeg. 실패 시 throw. */
+  async generate(prompt: string, negative?: string): Promise<ImageResult> {
+    const fullPrompt = negative ? `${prompt}\n\n제외: ${negative}` : prompt;
+    await this.acquire();
+    try {
+      return await this.withRetry(() => this.callImages(fullPrompt));
+    } catch (e: any) {
+      if (e?.code === 'images_api_unsupported')
+        return this.withRetry(() => this.callChat(fullPrompt));
+      throw e;
+    } finally {
+      this.release();
+    }
+  }
+
+  private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
+    let delay = 1500;
+    for (let i = 0; i < 4; i++) {
+      try {
+        return await fn();
+      } catch (e: any) {
+        const status = e?.status ?? 0;
+        if (e?.code === 'images_api_unsupported') throw e;
+        if (status !== 429 && status < 500) throw e;
+        if (i === 3) throw e;
+        await new Promise((r) => setTimeout(r, delay));
+        delay *= 2;
+      }
+    }
+    throw new Error('unreachable');
+  }
+
+  private async callImages(prompt: string): Promise<ImageResult> {
+    const r = await fetch(`${this.baseUrl}/images/generations`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model: this.model, prompt, n: 1 }),
+      signal: AbortSignal.timeout(180_000),
+    });
+    if (r.status === 404 || r.status === 400) {
+      const body = await r.json().catch(() => ({}));
+      const msg = JSON.stringify(body);
+      if (/not.*support|unsupported|unknown.*endpoint|no.*route/i.test(msg))
+        throw Object.assign(new Error('images api unsupported'), {
+          code: 'images_api_unsupported',
+        });
+      throw Object.assign(new Error(`openrouter_${r.status}`), { status: r.status });
+    }
+    if (!r.ok) throw Object.assign(new Error(`openrouter_${r.status}`), { status: r.status });
+    const body = (await r.json()) as any;
+    const item = body.data?.[0];
+    if (item?.b64_json) return { b64: item.b64_json };
+    if (item?.url) {
+      const img = await fetch(item.url, { signal: AbortSignal.timeout(60_000) });
+      if (!img.ok) throw new Error(`image_fetch_${img.status}`);
+      return { b64: Buffer.from(await img.arrayBuffer()).toString('base64') };
+    }
+    throw new Error('empty_image_response');
+  }
+
+  private async callChat(prompt: string): Promise<ImageResult> {
+    const r = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        modalities: ['image', 'text'],
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(180_000),
+    });
+    if (!r.ok) throw Object.assign(new Error(`openrouter_${r.status}`), { status: r.status });
+    const body = (await r.json()) as any;
+    const msg = body.choices?.[0]?.message;
+    // OpenRouter image 응답: message.images[0].image_url.url (data:image/...;base64,...)
+    const url = msg?.images?.[0]?.image_url?.url ?? msg?.images?.[0]?.url;
+    if (typeof url === 'string' && url.startsWith('data:')) {
+      const b64 = url.slice(url.indexOf(',') + 1);
+      return { b64 };
+    }
+    throw new Error('no_image_in_response');
+  }
+}
+
+// ── 잡/결과 저장소 도우미 ────────────────────────────────────────────
+
+export async function imageCountToday(store: KnowledgeStore, projectId: string) {
+  const r = await first<{ c: string }>(
+    sql`SELECT count(*)::text AS c FROM image_jobs
+        WHERE project_id=${projectId} AND created_at > date_trunc('day', now())`,
+    store.db,
+  );
+  return Number(r?.c ?? 0);
+}
+
+export async function createImageJob(
+  store: KnowledgeStore,
+  j: {
+    projectId: string;
+    ownerId: string;
+    approvalId?: string;
+    model: string;
+    prompt: string;
+    negative?: string;
+    evidence?: unknown;
+    options?: unknown;
+    idempotencyKey: string;
+  },
+) {
+  const id = randomUUID();
+  const promptHash = createHash('sha256').update(j.prompt).digest('hex');
+  const r = await first<{ id: string }>(
+    sql`INSERT INTO image_jobs(id, project_id, owner_id, approval_id, status, provider,
+            model, prompt, negative_prompt, evidence, prompt_hash, options, idempotency_key)
+        VALUES (${id}, ${j.projectId}, ${j.ownerId}, ${j.approvalId ?? null}, 'PENDING',
+            'openrouter', ${j.model}, ${j.prompt}, ${j.negative ?? null},
+            ${JSON.stringify(j.evidence ?? [])}, ${promptHash},
+            ${JSON.stringify(j.options ?? {})}, ${j.idempotencyKey})
+        ON CONFLICT (idempotency_key) DO NOTHING
+        RETURNING id`,
+    store.db,
+  );
+  if (r) return r.id;
+  const existing = await first<{ id: string; status: string }>(
+    sql`SELECT id, status FROM image_jobs WHERE idempotency_key=${j.idempotencyKey}`,
+    store.db,
+  );
+  return existing!.id;
+}
+
+export async function finishImageJob(
+  store: KnowledgeStore,
+  jobId: string,
+  status: 'DONE' | 'FAILED',
+  error?: string,
+  result?: { storageKey: string; bytes: number; width?: number; height?: number; costUsd?: number },
+) {
+  await sql`UPDATE image_jobs SET status=${status}, error=${error ?? null},
+        finished_at=now() WHERE id=${jobId}`.execute(store.db);
+  if (result)
+    await sql`INSERT INTO image_results(id, job_id, storage_key, bytes, width, height, cost_usd)
+      VALUES (${randomUUID()}, ${jobId}, ${result.storageKey}, ${result.bytes},
+        ${result.width ?? null}, ${result.height ?? null}, ${result.costUsd ?? null})`.execute(
+      store.db,
+    );
+}
+
+export async function listImages(store: KnowledgeStore, projectId: string) {
+  return rows<any>(
+    sql`SELECT r.id, r.job_id, r.bytes, r.width, r.height, r.created_at,
+               j.prompt, j.model, j.owner_id
+        FROM image_results r JOIN image_jobs j ON j.id=r.job_id
+        WHERE j.project_id=${projectId} ORDER BY r.created_at DESC LIMIT 100`,
+    store.db,
+  );
+}
+
+export async function getImage(store: KnowledgeStore, projectId: string, resultId: string) {
+  return first<any>(
+    sql`SELECT r.*, j.prompt, j.project_id FROM image_results r
+        JOIN image_jobs j ON j.id=r.job_id
+        WHERE r.id=${resultId} AND j.project_id=${projectId}`,
+    store.db,
+  );
+}

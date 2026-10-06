@@ -87,11 +87,26 @@ export class NotionRest {
       },
     });
   }
-  databaseQuery(id: string, cursor?: string) {
+  databaseQuery(
+    id: string,
+    opts: { cursor?: string; filter?: any; sorts?: any[]; pageSize?: number } = {},
+  ) {
     return this.request(`/databases/${id}/query`, {
       method: 'POST',
-      body: { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) },
+      body: {
+        page_size: opts.pageSize ?? 100,
+        ...(opts.filter ? { filter: opts.filter } : {}),
+        ...(opts.sorts?.length ? { sorts: opts.sorts } : {}),
+        ...(opts.cursor ? { start_cursor: opts.cursor } : {}),
+      },
     });
+  }
+  /** 쓰기 — notion.* 도구의 commit 경로에서만 쓴다 (spec §10). */
+  createPage(body: any) {
+    return this.request('/pages', { method: 'POST', body });
+  }
+  updatePage(id: string, body: any) {
+    return this.request(`/pages/${id}`, { method: 'PATCH', body });
   }
 }
 
@@ -337,7 +352,7 @@ export class NotionCollector {
         } else if (s.scope_key.startsWith('database:')) {
           let cursor: string | undefined;
           do {
-            const r = await this.rest.databaseQuery(id, cursor);
+            const r = await this.rest.databaseQuery(id, { cursor });
             if (r.status === 401 || r.status === 403) {
               await this.markAccessLost();
               break;

@@ -16,6 +16,7 @@ import { Auth, type Session } from './auth.ts';
 import { exportMarkdown, exportText } from './export.ts';
 import { segmentAudio, type AudioChunk } from './segment-audio.ts';
 import { registerKnowledgeRoutes } from './knowledge.ts';
+import { registerAssistantRoutes } from './assistant.ts';
 export async function buildServer(config: AppConfig, store: Store) {
   const app = Fastify({
     logger:
@@ -527,6 +528,7 @@ export async function buildServer(config: AppConfig, store: Store) {
   // 캡슐화 플러그인으로 등록 — 지식 라우트 전용 에러핸들러(503 매핑)가
   // 전역 핸들러를 덮지 않도록 컨텍스트를 분리한다 (RAG-015).
   await app.register(async (k) => registerKnowledgeRoutes(k, { auth, config }));
+  await app.register(async (a) => registerAssistantRoutes(a, { auth, config }));
   const dist = resolve('apps/web/dist');
   if (existsSync(dist)) {
     await app.register(serveStatic, { root: dist, prefix: '/' });

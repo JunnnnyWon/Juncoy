@@ -34,6 +34,25 @@ const schema = z.object({
 
   // 내부 서비스 서명 키 — api → knowledge-api 서명 검증 (§14)
   INTERNAL_SIGNING_KEY: z.string().min(32).optional(),
+
+  // ── 웹 어시스턴트 (WEB_PROJECT_ASSISTANT_DEVELOPMENT_SPEC) ──────────
+  ASSISTANT_ENABLED: z.enum(['true', 'false']).default('false'),
+  ASSISTANT_APPROVAL_TTL_MS: z.coerce.number().int().min(10_000).default(600_000),
+  ASSISTANT_SSE_HEARTBEAT_MS: z.coerce.number().int().min(1_000).default(15_000),
+
+  // Notion 변경 대상 DB — 고정 매핑 (spec §1)
+  NOTION_TOKEN: z.string().default(''),
+  NOTION_SCHEDULE_DATABASE_ID: z.string().default(''),
+  NOTION_TASK_DATABASE_ID: z.string().default(''),
+
+  // 업로드 파일 private 저장소 (spec §5: 서버 로컬 볼륨)
+  KNOWLEDGE_UPLOAD_DIR: z.string().default('/data/knowledge/uploads'),
+
+  // 이미지 생성 — OpenRouter 경유 (GPT image2.5 Flare 계열)
+  OPENROUTER_API_KEY: z.string().default(''),
+  OPENROUTER_IMAGE_MODEL: z.string().default(''),
+  IMAGE_DAILY_LIMIT: z.coerce.number().int().min(1).default(50),
+  IMAGE_CONCURRENCY: z.coerce.number().int().min(1).default(2),
 });
 export type KnowledgeConfig = z.infer<typeof schema>;
 

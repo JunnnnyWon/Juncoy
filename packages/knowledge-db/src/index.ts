@@ -1,14 +1,10 @@
 import { Pool } from 'pg';
 import { Kysely, PostgresDialect, sql, type Transaction, type RawBuilder } from 'kysely';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type {
-  DocumentState,
-  KnowledgeJobKind,
-  KnowledgeJobStatus,
-} from '@meeting/contracts';
+import type { DocumentState, KnowledgeJobKind, KnowledgeJobStatus } from '@meeting/contracts';
 
 export { sql } from 'kysely';
 export type Database = Record<string, never>;
@@ -225,8 +221,7 @@ export class KnowledgeStore {
       this.db,
     );
     if (!row) return 'tombstoned'; // 방어적 — INSERT는 항상 행을 반환한다
-    if (unlessHash !== null && row.cur_hash === unlessHash && !row.dirty)
-      return 'unchanged';
+    if (unlessHash !== null && row.cur_hash === unlessHash && !row.dirty) return 'unchanged';
     return 'dirty';
   }
 
@@ -411,6 +406,334 @@ export class KnowledgeStore {
     await sql`
       INSERT INTO knowledge_audit(id, project_id, actor, kind, data)
       VALUES (${randomUUID()}, null, null, 'TOMBSTONE_LIFTED',
-        ${json({ stable_key: stableKey, observed_at: observedAt.toISOString() })})`.execute(this.db);
+        ${json({ stable_key: stableKey, observed_at: observedAt.toISOString() })})`.execute(
+      this.db,
+    );
+  }
+
+  // ── 웹 어시스턴트 (spec §14) ──────────────────────────────────────
+
+  async createConversation(projectId: string, ownerId: string, title = '새 대화') {
+    const id = randomUUID();
+    await sql`
+      INSERT INTO assistant_conversations(id, project_id, owner_id, title)
+      VALUES (${id}, ${projectId}, ${ownerId}, ${title})`.execute(this.db);
+    return id;
+  }
+
+  /** 대화는 owner+project 스코프로만 조회 — id만으로 타인 대화를 열지 않는다. */
+  async getConversation(projectId: string, conversationId: string, ownerId: string) {
+    return first<{ id: string; title: string; archived: boolean }>(
+      sql`SELECT id, title, archived FROM assistant_conversations
+          WHERE id=${conversationId} AND project_id=${projectId} AND owner_id=${ownerId}`,
+      this.db,
+    );
+  }
+
+  async listConversations(projectId: string, ownerId: string) {
+    return rows<{ id: string; title: string; archived: boolean; updated_at: Date }>(
+      sql`SELECT id, title, archived, updated_at FROM assistant_conversations
+          WHERE project_id=${projectId} AND owner_id=${ownerId} AND NOT archived
+          ORDER BY updated_at DESC LIMIT 100`,
+      this.db,
+    );
+  }
+
+  async archiveConversation(projectId: string, conversationId: string, ownerId: string) {
+    const res = await sql`
+      UPDATE assistant_conversations SET archived=true, updated_at=now()
+      WHERE id=${conversationId} AND project_id=${projectId} AND owner_id=${ownerId}`.execute(
+      this.db,
+    );
+    return Number(res.numAffectedRows ?? 0) > 0;
+  }
+
+  async createMessage(
+    conversationId: string,
+    role: string,
+    content: string,
+    opts: { runId?: string; attachments?: unknown[]; citations?: unknown[] } = {},
+  ) {
+    const id = randomUUID();
+    await sql`
+      INSERT INTO assistant_messages(id, conversation_id, run_id, role, content, attachments, citations)
+      VALUES (${id}, ${conversationId}, ${opts.runId ?? null}, ${role}, ${content},
+        ${json(opts.attachments ?? [])}, ${json(opts.citations ?? [])})`.execute(this.db);
+    await sql`UPDATE assistant_conversations SET updated_at=now() WHERE id=${conversationId}`.execute(
+      this.db,
+    );
+    return id;
+  }
+
+  async listMessages(conversationId: string, limit = 200) {
+    return rows<{
+      id: string;
+      run_id: string | null;
+      role: string;
+      content: string;
+      attachments: unknown[];
+      citations: unknown[];
+      created_at: Date;
+    }>(
+      sql`SELECT id, run_id, role, content, attachments, citations, created_at
+          FROM assistant_messages WHERE conversation_id=${conversationId}
+          ORDER BY created_at ASC LIMIT ${limit}`,
+      this.db,
+    );
+  }
+
+  async createRun(conversationId: string, mode: string, messageId?: string) {
+    const id = randomUUID();
+    await sql`
+      INSERT INTO assistant_runs(id, conversation_id, message_id, mode, phase)
+      VALUES (${id}, ${conversationId}, ${messageId ?? null}, ${mode}, 'idle')`.execute(this.db);
+    return id;
+  }
+
+  async getRun(runId: string) {
+    return first<{
+      id: string;
+      conversation_id: string;
+      mode: string;
+      phase: string;
+      status: string | null;
+      model: string | null;
+      error: string | null;
+      cancelled: boolean;
+      created_at: Date;
+    }>(
+      sql`SELECT id, conversation_id, mode, phase, status, model, error, cancelled, created_at
+          FROM assistant_runs WHERE id=${runId}`,
+      this.db,
+    );
+  }
+
+  async updateRun(
+    runId: string,
+    patch: { phase?: string; status?: string; model?: string; error?: string; cancelled?: boolean },
+  ) {
+    if (patch.phase !== undefined)
+      await sql`UPDATE assistant_runs SET phase=${patch.phase}, updated_at=now() WHERE id=${runId}`.execute(
+        this.db,
+      );
+    if (patch.status !== undefined)
+      await sql`UPDATE assistant_runs SET status=${patch.status}, updated_at=now() WHERE id=${runId}`.execute(
+        this.db,
+      );
+    if (patch.model !== undefined)
+      await sql`UPDATE assistant_runs SET model=${patch.model} WHERE id=${runId}`.execute(this.db);
+    if (patch.error !== undefined)
+      await sql`UPDATE assistant_runs SET error=${patch.error} WHERE id=${runId}`.execute(this.db);
+    if (patch.cancelled !== undefined)
+      await sql`UPDATE assistant_runs SET cancelled=${patch.cancelled} WHERE id=${runId}`.execute(
+        this.db,
+      );
+  }
+
+  /** 이벤트는 run 내 seq 단조 증가 + payload hash로 재검증 (§14). */
+  async emitRunEvent(runId: string, kind: string, payload: unknown) {
+    const hash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+    return this.db.transaction().execute(async (tx) => {
+      const { n } = await first<{ n: number }>(
+        sql`SELECT COALESCE(max(seq), 0) + 1 AS n FROM assistant_run_events WHERE run_id=${runId}`,
+        tx,
+      );
+      const id = randomUUID();
+      await sql`
+        INSERT INTO assistant_run_events(id, run_id, seq, kind, payload, payload_hash)
+        VALUES (${id}, ${runId}, ${n}, ${kind}, ${json(payload ?? {})}, ${hash})`.execute(tx);
+      return { id, seq: n };
+    });
+  }
+
+  async runEvents(runId: string, afterSeq = 0) {
+    return rows<{ id: string; seq: number; kind: string; payload: unknown; created_at: Date }>(
+      sql`SELECT id, seq, kind, payload, created_at FROM assistant_run_events
+          WHERE run_id=${runId} AND seq>${afterSeq} ORDER BY seq ASC LIMIT 500`,
+      this.db,
+    );
+  }
+
+  async cancelRun(runId: string) {
+    const res = await sql`
+      UPDATE assistant_runs SET cancelled=true, updated_at=now()
+      WHERE id=${runId} AND status IS NULL`.execute(this.db);
+    return Number(res.numAffectedRows ?? 0) > 0;
+  }
+
+  // ── 승인 (§11) ────────────────────────────────────────────────────
+
+  async createApproval(a: {
+    projectId: string;
+    userId: string;
+    conversationId?: string;
+    runId?: string;
+    kind: string;
+    target: unknown;
+    beforeHash?: string | null;
+    after: unknown;
+    expiresAt: Date;
+  }) {
+    const id = randomUUID();
+    await sql`
+      INSERT INTO assistant_approvals(id, project_id, user_id, conversation_id, run_id, kind,
+        target, before_hash, after, expires_at)
+      VALUES (${id}, ${a.projectId}, ${a.userId}, ${a.conversationId ?? null},
+        ${a.runId ?? null}, ${a.kind}, ${json(a.target)}, ${a.beforeHash ?? null},
+        ${json(a.after)}, ${a.expiresAt})`.execute(this.db);
+    return id;
+  }
+
+  async getApproval(approvalId: string, projectId?: string) {
+    return first<{
+      id: string;
+      project_id: string;
+      user_id: string;
+      run_id: string | null;
+      kind: string;
+      target: any;
+      before_hash: string | null;
+      after: any;
+      status: string;
+      expires_at: Date;
+    }>(
+      sql`SELECT id, project_id, user_id, run_id, kind, target, before_hash, after, status, expires_at
+          FROM assistant_approvals WHERE id=${approvalId}
+          ${projectId ? sql`AND project_id=${projectId}` : sql``}`,
+      this.db,
+    );
+  }
+
+  /** 만료되지 않은 PENDING 승인만 통과 — 만료건은 EXPIRED로 마킹하고 false. */
+  async resolveApproval(approvalId: string, userId: string, accept: boolean) {
+    return this.db.transaction().execute(async (tx) => {
+      const a = await first<{ status: string; expires_at: Date; user_id: string }>(
+        sql`SELECT status, expires_at, user_id FROM assistant_approvals WHERE id=${approvalId} FOR UPDATE`,
+        tx,
+      );
+      if (!a || a.user_id !== userId) return 'not_found';
+      if (a.status !== 'PENDING') return 'already_resolved';
+      if (a.expires_at.getTime() < Date.now()) {
+        await sql`UPDATE assistant_approvals SET status='EXPIRED', resolved_at=now() WHERE id=${approvalId}`.execute(
+          tx,
+        );
+        return 'expired';
+      }
+      await sql`
+        UPDATE assistant_approvals SET status=${accept ? 'APPROVED' : 'REJECTED'}, resolved_at=now()
+        WHERE id=${approvalId}`.execute(tx);
+      return accept ? 'approved' : 'rejected';
+    });
+  }
+
+  /** 승인 소비는 1회 — 이미 소비됐으면 false (§11 1회 사용). */
+  async consumeApproval(approvalId: string) {
+    const res = await sql`
+      UPDATE assistant_approvals SET status='CONSUMED'
+      WHERE id=${approvalId} AND status='APPROVED'`.execute(this.db);
+    return Number(res.numAffectedRows ?? 0) > 0;
+  }
+
+  async listApprovals(projectId: string, userId: string, pendingOnly = true) {
+    return rows<any>(
+      sql`SELECT id, kind, target, after, status, expires_at, created_at
+          FROM assistant_approvals
+          WHERE project_id=${projectId} AND user_id=${userId}
+          ${pendingOnly ? sql`AND status='PENDING' AND expires_at>now()` : sql``}
+          ORDER BY created_at DESC LIMIT 50`,
+      this.db,
+    );
+  }
+
+  async audit(a: {
+    projectId: string;
+    actor: string;
+    connector: string;
+    target: unknown;
+    action: string;
+    beforeHash?: string | null;
+    afterHash?: string | null;
+    status: string;
+    error?: string;
+  }) {
+    await sql`
+      INSERT INTO assistant_audit(id, project_id, actor, connector, target, action,
+        before_hash, after_hash, status, error)
+      VALUES (${randomUUID()}, ${a.projectId}, ${a.actor}, ${a.connector},
+        ${json(a.target)}, ${a.action}, ${a.beforeHash ?? null}, ${a.afterHash ?? null},
+        ${a.status}, ${a.error ?? null})`.execute(this.db);
+  }
+
+  // ── 업로드 (spec §5) ───────────────────────────────────────────────
+  async createUpload(u: {
+    projectId: string;
+    uploaderId: string;
+    filename: string;
+    mime: string;
+    bytes: number;
+    sha256: string;
+    storageKey: string;
+  }) {
+    const r = await first<{ id: string; reused: boolean }>(
+      sql`INSERT INTO knowledge_uploads(id, project_id, owner_id, filename, mime, bytes,
+              sha256, storage_key)
+          VALUES (${randomUUID()}, ${u.projectId}, ${u.uploaderId}, ${u.filename},
+              ${u.mime}, ${u.bytes}, ${u.sha256}, ${u.storageKey})
+          ON CONFLICT (project_id, sha256) DO NOTHING
+          RETURNING id, false AS reused`,
+      this.db,
+    );
+    if (r) return r;
+    // 동일 sha256 = 동일 내용 → 기존 업로드 재사용 (삭제됐으면 별도 처리는 호출자)
+    const existing = await first<{ id: string }>(
+      sql`SELECT id FROM knowledge_uploads WHERE project_id=${u.projectId} AND sha256=${u.sha256}`,
+      this.db,
+    );
+    return { id: existing!.id, reused: true };
+  }
+
+  async getUpload(projectId: string, uploadId: string) {
+    return first<any>(
+      sql`SELECT u.*, d.state AS document_state, d.id AS document_id
+          FROM knowledge_uploads u
+          LEFT JOIN documents d ON d.id=u.document_id
+             OR d.stable_key='upload:' || u.id::text
+          WHERE u.project_id=${projectId} AND u.id=${uploadId}`,
+      this.db,
+    );
+  }
+
+  async listUploads(projectId: string) {
+    return rows<any>(
+      sql`SELECT u.id, u.filename, u.mime, u.bytes, u.sha256, u.state, u.error,
+                 u.owner_id, u.created_at, d.state AS document_state, d.id AS document_id
+          FROM knowledge_uploads u
+          LEFT JOIN documents d ON d.id=u.document_id
+             OR d.stable_key='upload:' || u.id::text
+          WHERE u.project_id=${projectId} AND u.state != 'DELETED'
+          ORDER BY u.created_at DESC LIMIT 200`,
+      this.db,
+    );
+  }
+
+  async updateUpload(
+    uploadId: string,
+    patch: { state?: string; error?: string | null; storageKey?: string; documentId?: string },
+  ) {
+    await sql`UPDATE knowledge_uploads SET
+        state=coalesce(${patch.state ?? null}, state),
+        error=${patch.error === undefined ? sql`error` : patch.error},
+        storage_key=coalesce(${patch.storageKey ?? null}, storage_key),
+        document_id=coalesce(${patch.documentId ?? null}, document_id)
+      WHERE id=${uploadId}`.execute(this.db);
+  }
+
+  async uploadQuotaUsed(projectId: string) {
+    const r = await first<{ total: string }>(
+      sql`SELECT coalesce(sum(bytes),0) AS total FROM knowledge_uploads
+          WHERE project_id=${projectId} AND state != 'DELETED'`,
+      this.db,
+    );
+    return Number(r?.total ?? 0);
   }
 }

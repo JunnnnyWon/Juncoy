@@ -8,6 +8,11 @@
   },
   "dependencies": {
     "@meeting/contracts": "workspace:*",
-    "@meeting/knowledge-db": "workspace:*"
+    "@meeting/knowledge-db": "workspace:*",
+    "pdfjs-dist": "^4.10.38",
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/yauzl": "^3.4.0"
   }
 }

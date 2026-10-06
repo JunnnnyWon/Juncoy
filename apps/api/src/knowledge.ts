@@ -24,7 +24,7 @@ interface Deps {
   config: AppConfig;
 }
 
-interface KnowledgeCtx {
+export interface KnowledgeCtx {
   store: KnowledgeStore;
   embeddings?: UpstageEmbeddings;
   discordRead?: (timeoutMs: number) => Promise<{ ok: boolean; gaps: string[] }>;
@@ -94,6 +94,25 @@ function solarModel(config: AppConfig) {
  * - 대조 후 짧게 인덱스 반영을 기다린다 — 방금 읽은 내용이 이번 질문 검색에
  *   반영되도록 extract 잡 큐가 빌 때까지(최대 3s) 기다린다.
  */
+/**
+ * 질문자 권한으로 프로젝트를 결정한다 (RAG-001) — "첫 번째 프로젝트"가 아니라
+ * 질문자 guild를 scope로 등록한 소스를 가진 프로젝트만 선택한다.
+ * 매칭되는 프로젝트가 없으면 undefined — 남의 프로젝트로 굴러가지 않는다.
+ * assistant 라우트도 같은 함수를 쓴다.
+ */
+export async function findProjectForGuild(ctx: KnowledgeCtx, guildId: string) {
+  return first<{ id: string }>(
+    sql`SELECT p.id FROM knowledge_projects p
+        WHERE EXISTS (
+          SELECT 1 FROM knowledge_sources s
+          JOIN source_scopes sc ON sc.source_id=s.id AND sc.allowed
+          WHERE s.project_id=p.id AND sc.scope_key=${`guild:${guildId}`}
+        )
+        ORDER BY p.created_at LIMIT 1`,
+    ctx.store.db,
+  );
+}
+
 async function makeDiscordRead(store: KnowledgeStore, token: string, guildId: string) {
   const rest = new DiscordRest(token);
   return async (timeoutMs: number) => {
@@ -147,6 +166,40 @@ async function makeDiscordRead(store: KnowledgeStore, token: string, guildId: st
   };
 }
 
+/**
+ * 지식 컨텍스트 공유 팩토리 — knowledge 라우트와 assistant 라우트가 같은
+ * store/embeddings/discordRead/model을 공유한다 (중복 연결 방지).
+ */
+export function sharedKnowledgeCtx(config: AppConfig) {
+  let ctx: KnowledgeCtx | null | Promise<KnowledgeCtx | null> = null;
+  return async (): Promise<KnowledgeCtx | null> => {
+    if (ctx) return ctx;
+    return (ctx = (async () => {
+      // 기능 off면 DB에 아예 붙지 않는다 — 컨텍스트 없음 = 모든 라우트 503 (RAG-015).
+      if (process.env.KNOWLEDGE_ENABLED !== 'true') return null;
+      const url = process.env.KNOWLEDGE_DATABASE_URL;
+      if (!url) return null;
+      const store = new KnowledgeStore(url);
+      const embeddings = config.UPSTAGE_API_KEY
+        ? new UpstageEmbeddings(config.UPSTAGE_API_KEY)
+        : undefined;
+      if (embeddings)
+        await ensureProfile(
+          store,
+          'upstage',
+          process.env.UPSTAGE_EMBEDDING_QUERY_MODEL ?? 'embedding-query',
+          process.env.UPSTAGE_EMBEDDING_DOCUMENT_MODEL ?? 'embedding-passage',
+          4096,
+        );
+      const discordRead =
+        process.env.DISCORD_CONTEXT_ENABLED === 'true' && config.DISCORD_BOT_TOKEN
+          ? await makeDiscordRead(store, config.DISCORD_BOT_TOKEN, config.DISCORD_GUILD_ID)
+          : undefined;
+      return { store, embeddings, discordRead, model: solarModel(config) };
+    })());
+  };
+}
+
 export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
   // 지식 라우트는 외부 인프라(knowledge DB·Upstage·Discord REST) 의존이 크다.
   // 알 수 없는 오류를 500으로 두면 클라이언트가 영구 실패로 오인한다 —
@@ -169,38 +222,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
     });
   });
 
-  let ctx: KnowledgeCtx | null | Promise<KnowledgeCtx | null> = null;
-  const getCtx = async (): Promise<KnowledgeCtx | null> => {
-    if (ctx) return ctx;
-    return (ctx = (async () => {
-      // 기능 off면 DB에 아예 붙지 않는다 — 컨텍스트 없음 = 모든 라우트 503 (RAG-015).
-      if (process.env.KNOWLEDGE_ENABLED !== 'true') return null;
-      const url = process.env.KNOWLEDGE_DATABASE_URL;
-      if (!url) return null;
-      const store = new KnowledgeStore(url);
-      const on = (name: string) => process.env[name] === 'true';
-      const embeddings = deps.config.UPSTAGE_API_KEY
-        ? new UpstageEmbeddings(deps.config.UPSTAGE_API_KEY)
-        : undefined;
-      if (embeddings)
-        await ensureProfile(
-          store,
-          'upstage',
-          process.env.UPSTAGE_EMBEDDING_QUERY_MODEL ?? 'embedding-query',
-          process.env.UPSTAGE_EMBEDDING_DOCUMENT_MODEL ?? 'embedding-passage',
-          4096,
-        );
-      const discordRead =
-        on('DISCORD_CONTEXT_ENABLED') && deps.config.DISCORD_BOT_TOKEN
-          ? await makeDiscordRead(
-              store,
-              deps.config.DISCORD_BOT_TOKEN,
-              deps.config.DISCORD_GUILD_ID,
-            )
-          : undefined;
-      return { store, embeddings, discordRead, model: solarModel(deps.config) };
-    })());
-  };
+  const getCtx = sharedKnowledgeCtx(deps.config);
 
   const requireCtx = async (req: any) => {
     const session = await deps.auth.session(req.cookies.session);
@@ -214,22 +236,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
     return { session, ctx: c };
   };
 
-  /**
-   * 질문자 권한으로 프로젝트를 결정한다 (RAG-001) — "첫 번째 프로젝트"가 아니라
-   * 질문자 guild를 scope로 등록한 소스를 가진 프로젝트만 선택한다.
-   * 매칭되는 프로젝트가 없으면 403 — 남의 프로젝트로 굴러가지 않는다.
-   */
-  const projectForAsker = async (ctx: KnowledgeCtx, guildId: string) =>
-    first<{ id: string }>(
-      sql`SELECT p.id FROM knowledge_projects p
-          WHERE EXISTS (
-            SELECT 1 FROM knowledge_sources s
-            JOIN source_scopes sc ON sc.source_id=s.id AND sc.allowed
-            WHERE s.project_id=p.id AND sc.scope_key=${`guild:${guildId}`}
-          )
-          ORDER BY p.created_at LIMIT 1`,
-      ctx.store.db,
-    );
+  const projectForAsker = (ctx: KnowledgeCtx) =>
+    findProjectForGuild(ctx, deps.config.DISCORD_GUILD_ID);
 
   /** POST /api/knowledge/ask — 질문 → 검증된 Answer (§13.1). */
   app.post('/api/knowledge/ask', async (req, reply) => {
@@ -255,7 +263,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
           message: `지원하지 않는 질의 옵션입니다: ${unsupported.join(', ')}. 현재는 active 버전 기준 current 모드만 지원합니다.`,
         },
       });
-    const project = await projectForAsker(ctx, deps.config.DISCORD_GUILD_ID);
+    const project = await projectForAsker(ctx);
     if (!project)
       return reply.code(403).send({
         error: {
@@ -345,7 +353,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
   app.post('/api/knowledge/image-prompt', async (req, reply) => {
     const { ctx } = await requireCtx(req);
     const body = z.object({ request: z.string().min(1).max(2000) }).parse(req.body ?? {});
-    const project = await projectForAsker(ctx, deps.config.DISCORD_GUILD_ID);
+    const project = await projectForAsker(ctx);
     if (!project)
       return reply.code(403).send({
         error: {
@@ -453,7 +461,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
   app.get('/api/knowledge/search', async (req, reply) => {
     const { ctx } = await requireCtx(req);
     const q = z.object({ q: z.string().min(1).max(500) }).parse(req.query);
-    const project = await projectForAsker(ctx, deps.config.DISCORD_GUILD_ID);
+    const project = await projectForAsker(ctx);
     if (!project) return reply.code(403).send({ error: { code: 'PROJECT_SCOPE_DENIED' } });
     const chunks = await retrieve(ctx.store, {
       projectId: project.id,
