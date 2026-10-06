@@ -1012,6 +1012,16 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const referenceInstructions = Object.fromEntries(
       usableRefs.map((ref: any) => [ref.upload_id, ref.role + ': ' + ref.note]),
     );
+    const approvedStyle = await ctx.store.getApprovedStyleProfile(projectId);
+    const approvedRules = Array.isArray(approvedStyle?.body?.common_rules)
+      ? approvedStyle.body.common_rules
+          .filter((rule: any) => typeof rule?.statement === 'string')
+          .map((rule: any) => String(rule.category ?? 'style') + ': ' + rule.statement)
+      : [];
+    const artDirection = [
+      ...usableRefs.map((ref: any) => ref.role + ': ' + ref.note),
+      ...approvedRules,
+    ].join('\n');
     const providerReady =
       role !== 'reader' &&
       process.env.IMAGE_GENERATION_ENABLED === 'true' &&
@@ -1031,11 +1041,12 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
             prompt:
               body.request +
               '\n\nArt direction:\n' +
-              usableRefs.map((ref: any) => ref.role + ': ' + ref.note).join('\n'),
+              artDirection,
             negative: '글자, 워터마크, 로고, 저해상도, 왜곡된 손, 어색한 비율',
             model: 'openai/gpt-image-2.5-flare',
             reference_upload_ids: referenceUploadIds,
             reference_instructions: referenceInstructions,
+            style_version: approvedStyle?.version ?? null,
             evidence: [
               { board_id: board.id, revision: revision?.revision ?? board.current_revision },
             ],
@@ -1065,6 +1076,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       generation_ready: Boolean(approvalId),
       blocked_reference_count: refs.length - usableRefs.length,
       instructions: usableRefs.map((ref: any) => ref.role + ': ' + ref.note).join('\n'),
+      style_version: approvedStyle?.version ?? null,
+      style_approved: Boolean(approvedStyle),
       note: 'ImageBrief 초안입니다. 승인 후 OpenRouter 이미지 생성으로 전달됩니다.',
     };
   });

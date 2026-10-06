@@ -59,6 +59,13 @@ export async function buildImagePrompt(
     ? Object.entries(style.body)
         .filter(([, v]) => typeof v === 'string')
         .map(([k, v]) => `${k}: ${v}`)
+        .concat(
+          Array.isArray(style.body.common_rules)
+            ? style.body.common_rules
+                .filter((rule: any) => typeof rule?.statement === 'string')
+                .map((rule: any) => `${rule.category ?? 'style'}: ${rule.statement}`)
+            : [],
+        )
         .join(', ')
     : '';
   const refs = chunks.map(
