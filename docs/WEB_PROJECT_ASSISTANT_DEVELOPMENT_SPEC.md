@@ -14,7 +14,7 @@
 | Notion 변경 | 변경 미리보기 후 사용자가 승인하면 실행                               |
 | 일정 원본   | Notion의 실제 데이터베이스 일정 관리                                  |
 | 작업 원본   | Notion의 실제 데이터베이스 통합 작업 현황판                           |
-| 이미지      | OpenAI Image API의 gpt-image-2.5-flare                                |
+| 이미지      | OpenRouter의 openai/gpt-image-2.5-flare                                |
 | 문답        | 기존 Upstage Solar Pro 계열                                           |
 | 프로젝트    | 1차는 23시 정시퇴근 단일 프로젝트                                     |
 
@@ -63,6 +63,7 @@ Notion MCP 직접 조회로 확인한 일정 schema:
 - Notion page와 database row 수정
 - preview, approval, commit, 재조회 결과
 - RAG 근거 기반 이미지 prompt 및 실제 이미지 생성
+- 아트 레퍼런스 캔버스·역할별 reference 입력·Art Bible 연동 (상세: [아트 레퍼런스 캔버스 명세](ART_REFERENCE_CANVAS_DEVELOPMENT_SPEC.md))
 - 이미지 결과 저장·갤러리·근거·비용 표시
 - tool 실행 감사 로그, idempotency, 취소와 충돌 처리
 
@@ -149,13 +150,13 @@ preview card는 작업 종류, 대상, 현재 값, 변경 후 값, 근거, 예�
 | ------------------- | ------------------------------ |
 | 대화·분류·계획·문답 | 기존 Upstage Solar Pro 설정    |
 | 임베딩              | 기존 Upstage embedding profile |
-| 이미지              | OpenAI gpt-image-2.5-flare     |
+| 이미지              | OpenRouter openai/gpt-image-2.5-flare |
 | 정책                | 서버 정책과 provider 응답      |
 
-OpenAI 공식 문서 기준 GPT Image 2.5 Flare는 Image API 또는 Responses API image generation tool에서 사용할 수 있고 이미지 입력과 이미지 출력을 지원한다. 1차는 Image API adapter로 구현한다.
+이미지 생성은 OpenRouter를 단일 provider로 사용한다. OpenRouter 모델 페이지 기준 openai/gpt-image-2.5-flare는 이미지 입력과 출력을 지원하며, 레퍼런스 이미지는 input_references로 전달한다. 1차는 OpenRouter 이미지 endpoint adapter로 구현한다. OpenRouter에서 모델·입력 형식이 확인되지 않으면 다른 이미지 모델로 자동 전환하지 않고 설정 오류로 표시한다.
 
-참조: https://developers.openai.com/api/docs/models/gpt-image-2.5-flare
-참조: https://developers.openai.com/api/docs/guides/image-generation
+참조: https://openrouter.ai/openai/gpt-image-2.5-flare/
+참조: https://openrouter.ai/docs/guides/overview/multimodal/image-generation
 
 모델은 connector를 직접 호출하지 않는다. 서버가 검증된 tool schema와 connector adapter를 통해서만 실행한다.
 
@@ -221,19 +222,19 @@ approval에는 approval_id, user_id, project_id, target_id, before_hash, after_h
 4. prompt·근거·style·설정·예상 비용 preview
 5. 사용자가 생성 버튼 클릭
 6. 최신 source와 ACL 재확인
-7. OpenAI Image API로 gpt-image-2.5-flare 호출
+7. OpenRouter 이미지 endpoint로 openai/gpt-image-2.5-flare 호출
 8. private storage 저장
 9. 이미지와 prompt·근거·model·quality·size·cost·created_by 표시
 
 기본 환경:
 
-- OPENAI_IMAGE_MODEL=gpt-image-2.5-flare
-- OPENAI_IMAGE_QUALITY=auto
-- OPENAI_IMAGE_SIZE=auto
-- OPENAI_IMAGE_OUTPUT_FORMAT=png
+- OPENROUTER_IMAGE_MODEL=openai/gpt-image-2.5-flare
+- OPENROUTER_IMAGE_QUALITY=auto
+- OPENROUTER_IMAGE_SIZE=auto
+- OPENROUTER_IMAGE_OUTPUT_FORMAT=png
 - IMAGE_GENERATION_ENABLED=false
 
-provider가 꺼져 있으면 prompt-only로 반환하고 생성 완료로 표시하지 않는다. reference image를 provider에 보낼 때 source ACL과 signed fetch를 다시 확인한다. 사용자·프로젝트별 일일 quota, 동시 job 제한, 429/5xx 재시도, 중복 생성 방지, moderation, 비용 기록을 구현한다.
+provider가 꺼져 있으면 prompt-only로 반환하고 생성 완료로 표시하지 않는다. 아트 캔버스에서 선택한 reference image는 역할·사용 범위와 함께 input_references로 전달하며, source ACL과 private storage fetch를 요청 직전에 다시 확인한다. 사용자·프로젝트별 일일 quota, 동시 job 제한, 429/5xx 재시도, 중복 생성 방지, moderation, 비용 기록을 구현한다.
 
 ## 13. API
 
@@ -293,7 +294,7 @@ POST messages는 run_id를 먼저 반환하고 답변·tool plan·approval·근�
 
 - 웹 mutation은 same-origin, CSRF, session, project ACL 검사
 - SSE 매 tick ownership 검증
-- LLM에 Notion, OpenAI, Discord secret 전달 금지
+- LLM에 Notion, OpenRouter, Discord secret 전달 금지
 - prompt injection은 source data로 취급하고 tool policy를 override하지 못함
 - 파일 MIME, 확장자, 압축 폭탄, 실행 파일, path traversal 차단
 - 외부 URL은 allowlist 또는 object storage만 fetch
@@ -322,7 +323,7 @@ tool registry, diff preview, approval token, 일정·작업·page create/update,
 
 ### Phase 4: 이미지
 
-OpenAI adapter, gpt-image-2.5-flare, prompt/evidence preview, explicit generate, storage/gallery/cost/quota를 만든다.
+OpenRouter adapter, openai/gpt-image-2.5-flare, prompt/evidence/reference preview, explicit generate, storage/gallery/cost/quota를 만든다.
 
 ### Phase 5: 운영 품질
 
@@ -332,7 +333,7 @@ retrieval gold set, tool eval, approval race test, freshness SLO, backup/restore
 
 단위: 날짜 KST 변환, Notion 속성 변환, approval 만료·재사용·사용자 불일치, idempotency, image payload, file 검사.
 
-통합: reader/editor/admin ACL, preview의 외부 변경 금지, 승인 전 row 불변, 승인 후 재조회 일치, 충돌, upload→extract→index→search, 삭제 source 차단, Discord failure PARTIAL, OpenAI 재시도와 중복 방지.
+통합: reader/editor/admin ACL, preview의 외부 변경 금지, 승인 전 row 불변, 승인 후 재조회 일치, 충돌, upload→extract→index→search, 삭제 source 차단, Discord failure PARTIAL, OpenRouter 재시도와 중복 방지.
 
 브라우저: 새 대화·후속 질문, 파일 ingestion 상태, 일정 필터, Notion 승인·거부, 충돌 preview, 이미지 생성·gallery, 새로고침 후 run/approval 복구.
 
@@ -345,7 +346,7 @@ retrieval gold set, tool eval, approval race test, freshness SLO, backup/restore
 - 실제 일정 schema에 맞춰 생성·수정된다.
 - 작업 변경은 일정 DB와 분리된다.
 - READY 전 파일이 검색·이미지 근거에 사용되지 않는다.
-- gpt-image-2.5-flare는 명시적 생성 action과 quota를 통과한다.
+- openai/gpt-image-2.5-flare는 OpenRouter의 명시적 생성 action과 quota를 통과한다.
 - 이미지 결과·prompt·근거·model·cost·사용자를 재조회할 수 있다.
 - 삭제·접근 회수 후 기존 citation이 노출되지 않는다.
 - 기존 회의 녹음·전사·Discord 수집 회귀가 없다.
@@ -359,11 +360,11 @@ retrieval gold set, tool eval, approval race test, freshness SLO, backup/restore
     NOTION_SCHEDULE_DATABASE_ID=3d4ec741-b304-80bb-9176-c2f7084f0edc
     NOTION_SCHEDULE_DATA_SOURCE_URL=collection://3d4ec741-b304-80e5-8b38-000b4d9db22b
     NOTION_TASK_DATA_SOURCE_URL=collection://3d1ec741-b304-8086-ba3f-000bf2f7d110
-    OPENAI_API_KEY=
-    OPENAI_IMAGE_MODEL=gpt-image-2.5-flare
-    OPENAI_IMAGE_QUALITY=auto
-    OPENAI_IMAGE_SIZE=auto
-    OPENAI_IMAGE_OUTPUT_FORMAT=png
+    OPENROUTER_API_KEY=
+    OPENROUTER_IMAGE_MODEL=openai/gpt-image-2.5-flare
+    OPENROUTER_IMAGE_QUALITY=auto
+    OPENROUTER_IMAGE_SIZE=auto
+    OPENROUTER_IMAGE_OUTPUT_FORMAT=png
     IMAGE_GENERATION_ENABLED=false
     KNOWLEDGE_UPLOAD_MAX_BYTES=52428800
     KNOWLEDGE_UPLOAD_PROJECT_QUOTA_BYTES=5368709120
