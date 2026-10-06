@@ -171,7 +171,7 @@ export async function createImageJob(
             'openrouter', ${j.model}, ${j.prompt}, ${j.negative ?? null},
             ${JSON.stringify(j.evidence ?? [])}, ${promptHash},
             ${JSON.stringify(j.options ?? {})}, ${j.idempotencyKey})
-        ON CONFLICT (idempotency_key) DO NOTHING
+        ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
         RETURNING id`,
     store.db,
   );
