@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { KnowledgeStore, sql, first, rows } from '@meeting/knowledge-db';
 import { documentKeys } from '@meeting/contracts';
+import { queueExtract } from './indexer.ts';
 
 // Discord 수집기 — spec §6.3. REST 과거/증분 수집(Gateway 실시간은 P3).
 // snowflake는 절대 JS number로 다루지 않는다 — 문자열/BigInt만.
@@ -194,6 +195,7 @@ export class DiscordCollector {
           VALUES (${crypto.randomUUID()}, ${doc.id}, ${dst}, 'discord_reply')
           ON CONFLICT DO NOTHING`.execute(this.store.db);
     }
+    if (published) await queueExtract(this.store, doc.id, hash);
     return { stored: published, changed: true as const };
   }
 

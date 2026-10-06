@@ -1,6 +1,7 @@
 import { createHmac, sign as cryptoSign, timingSafeEqual } from 'node:crypto';
 import { KnowledgeStore, sql, first } from '@meeting/knowledge-db';
 import { documentKeys } from '@meeting/contracts';
+import { queueExtract } from './indexer.ts';
 
 // GitHub 수집기 — spec §6.2.
 // ref별 HEAD/tree/blob으로 현재 코드를 추적하고, push/delete/force-push/revert를
@@ -247,7 +248,7 @@ export class GitHubCollector {
       else if (buf.length > 2_000_000) oversize = true;
       else text = buf.toString('utf8');
     }
-    await this.store.publishVersion(doc.id, {
+    const published = await this.store.publishVersion(doc.id, {
       contentHash: blobSha, // blob SHA 자체가 내용 해시 (§6.2-5)
       sourceRevision: `${head}:${blobSha}`,
       sourceModifiedAt: new Date(),
@@ -261,5 +262,6 @@ export class GitHubCollector {
         sha: blobSha,
       },
     });
+    if (published) await queueExtract(this.store, doc.id, blobSha);
   }
 }
