@@ -17,8 +17,12 @@ x-kapp: &kapp
   depends_on:
     postgres-knowledge:
       condition: service_healthy
+  # 회의 스택과 달리 파일 로그 경로가 없어 json-file로 둔다 (운영 가시성).
   logging:
-    driver: none
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
 
 networks:
   default:
