@@ -34,6 +34,16 @@ services:
   api:
     <<: *app
     image: ${MEETING_API_IMAGE:-${MEETING_IMAGE:-juncoy-meeting:0.1.0}}
+    # .env.knowledge는 지식 파일럿 값 — 없어도 스택 기동엔 영향 없다 (지식 라우트만 503).
+    env_file:
+      - ../.env.production
+      - path: ../.env.knowledge
+        required: false
+    # 지식 DB 접속용 — compose.knowledge.yml의 default 네트워크(외부). 미생성 시 compose가 실패하므로
+    # 지식 스택이 없는 환경에선 이 networks 줄을 빼거나 지식 스택을 먼저 띄운다.
+    networks:
+      - default
+      - knowledge-net
     command: [node, --import, tsx, scripts/run-service.ts, api]
     ports:
       - 127.0.0.1:8790:3000
@@ -85,6 +95,11 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddydata:/data
     depends_on: [api]
+networks:
+  knowledge-net:
+    external: true
+    name: discord-knowledge_default
+
 volumes:
   pgdata:
     name: discord-meeting-pgdata

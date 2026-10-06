@@ -1,0 +1,218 @@
+import 'dotenv/config';
+import { hostname } from 'node:os';
+import { KnowledgeStore, sql, rows } from '@meeting/knowledge-db';
+import {
+  indexerTick,
+  JuncoyCollector,
+  MeetingReader,
+  GitHubCollector,
+  GitHubRest,
+  InstallationTokenProvider,
+  StaticTokenProvider,
+  UpstageEmbeddings,
+  ensureProfile,
+  NotionCollector,
+  NotionRest,
+} from '@meeting/knowledge';
+import { loadKnowledgeConfig } from '@meeting/providers';
+
+// 지식 워커 — spec §10/§16: 별도 큐(knowledge_jobs) 소비 + 출처별 폴링.
+// extract 잡 → 청크 set 원자 교체, index 잡 → 활성 profile 임베딩.
+// Juncoy 회의는 5초 polling, GitHub은 ref별 tree 대조 (webhook은 신호일 뿐).
+
+const INDEX_MS = 3_000;
+const JUNCOY_MS = 5_000;
+const GITHUB_MS = 60_000;
+const NOTION_INCREMENTAL_MS = 120_000;
+const NOTION_STRUCTURE_MS = 900_000;
+
+const log = (m: string) => process.stdout.write(`knowledge-worker ${m}\n`);
+
+/** 주기 루프 — 이전 실행이 아직 끝나지 않았으면 이번 틱은 건너뛴다(중첩 방지). */
+const every = (ms: number, fn: () => Promise<void>) => {
+  let busy = false;
+  const tick = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      await fn();
+    } finally {
+      busy = false;
+    }
+  };
+  setInterval(() => void tick(), ms);
+  void tick();
+};
+
+const main = async () => {
+  const config = loadKnowledgeConfig();
+  if (config.KNOWLEDGE_ENABLED !== 'true') {
+    log('disabled (KNOWLEDGE_ENABLED)');
+    return;
+  }
+  const store = new KnowledgeStore(config.KNOWLEDGE_DATABASE_URL, { max: 16 });
+  const owner = `worker:${hostname()}:${process.pid}`;
+  const embeddings = config.UPSTAGE_API_KEY
+    ? new UpstageEmbeddings(
+        config.UPSTAGE_API_KEY,
+        config.UPSTAGE_EMBEDDING_QUERY_MODEL,
+        config.UPSTAGE_EMBEDDING_DOCUMENT_MODEL,
+      )
+    : undefined;
+  if (embeddings) {
+    const id = await ensureProfile(
+      store,
+      'upstage',
+      config.UPSTAGE_EMBEDDING_QUERY_MODEL,
+      config.UPSTAGE_EMBEDDING_DOCUMENT_MODEL,
+      4096,
+    );
+    log(`embedding profile ${id}`);
+  }
+
+  // ── 잡 인덱서 루프 ─────────────────────────────────────────────
+  const runIndex = async () => {
+    try {
+      const r = await indexerTick(store, owner, { embeddings });
+      if (r.extracted || r.embedded || r.failed)
+        log(`indexer extracted=${r.extracted} embedded=${r.embedded} failed=${r.failed}`);
+    } catch (e) {
+      process.stderr.write(`indexer tick: ${e}\n`);
+    }
+  };
+  every(INDEX_MS, runIndex);
+
+  // ── Juncoy 회의 동기화 루프 (§6.4, 5초) ────────────────────────
+  if (config.MEETING_DATABASE_URL) {
+    const reader = new MeetingReader(config.MEETING_DATABASE_URL, 2);
+    const runMeetings = async () => {
+      try {
+        for (const src of await rows<{ id: string }>(
+          sql`SELECT id FROM knowledge_sources WHERE kind='meeting' AND status='ACTIVE'`,
+          store.db,
+        )) {
+          const collector = new JuncoyCollector(store, reader, config.DISCORD_GUILD_ID, src.id);
+          const r = await collector.syncOnce();
+          if (r.synced) log(`meeting sync ${src.id}: ${JSON.stringify(r)}`);
+        }
+      } catch (e) {
+        process.stderr.write(`meeting sync: ${e}\n`);
+      }
+    };
+    every(JUNCOY_MS, runMeetings);
+  } else log('MEETING_DATABASE_URL unset — meeting collector off');
+
+  // ── GitHub ref 대조 루프 (§6.2, 60초 — webhook 실시간은 신호로만) ──
+  const ghKey = process.env.GITHUB_APP_PRIVATE_KEY;
+  const ghApp = process.env.GITHUB_APP_ID;
+  const ghInstall = process.env.GITHUB_INSTALLATION_ID;
+  const ghPat = process.env.GITHUB_TOKEN;
+  if ((ghApp && ghKey && ghInstall) || ghPat) {
+    const tokens =
+      ghApp && ghKey && ghInstall
+        ? new InstallationTokenProvider(ghApp, ghKey.replace(/\\n/g, '\n'), ghInstall)
+        : new StaticTokenProvider(ghPat!);
+    const rest = new GitHubRest(tokens);
+    const runGitHub = async () => {
+      try {
+        const scopes = await rows<{ source_id: string; scope_key: string; metadata: any }>(
+          sql`SELECT s.source_id, s.scope_key, s.metadata
+              FROM source_scopes s JOIN knowledge_sources k ON k.id=s.source_id
+              WHERE k.kind='github' AND k.status='ACTIVE' AND s.allowed
+                AND s.scope_key LIKE 'ref:%'`,
+          store.db,
+        );
+        for (const sc of scopes) {
+          const repo = sc.metadata?.repo ?? process.env.GITHUB_REPO;
+          const repoId = sc.metadata?.repo_id ?? repo;
+          if (!repo) continue;
+          const ref = sc.scope_key.slice('ref:'.length);
+          try {
+            const r = await new GitHubCollector(store, rest, repo, repoId, sc.source_id).reconcileRef(
+              ref,
+            );
+            if ((r as any)?.changed) log(`github ${repo}@${ref}: ${JSON.stringify(r)}`);
+          } catch (e) {
+            process.stderr.write(`github ${repo}@${ref}: ${e}\n`);
+          }
+        }
+      } catch (e) {
+        process.stderr.write(`github loop: ${e}\n`);
+      }
+    };
+    every(GITHUB_MS, runGitHub);
+  } else log('github auth unset — github collector off');
+
+  // ── Notion 증분(2분)/구조(15분) 대조 루프 (§6.1) ────────────────
+  const notionToken = process.env.NOTION_TOKEN;
+  if (notionToken) {
+    const rest = new NotionRest(notionToken);
+    const workspace = process.env.NOTION_WORKSPACE ?? 'default';
+    const runNotion = async (structure: boolean) => {
+      try {
+        for (const src of await rows<{ id: string }>(
+          sql`SELECT id FROM knowledge_sources WHERE kind='notion' AND status='ACTIVE'`,
+          store.db,
+        )) {
+          const c = new NotionCollector(store, rest, workspace, src.id);
+          const r = structure ? await c.reconcileStructure() : await c.syncIncremental();
+          log(`notion ${structure ? 'structure' : 'incremental'} ${src.id}: ${JSON.stringify(r)}`);
+        }
+      } catch (e) {
+        process.stderr.write(`notion loop: ${e}\n`);
+      }
+    };
+    every(NOTION_INCREMENTAL_MS, () => runNotion(false));
+    every(NOTION_STRUCTURE_MS, () => runNotion(true));
+  } else log('NOTION_TOKEN unset — notion collector off');
+
+  // ── webhook 'refresh' 잡 소비 — 수신 신호를 즉시 대조로 변환 ────────
+  const runRefresh = async () => {
+    try {
+      for (const job of await store.claimJobs(owner, ['refresh'], 4, 60_000)) {
+        try {
+          const p = job.payload as { source_kind?: string; repo?: string; ref?: string; page_id?: string };
+          if (p.source_kind === 'github' && p.repo && p.ref) {
+            const tokens =
+              ghApp && ghKey && ghInstall
+                ? new InstallationTokenProvider(ghApp, ghKey.replace(/\\n/g, '\n'), ghInstall)
+                : ghPat
+                  ? new StaticTokenProvider(ghPat)
+                  : null;
+            if (tokens) {
+              const src = await rows<{ id: string }>(
+                sql`SELECT id FROM knowledge_sources WHERE kind='github' AND status='ACTIVE' LIMIT 1`,
+                store.db,
+              );
+              if (src[0])
+                await new GitHubCollector(store, new GitHubRest(tokens), p.repo, p.repo, src[0].id).reconcileRef(p.ref);
+            }
+          } else if (p.source_kind === 'notion' && notionToken && p.page_id) {
+            const src = await rows<{ id: string }>(
+              sql`SELECT id FROM knowledge_sources WHERE kind='notion' AND status='ACTIVE' LIMIT 1`,
+              store.db,
+            );
+            if (src[0])
+              await new NotionCollector(
+                store,
+                new NotionRest(notionToken),
+                process.env.NOTION_WORKSPACE ?? 'default',
+                src[0].id,
+              ).ingestPage(p.page_id);
+          }
+          await store.finishJob(job, 'DONE');
+        } catch (e) {
+          await store.retryJob(job, new Date(Date.now() + 30_000), String(e).slice(0, 200));
+        }
+      }
+    } catch (e) {
+      process.stderr.write(`refresh loop: ${e}\n`);
+    }
+  };
+  every(5_000, runRefresh);
+};
+
+main().catch((e) => {
+  process.stderr.write(`knowledge-worker fatal: ${e}\n`);
+  process.exit(1);
+});

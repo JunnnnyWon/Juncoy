@@ -37,8 +37,8 @@ export class KnowledgeStore {
     this.db = new Kysely<Database>({ dialect: new PostgresDialect({ pool: this.pool }) });
   }
   async close() {
+    // Kysely.destroy()가 이미 pool.end()를 호출한다 — 두 번 end하면 pg가 throw.
     await this.db.destroy();
-    await this.pool.end();
   }
 
   // 자체 migration 디렉터리 — 회의 DB와 별도 스키마/라이프사이클.
@@ -92,7 +92,7 @@ export class KnowledgeStore {
     await sql`
       INSERT INTO knowledge_jobs(id, key, kind, document_id, payload, due_at)
       VALUES (${randomUUID()}, ${key}, ${kind}, ${opts?.documentId ?? null}, ${json(payload)},
-              ${opts?.dueAt ?? null})
+              ${opts?.dueAt ?? new Date()})
       ON CONFLICT (key) DO NOTHING`.execute(this.db);
   }
   /** 늦게 도착한 이전 세대 worker 결과가 current를 덮어쓰지 못하게 generation을 올린다. */
@@ -146,9 +146,7 @@ export class KnowledgeStore {
       VALUES (${randomUUID()}, ${sourceId}, ${stableKey}, ${json(metadata)})
       ON CONFLICT (source_id, stable_key) DO UPDATE
         SET dirty=true, updated_at=now(),
-            metadata=documents.metadata || EXCLUDED.metadata,
-            state=CASE WHEN documents.state='UNAVAILABLE' THEN documents.state
-                       ELSE 'FETCH_PENDING' END`.execute(this.db);
+            metadata=documents.metadata || EXCLUDED.metadata`.execute(this.db);
     return true;
   }
 
@@ -212,15 +210,20 @@ export class KnowledgeStore {
   }
 
   // ── active chunk_set 단일 트랜잭션 전환 (§8.1) ────────────────────
-  async activateChunkSet(documentId: string, extractorVersion: number) {
+  /** 비활성 set을 먼저 만들고 청크를 채운 뒤 swapChunkSet으로 원자 교체한다. */
+  async createChunkSet(documentId: string, extractorVersion: number) {
+    const id = randomUUID();
+    await sql`
+      INSERT INTO chunk_sets(id, document_id, extractor_version)
+      VALUES (${id}, ${documentId}, ${extractorVersion})`.execute(this.db);
+    return id;
+  }
+  /** 단일 UPDATE로 활성 set을 바꿔 검색자가 부분 청크를 보지 않게 한다. */
+  async swapChunkSet(documentId: string, chunkSetId: string) {
     return this.db.transaction().execute(async (tx) => {
-      await sql`
-        INSERT INTO chunk_sets(id, document_id, extractor_version)
-        VALUES (${randomUUID()}, ${documentId}, ${extractorVersion})`.execute(tx);
       const set = await first<{ id: string }>(
-        sql`SELECT id FROM chunk_sets WHERE document_id=${documentId}
-              AND extractor_version=${extractorVersion} AND NOT active
-            ORDER BY created_at DESC LIMIT 1`,
+        sql`SELECT id FROM chunk_sets WHERE id=${chunkSetId}
+              AND document_id=${documentId} AND NOT active FOR UPDATE`,
         tx,
       );
       if (!set) return null;

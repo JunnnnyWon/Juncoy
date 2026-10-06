@@ -189,6 +189,10 @@ export function App() {
           </span>
           <span>23시 정시퇴근 회의록</span>
         </Link>
+        <nav className="app-nav">
+          <Link to="/meetings">회의</Link>
+          <Link to="/ask">질문</Link>
+        </nav>
         <div className="account">
           <Avatar name={me.display_name} id={me.user_id} />
           <div>
@@ -209,6 +213,7 @@ export function App() {
         <Routes>
           <Route path="/meetings" element={<Meetings />} />
           <Route path="/meetings/:id" element={<Meeting />} />
+          <Route path="/ask" element={<KnowledgeAsk />} />
           <Route path="*" element={<Navigate to="/meetings" replace />} />
         </Routes>
       </main>
@@ -1310,5 +1315,185 @@ function GapNotice({ gaps }: { gaps: GapDTO[] }) {
         ))}
       </ul>
     </details>
+  );
+}
+
+interface KnowledgeEvidence {
+  id: string;
+  source: string;
+  document_id: string;
+  url: string;
+  quote: string;
+}
+interface KnowledgeAnswer {
+  answer_id: string;
+  status: 'COMPLETE' | 'PARTIAL' | 'NEEDS_CLARIFICATION' | 'FAILED';
+  answer: string;
+  checked_at: string;
+  claims: { text: string; state: string; evidence_ids: string[] }[];
+  evidence: KnowledgeEvidence[];
+  source_coverage: {
+    source: string;
+    read_status: string;
+    search_status: string;
+    scope_complete: boolean;
+    gaps: string[];
+  }[];
+  conflicts: { text: string; evidence_ids: string[] }[];
+  warnings: string[];
+  model: string;
+}
+const knowledgeStatus: Record<string, string> = {
+  COMPLETE: '전체 확인 완료',
+  PARTIAL: '일부 확인',
+  NEEDS_CLARIFICATION: '자료 부족',
+  FAILED: '실패',
+};
+const sourceLabels: Record<string, string> = {
+  notion: 'Notion',
+  github: 'GitHub',
+  discord: 'Discord',
+  meeting: '회의',
+};
+function KnowledgeAsk() {
+  const [question, setQuestion] = useState(''),
+    [busy, setBusy] = useState(false),
+    [answer, setAnswer] = useState<KnowledgeAnswer | null>(null),
+    [error, setError] = useState<string | null>(null);
+  const ask = async () => {
+    const q = question.trim();
+    if (!q || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setAnswer(
+        await api<KnowledgeAnswer>('/api/knowledge/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q }),
+        }),
+      );
+    } catch (e) {
+      setAnswer(null);
+      setError(
+        e instanceof ApiError && e.code === 'KNOWLEDGE_DISABLED'
+          ? '지식 검색이 아직 서버에 설정되지 않았습니다.'
+          : e instanceof ApiError
+            ? e.message
+            : '답변을 가져오지 못했습니다.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="list-page ask-page">
+      <header className="page-heading">
+        <div>
+          <h1>프로젝트에 질문</h1>
+          <p>회의록·문서·코드·Discord를 함께 찾아 답합니다.</p>
+        </div>
+      </header>
+      <form
+        className="ask-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void ask();
+        }}
+      >
+        <input
+          aria-label="질문 입력"
+          placeholder="예: 스크롤 구현은 어디서 확인해?"
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          maxLength={4000}
+        />
+        <button className="primary-button" type="submit" disabled={busy || !question.trim()}>
+          {busy ? '확인 중…' : '질문'}
+        </button>
+      </form>
+      {error && <div className="summary-warning">{error}</div>}
+      {answer && (
+        <section className="ask-result">
+          <div className={`ask-status ask-${answer.status.toLowerCase()}`}>
+            {knowledgeStatus[answer.status] ?? answer.status}
+            <span className="muted">
+              {new Intl.DateTimeFormat('ko-KR', {
+                timeZone: 'Asia/Seoul',
+                hour: '2-digit',
+                minute: '2-digit',
+              }).format(new Date(answer.checked_at))}
+              에 확인
+            </span>
+          </div>
+          <p className="ask-answer">{answer.answer}</p>
+          {answer.warnings.length > 0 && (
+            <div className="summary-warning">
+              {answer.warnings.map((w, i) => (
+                <div key={i}>
+                  <WarningCircle size={14} /> {w}
+                </div>
+              ))}
+            </div>
+          )}
+          {answer.conflicts.length > 0 && (
+            <div className="summary-warning">
+              {answer.conflicts.map((c, i) => (
+                <div key={i}>
+                  <WarningCircle size={14} /> 자료 간 충돌: {c.text}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="ask-coverage">
+            {answer.source_coverage.map((c) => (
+              <span
+                key={c.source}
+                className={`coverage-chip ${c.search_status === 'MATCH' ? 'hit' : ''}`}
+                title={c.gaps.join(', ')}
+              >
+                {sourceLabels[c.source] ?? c.source}
+                {c.search_status === 'MATCH' ? ' ✓' : c.search_status === 'NO_MATCH' ? ' –' : ' ·'}
+              </span>
+            ))}
+          </div>
+          {answer.claims.length > 0 && (
+            <ul className="ask-claims">
+              {answer.claims.map((c, i) => (
+                <li key={i}>
+                  {c.text}
+                  <span className="claim-refs">
+                    {c.evidence_ids.map((id) => (
+                      <a key={id} href={'#ev-' + id}>
+                        [{id}]
+                      </a>
+                    ))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {answer.evidence.length > 0 && (
+            <div className="ask-evidence">
+              <h3>근거</h3>
+              {answer.evidence.map((e) => (
+                <div key={e.id} id={'ev-' + e.id} className="evidence-item">
+                  <div className="evidence-head">
+                    <span className="coverage-chip">{e.id}</span>
+                    <span>{sourceLabels[e.source] ?? e.source}</span>
+                    {e.url && (
+                      <a href={e.url} target="_blank" rel="noreferrer">
+                        원문 ↗
+                      </a>
+                    )}
+                  </div>
+                  <p>{e.quote}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+    </div>
   );
 }

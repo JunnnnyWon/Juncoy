@@ -63,7 +63,8 @@
     "react-virtuoso": "^4.14.0",
     "tsx": "^4.20.0",
     "ws": "^8.18.0",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "@meeting/knowledge": "workspace:*"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",

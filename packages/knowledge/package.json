@@ -1,11 +1,13 @@
 {
-  "name": "@meeting/api",
+  "name": "@meeting/knowledge",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
     "@meeting/contracts": "workspace:*",
-    "@meeting/knowledge": "workspace:*",
     "@meeting/knowledge-db": "workspace:*"
   }
 }

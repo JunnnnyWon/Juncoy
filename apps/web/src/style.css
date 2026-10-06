@@ -2194,3 +2194,94 @@ small {
     padding-right: 20px;
   }
 }
+
+/* ── 지식 질문 (RAG) ── */
+.app-nav {
+  display: flex;
+  gap: 14px;
+  font-size: 14px;
+}
+.app-nav a {
+  color: var(--muted, #888);
+  text-decoration: none;
+}
+.app-nav a:hover {
+  color: inherit;
+}
+.ask-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.ask-form input {
+  flex: 1;
+  padding: 10px 12px;
+}
+.ask-status {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.ask-status.ask-complete {
+  color: #4a7c59;
+}
+.ask-status.ask-partial {
+  color: #a97b2f;
+}
+.ask-answer {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+.ask-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+.coverage-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--sidebar, #eee);
+  font-size: 12px;
+}
+.coverage-chip.hit {
+  background: #dfe9dd;
+}
+.ask-claims {
+  margin: 12px 0;
+  padding-left: 20px;
+}
+.ask-claims li {
+  margin-bottom: 6px;
+}
+.claim-refs a {
+  margin-left: 4px;
+  font-size: 12px;
+}
+.ask-evidence {
+  margin-top: 16px;
+  border-top: 1px solid var(--line, #ddd);
+  padding-top: 10px;
+}
+.evidence-item {
+  border: 1px solid var(--line, #ddd);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.evidence-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.evidence-item p {
+  font-size: 13px;
+  color: var(--muted, #666);
+  white-space: pre-wrap;
+  margin: 0;
+}

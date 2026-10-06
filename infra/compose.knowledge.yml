@@ -1,0 +1,71 @@
+# 지식(RAG) 파일럿 스택 — spec §10/§16: 기존 회의 스택과 분리된 DB·큐·워커.
+# 기동: docker compose -f infra/compose.knowledge.yml --env-file .env.knowledge up -d
+# api 쪽 지식 라우트 활성화는 .env.production의 KNOWLEDGE_* flag로 별도 제어한다.
+name: discord-knowledge
+
+x-kapp: &kapp
+  image: ${MEETING_IMAGE:-juncoy-meeting:0.1.0}
+  build:
+    context: ..
+    dockerfile: infra/Dockerfile
+  env_file:
+    - ../.env.production   # UPSTAGE_API_KEY, DISCORD_BOT_TOKEN 등 기존 자격증명 재사용
+    - ../.env.knowledge    # KNOWLEDGE_*·GITHUB_APP_*·MEETING_DATABASE_URL
+  user: '${MEETING_UID:-1000}:${MEETING_GID:-1000}'
+  restart: unless-stopped
+  stop_grace_period: 60s
+  depends_on:
+    postgres-knowledge:
+      condition: service_healthy
+  # 회의 스택과 달리 파일 로그 경로가 없어 json-file로 둔다 (운영 가시성).
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+
+networks:
+  default:
+  meeting-net:
+    external: true
+    name: discord-meeting_default # 회의 DB 읽기 전용 수집용 (container DNS: postgres)
+
+services:
+  postgres-knowledge:
+    image: pgvector/pgvector:pg17
+    container_name: discord-knowledge-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: knowledge
+      POSTGRES_DB: knowledge
+      POSTGRES_PASSWORD: ${KNOWLEDGE_POSTGRES_PASSWORD:?Set KNOWLEDGE_POSTGRES_PASSWORD in .env.knowledge}
+    ports:
+      - 127.0.0.1:15440:5432
+    volumes:
+      - knowledge-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U knowledge -d knowledge]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  migrate:
+    <<: *kapp
+    restart: 'no'
+    command: [node, --import, tsx, scripts/migrate-knowledge.ts]
+
+  knowledge-worker:
+    <<: *kapp
+    container_name: discord-knowledge-worker
+    command: [node, --import, tsx, apps/knowledge-worker/src/main.ts]
+    networks: [default, meeting-net]
+
+  discord-context:
+    <<: *kapp
+    container_name: discord-knowledge-discord
+    command: [node, --import, tsx, apps/discord-context/src/main.ts]
+    profiles: [discord] # DISCORD_CONTEXT_ENABLED=true + 봇 intent 확정 후 기동
+
+volumes:
+  knowledge-pgdata:
+    name: discord-knowledge-pgdata
