@@ -1,4 +1,5 @@
 export * from './config.ts';
+export * from './knowledge-config.ts';
 export * from './crypto.ts';
 export * from './returnzero.ts';
 export * from './solar.ts';
