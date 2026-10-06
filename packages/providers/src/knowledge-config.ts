@@ -22,6 +22,11 @@ const schema = z.object({
     .default('solar-pro4-260806'),
   UPSTAGE_EMBEDDING_QUERY_MODEL: z.string().default('embedding-query'),
   UPSTAGE_EMBEDDING_DOCUMENT_MODEL: z.string().default('embedding-passage'),
+  UPSTAGE_DOCUMENT_PARSE_ENABLED: z.enum(['true', 'false']).default('false'),
+  UPSTAGE_DOCUMENT_PARSE_ENDPOINT: z.string().default(''),
+  UPSTAGE_DOCUMENT_PARSE_TIMEOUT_MS: z.coerce.number().int().min(1000).default(60_000),
+  OPENROUTER_VISION_ENABLED: z.enum(['true', 'false']).default('false'),
+  OPENROUTER_VISION_MODEL: z.string().default('google/gemini-3.7-flash'),
 
   DISCORD_BOT_TOKEN: z.string().default(''),
   DISCORD_GUILD_ID: z.string().regex(/^\d+$/).default('1'),
@@ -69,5 +74,19 @@ export function loadKnowledgeConfig(env: NodeJS.ProcessEnv = process.env): Knowl
     const missing = needed.filter((k) => !c[k as keyof KnowledgeConfig]);
     if (missing.length) throw new Error(`Missing environment: ${missing.join(', ')}`);
   }
+  if (
+    c.UPSTAGE_DOCUMENT_PARSE_ENABLED === 'true' &&
+    (!c.UPSTAGE_API_KEY || !c.UPSTAGE_DOCUMENT_PARSE_ENDPOINT)
+  )
+    throw new Error(
+      'UPSTAGE_DOCUMENT_PARSE_ENABLED requires UPSTAGE_API_KEY and UPSTAGE_DOCUMENT_PARSE_ENDPOINT',
+    );
+  if (
+    c.OPENROUTER_VISION_ENABLED === 'true' &&
+    (!env.OPENROUTER_API_KEY || !c.OPENROUTER_VISION_MODEL)
+  )
+    throw new Error(
+      'OPENROUTER_VISION_ENABLED requires OPENROUTER_API_KEY and OPENROUTER_VISION_MODEL',
+    );
   return c;
 }

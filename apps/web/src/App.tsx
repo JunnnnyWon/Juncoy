@@ -44,6 +44,7 @@ import type {
 } from '@meeting/contracts';
 import { api, ApiError } from './api';
 import { Assistant } from './Assistant.tsx';
+import { ArtReferenceCanvas } from './ArtReferenceCanvas.tsx';
 import { useMeeting } from './use-meeting';
 import { AudioText } from './AudioText';
 interface Me {
@@ -194,6 +195,7 @@ export function App() {
           <Link to="/meetings">회의</Link>
           <Link to="/ask">질문</Link>
           <Link to="/assistant">어시스턴트</Link>
+          <Link to="/art-reference">아트 보드</Link>
         </nav>
         <div className="account">
           <Avatar name={me.display_name} id={me.user_id} />
@@ -217,6 +219,7 @@ export function App() {
           <Route path="/meetings/:id" element={<Meeting />} />
           <Route path="/ask" element={<KnowledgeAsk />} />
           <Route path="/assistant" element={<Assistant />} />
+          <Route path="/art-reference" element={<ArtReferenceCanvas />} />
           <Route path="*" element={<Navigate to="/meetings" replace />} />
         </Routes>
       </main>

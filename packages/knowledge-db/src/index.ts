@@ -728,6 +728,31 @@ export class KnowledgeStore {
       WHERE id=${uploadId}`.execute(this.db);
   }
 
+  async createUploadVersion(v: {
+    uploadId: string;
+    extractorVersion: string;
+    sourceRevision: string;
+    parserKind: string;
+    parserVersion?: string;
+    parseStatus: string;
+    parseRequestId?: string;
+    parseLatencyMs?: number;
+    parseErrorCode?: string;
+    sourceSha256: string;
+    normalizedHash: string;
+  }) {
+    await sql`INSERT INTO knowledge_upload_versions(
+      id, upload_id, extractor_version, source_revision, state, parser_kind,
+      parser_version, parse_status, parse_request_id, parse_latency_ms,
+      parse_error_code, source_sha256, normalized_hash
+    ) VALUES (
+      ${randomUUID()}, ${v.uploadId}, ${v.extractorVersion}, ${v.sourceRevision},
+      ${v.parseStatus}, ${v.parserKind}, ${v.parserVersion ?? null}, ${v.parseStatus},
+      ${v.parseRequestId ?? null}, ${v.parseLatencyMs ?? null}, ${v.parseErrorCode ?? null},
+      ${v.sourceSha256}, ${v.normalizedHash}
+    )`.execute(this.db);
+  }
+
   async uploadQuotaUsed(projectId: string) {
     const r = await first<{ total: string }>(
       sql`SELECT coalesce(sum(bytes),0) AS total FROM knowledge_uploads

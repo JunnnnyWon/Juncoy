@@ -3,6 +3,7 @@ import { mkdir, writeFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sql } from 'kysely';
 import { first, type KnowledgeStore } from '@meeting/knowledge-db';
+import { UpstageDocumentParse } from './document-parse-upstage.ts';
 
 // 업로드 파일 파이프라인 (spec §5, §6):
 // init(선언+검증) → complete(바이트 수신+magic 검사+저장+추출 잡) → READY 이후만 검색 대상.
@@ -101,6 +102,56 @@ export async function extractUploadText(buf: Buffer, mime: UploadMime): Promise<
     return extractDocx(buf);
   if (mime.startsWith('text/')) return buf.toString('utf8');
   return '';
+}
+
+export async function extractUpload(
+  buf: Buffer,
+  mime: UploadMime,
+  opts?: { documentParse?: UpstageDocumentParse; expectedSha256?: string },
+) {
+  if (mime === 'application/pdf' && opts?.documentParse) {
+    try {
+      const parsed = await opts.documentParse.parsePdf(buf, opts.expectedSha256);
+      return {
+        text: parsed.text,
+        normalized: {
+          text: parsed.text,
+          html: parsed.html,
+          markdown: parsed.markdown,
+          filename: undefined,
+          mime,
+          parser: {
+            kind: 'upstage_document_parse',
+            version: parsed.parserVersion,
+            source_sha256: parsed.sourceSha256,
+            request_id: parsed.requestId,
+          },
+        },
+        parserKind: 'upstage_document_parse' as const,
+        parseStatus: 'READY' as const,
+      };
+    } catch (error) {
+      const text = await extractUploadText(buf, mime);
+      return {
+        text,
+        normalized: {
+          text,
+          mime,
+          parser: { kind: 'local_pdfjs', fallback: true },
+        },
+        parserKind: 'local_pdfjs' as const,
+        parseStatus: 'FALLBACK' as const,
+        parseError: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  const text = await extractUploadText(buf, mime);
+  return {
+    text,
+    normalized: { text, mime, parser: { kind: 'local' } },
+    parserKind: 'local' as const,
+    parseStatus: 'NOT_REQUESTED' as const,
+  };
 }
 
 /** 프로젝트의 'upload' 지식 소스 행 — 없으면 생성 (auth_ref는 식별용 문자열). */

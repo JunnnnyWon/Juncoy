@@ -4,7 +4,7 @@
 대상 저장소: JunnnnyWon/Juncoy  
 기준 코드: 6a91da8a4245dc2479c6752a3505eee3cbb3e82b  
 문서 버전: v1.0  
-상태: 구현 전 설계 명세
+상태: UI 1차 구현 반영, persistence·운영 검증 전
 
 ## 1. 문서 목적
 
@@ -16,16 +16,16 @@
 
 ## 2. 확정 결정사항
 
-| 항목 | 결정 |
-| --- | --- |
-| 사용자 화면 | 모든 아트 레퍼런스 작성·분석·생성 요청은 웹 대시보드에서 처리한다. |
-| Discord 봇 | 회의 녹음·전사와 허용된 Discord 텍스트 이력 수집만 담당한다. 캔버스나 이미지 생성 UI를 제공하지 않는다. |
-| 텍스트 모델 | 기존 Upstage Solar Pro 계열을 오케스트레이션·분류·요약·ImageBrief 작성에 사용한다. |
-| 이미지 모델 | OpenRouter를 통해 openai/gpt-image-2.5-flare를 사용한다. 다른 이미지 모델로 자동 전환하지 않는다. |
-| 이미지 입력 | 승인된 레퍼런스 원본 픽셀을 역할 설명과 함께 OpenRouter 이미지 요청의 input_references로 전달한다. 텍스트 요약만으로 대체하지 않는다. |
-| 프로젝트 | 1차 대상은 기존 Juncoy 프로젝트 지식 범위이며, 프로젝트·사용자 ACL을 모든 읽기와 생성에 적용한다. |
-| 스타일 진실성 | 기계 분석은 초안이다. 사람이 승인한 Art Bible 규칙과 레퍼런스 사용 지시가 생성 기준이다. |
-| 승인 | 보드 분석, Art Bible, ImageBrief, 생성 결과는 각각 사람이 검토할 수 있으며, 승인 전 결과는 canonical reference로 재검색하지 않는다. |
+| 항목          | 결정                                                                                                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 사용자 화면   | 모든 아트 레퍼런스 작성·분석·생성 요청은 웹 대시보드에서 처리한다.                                                                    |
+| Discord 봇    | 회의 녹음·전사와 허용된 Discord 텍스트 이력 수집만 담당한다. 캔버스나 이미지 생성 UI를 제공하지 않는다.                               |
+| 텍스트 모델   | 기존 Upstage Solar Pro 계열을 오케스트레이션·분류·요약·ImageBrief 작성에 사용한다.                                                    |
+| 이미지 모델   | OpenRouter를 통해 openai/gpt-image-2.5-flare를 사용한다. 다른 이미지 모델로 자동 전환하지 않는다.                                     |
+| 이미지 입력   | 승인된 레퍼런스 원본 픽셀을 역할 설명과 함께 OpenRouter 이미지 요청의 input_references로 전달한다. 텍스트 요약만으로 대체하지 않는다. |
+| 프로젝트      | 1차 대상은 기존 Juncoy 프로젝트 지식 범위이며, 프로젝트·사용자 ACL을 모든 읽기와 생성에 적용한다.                                     |
+| 스타일 진실성 | 기계 분석은 초안이다. 사람이 승인한 Art Bible 규칙과 레퍼런스 사용 지시가 생성 기준이다.                                              |
+| 승인          | 보드 분석, Art Bible, ImageBrief, 생성 결과는 각각 사람이 검토할 수 있으며, 승인 전 결과는 canonical reference로 재검색하지 않는다.   |
 
 OpenRouter 모델 페이지와 이미지 생성 문서 기준의 현재 목표 계약은 전용 이미지 생성 endpoint와 input_references를 사용하는 것이다. 실제 계정·라우팅 provider가 해당 모델을 노출하는지는 배포 환경에서 모델 카탈로그와 샌드박스 요청으로 확인한다.
 
@@ -51,15 +51,15 @@ OpenRouter 모델 페이지와 이미지 생성 문서 기준의 현재 목표 �
 
 기준 커밋 6a91da8에서 확인한 연결 지점은 다음과 같다.
 
-| 현재 영역 | 확인된 구현 | 캔버스 구현에 필요한 확장 |
-| --- | --- | --- |
-| 웹 어시스턴트 | apps/api/src/assistant.ts, apps/web/src/Assistant.tsx에 대화·SSE·승인·파일·이미지 패널이 있다. | 별도 art 화면 또는 어시스턴트의 캔버스 workspace와 상태 복구를 추가한다. |
-| 파일 업로드 | knowledge_uploads와 init → complete → extract/indexing 흐름이 있다. PNG/JPEG/WEBP를 받을 수 있다. | 이미지 원본을 visual asset으로 등록하고 미리보기·원본 ACL·버전·권리 정보를 연결한다. |
-| 이미지 생성 | packages/knowledge/src/tools/image.ts가 image.preview_generation과 image.generate를 제공한다. | preview에 선택된 레퍼런스 목록·역할·사용 지시를 포함하고, generate가 픽셀을 OpenRouter로 전달한다. |
-| OpenRouter | packages/knowledge/src/image-openrouter.ts가 prompt만 전송하고 OpenRouter Images/Chat fallback을 사용한다. | openai/gpt-image-2.5-flare 고정 검증, input_references, 원본 fetch·크기·MIME 검증, 입력 해시와 응답 메타데이터를 추가한다. |
-| 프롬프트 | packages/knowledge/src/image-prompt.ts가 text RAG와 승인된 style_profiles의 문자열 필드를 합친다. | 구조화된 Art Bible, role-filtered reference retrieval, 이미지 원본 evidence와 typed ImageBrief를 추가한다. |
-| DB | 기존 style_profiles, image_jobs, image_results, knowledge_uploads, assistant approval/audit가 있다. | 캔버스 보드·노드·엣지·asset·extraction·style rule·job reference 테이블과 마이그레이션을 추가한다. |
-| Discord·회의·GitHub·Notion | 기존 Knowledge DB와 read tools가 담당한다. | 보드·생성 요청에서 필요한 경우 최신 지식 source를 조회하고 freshness/coverage를 표시한다. |
+| 현재 영역                  | 확인된 구현                                                                                                | 캔버스 구현에 필요한 확장                                                                                                  |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 웹 어시스턴트              | apps/api/src/assistant.ts, apps/web/src/Assistant.tsx에 대화·SSE·승인·파일·이미지 패널이 있다.             | 별도 art 화면 또는 어시스턴트의 캔버스 workspace와 상태 복구를 추가한다. 현재 /art-reference에 1차 보드 UI를 추가했다.     |
+| 파일 업로드                | knowledge_uploads와 init → complete → extract/indexing 흐름이 있다. PNG/JPEG/WEBP를 받을 수 있다.          | 이미지 원본을 visual asset으로 등록하고 미리보기·원본 ACL·버전·권리 정보를 연결한다.                                       |
+| 이미지 생성                | packages/knowledge/src/tools/image.ts가 image.preview_generation과 image.generate를 제공한다.              | preview에 선택된 레퍼런스 목록·역할·사용 지시를 포함하고, generate가 픽셀을 OpenRouter로 전달한다.                         |
+| OpenRouter                 | packages/knowledge/src/image-openrouter.ts가 prompt만 전송하고 OpenRouter Images/Chat fallback을 사용한다. | openai/gpt-image-2.5-flare 고정 검증, input_references, 원본 fetch·크기·MIME 검증, 입력 해시와 응답 메타데이터를 추가한다. |
+| 프롬프트                   | packages/knowledge/src/image-prompt.ts가 text RAG와 승인된 style_profiles의 문자열 필드를 합친다.          | 구조화된 Art Bible, role-filtered reference retrieval, 이미지 원본 evidence와 typed ImageBrief를 추가한다.                 |
+| DB                         | 기존 style_profiles, image_jobs, image_results, knowledge_uploads, assistant approval/audit가 있다.        | 캔버스 보드·노드·엣지·asset·extraction·style rule·job reference 테이블과 마이그레이션을 추가한다.                          |
+| Discord·회의·GitHub·Notion | 기존 Knowledge DB와 read tools가 담당한다.                                                                 | 보드·생성 요청에서 필요한 경우 최신 지식 source를 조회하고 freshness/coverage를 표시한다.                                  |
 
 기존 이미지 생성 코드의 OPENROUTER_IMAGE_MODEL 환경값은 설정 가능하지만, 이 기능의 기본값은 openai/gpt-image-2.5-flare로 한다. 설정이 다른 이미지 모델을 가리키면 생성하지 않고 설정 오류를 표시한다.
 

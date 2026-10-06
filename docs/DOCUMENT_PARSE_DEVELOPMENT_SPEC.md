@@ -4,7 +4,7 @@
 대상 저장소: JunnnnyWon/Juncoy  
 기준 코드: 557491a88c94ff0970dea4655c295c0aa4cd07cc  
 문서 버전: v1.0  
-상태: 구현 전 설계 명세
+상태: 1차 구현 반영, 운영 검증 전
 
 ## 1. 목적
 
@@ -26,17 +26,17 @@
 
 ## 2. 확정 결정사항
 
-| 항목 | 결정 |
-| --- | --- |
-| 외부 parser | Upstage Document Parse만 사용한다. Information Extraction은 도입하지 않는다. |
-| 적용 대상 | PDF를 1차 대상으로 한다. PDF 외 형식은 기존 로컬 parser를 유지한다. |
-| 이미지 파일 | PNG·JPEG·WEBP는 Document Parse에 보내지 않는다. 원본 픽셀을 그대로 보존하고 art asset/vision 경로에서 별도 처리한다. |
+| 항목            | 결정                                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 외부 parser     | Upstage Document Parse만 사용한다. Information Extraction은 도입하지 않는다.                                              |
+| 적용 대상       | PDF를 1차 대상으로 한다. PDF 외 형식은 기존 로컬 parser를 유지한다.                                                       |
+| 이미지 파일     | PNG·JPEG·WEBP는 Document Parse에 보내지 않는다. 원본 픽셀을 그대로 보존하고 art asset/vision 경로에서 별도 처리한다.      |
 | PDF 안의 이미지 | PDF 원본은 보존한다. Parse가 반환하는 figure/image 파생물은 보조 preview·검색 산출물로만 저장하며 원본을 대체하지 않는다. |
-| RAG | Parse의 구조화 결과와 기존 plain text를 함께 사용한다. Parse 결과만 유일한 원문으로 취급하지 않는다. |
-| 답변 모델 | 기존 Upstage Solar Pro 계열을 유지한다. |
-| 임베딩 | 기존 Upstage embedding profile을 유지한다. |
-| fallback | Parse 장애·timeout·지원되지 않는 결과는 로컬 PDF parser로 계속 ingest한다. 상태와 fallback 원인을 기록한다. |
-| 운영 범위 | 웹 업로드·기존 knowledge source ingestion에 적용한다. Discord 봇은 Document Parse를 직접 호출하지 않는다. |
+| RAG             | Parse의 구조화 결과와 기존 plain text를 함께 사용한다. Parse 결과만 유일한 원문으로 취급하지 않는다.                      |
+| 답변 모델       | 기존 Upstage Solar Pro 계열을 유지한다.                                                                                   |
+| 임베딩          | 기존 Upstage embedding profile을 유지한다.                                                                                |
+| fallback        | Parse 장애·timeout·지원되지 않는 결과는 로컬 PDF parser로 계속 ingest한다. 상태와 fallback 원인을 기록한다.               |
+| 운영 범위       | 웹 업로드·기존 knowledge source ingestion에 적용한다. Discord 봇은 Document Parse를 직접 호출하지 않는다.                 |
 
 Upstage 공식 문서의 Document Parse 설명은 PDF를 layout-aware HTML 또는 Markdown 등 구조화된 결과로 변환하는 용도다. 이 결과는 원본 파일의 무손실 보관을 대신하지 않는다. 실제 production endpoint, 요청 필드, 응답 schema, 지원 제한은 구현 Phase 0에서 계정 환경으로 확인한다.
 
@@ -65,7 +65,7 @@ Upstage 공식 문서의 Document Parse 설명은 PDF를 layout-aware HTML 또�
 - packages/providers/src/knowledge-config.ts: Upstage key/model과 knowledge 환경 설정
 - packages/knowledge-db/migrations/003_assistant.sql: knowledge_uploads, knowledge_upload_versions
 
-현재 이미지 업로드는 허용되지만 extractUploadText()가 이미지에 빈 문자열을 반환한다. 이번 명세는 이 경로를 Document Parse로 우회하지 않고, 이미지 원본 보존 경로로 명확히 분리한다.
+현재 구현은 PDF에 활성화된 경우 Upstage Document Parse adapter를 시도하고, 실패하면 기존 pdfjs 로컬 추출로 fallback한다. PNG·JPEG·WEBP는 Parse에 보내지 않으며, OpenRouter Gemini 3.7 Flash 비전 분석은 원본 바이트를 별도 파생 텍스트로만 처리한다.
 
 ## 4. 처리 정책
 
@@ -222,7 +222,7 @@ adapter 규칙:
     created_at
     UNIQUE(upload_version_id, page_number)
 
- document_versions.normalized에는 backward-compatible하게 text를 유지하고, 새 결과에는 다음을 추가한다.
+document_versions.normalized에는 backward-compatible하게 text를 유지하고, 새 결과에는 다음을 추가한다.
 
     {
       "text": "평탄화된 검색용 텍스트",

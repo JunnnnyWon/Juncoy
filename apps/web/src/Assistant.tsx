@@ -38,6 +38,19 @@ const STATUS_KO: Record<string, string> = {
   NEEDS_CLARIFICATION: '추가 확인 필요',
   FAILED: '실패',
 };
+const PHASE_KO: Record<string, string> = {
+  idle: '대기 중',
+  planning_tool_call: '요청을 구조화하는 중',
+  retrieving: '프로젝트 자료를 확인하는 중',
+  checking_sources: '최신성을 확인하는 중',
+  awaiting_approval: '승인을 기다리는 중',
+  executing_tool: '작업을 실행하는 중',
+  generating_image: '이미지를 생성하는 중',
+  ingesting_file: '파일을 색인하는 중',
+  completed: '완료',
+  partial: '부분 완료',
+  failed: '확인 필요',
+};
 
 export function Assistant() {
   const [convs, setConvs] = useState<Conv[]>([]);
@@ -223,11 +236,19 @@ export function Assistant() {
   useEffect(() => () => esRef.current?.close(), []);
 
   return (
-    <div className="assistant">
+    <div className="assistant workspace-assistant">
       <aside className="assistant-convs">
-        <button className="primary-button" onClick={() => void newConv()}>
-          새 대화
+        <div className="assistant-rail-head">
+          <div>
+            <span className="eyebrow">JUNCOY / WORKSPACE</span>
+            <h1>프로젝트 어시스턴트</h1>
+          </div>
+          <span className="live-dot" title="지식 연결 상태" />
+        </div>
+        <button className="primary-button assistant-new" onClick={() => void newConv()}>
+          <span>+</span> 새 대화
         </button>
+        <div className="assistant-nav-label">대화 기록</div>
         {convs.map((c) => (
           <button
             key={c.id}
@@ -241,8 +262,55 @@ export function Assistant() {
       </aside>
 
       <section className="assistant-main">
+        <div className="assistant-topbar">
+          <div>
+            <span className="eyebrow">PROJECT KNOWLEDGE / LIVE</span>
+            <h2>
+              {convId
+                ? (convs.find((c) => c.id === convId)?.title ?? '새 대화')
+                : '작업을 시작하세요'}
+            </h2>
+          </div>
+          <div className="source-health">
+            <span className="health-dot" /> 5개 소스 연결됨
+          </div>
+        </div>
         {!convId ? (
-          <div className="assistant-empty">새 대화를 시작하거나 왼쪽에서 선택하세요.</div>
+          <div className="assistant-empty assistant-empty-rich">
+            <div className="empty-orbit">AI</div>
+            <span className="eyebrow">ASK THE PROJECT</span>
+            <h2>
+              프로젝트의 맥락을
+              <br />한 곳에서 탐색하세요.
+            </h2>
+            <p>회의록, Discord, GitHub, Notion, 업로드 파일을 근거와 함께 확인합니다.</p>
+            <div className="prompt-starters">
+              <button
+                onClick={() => {
+                  setInput('최근 회의와 Discord에서 아트 방향에 합의된 내용을 정리해 줘.');
+                  void newConv();
+                }}
+              >
+                최근 아트 결정 요약
+              </button>
+              <button
+                onClick={() => {
+                  setInput('이번 주 작업 중 마감이 임박한 항목을 보여 줘.');
+                  void newConv();
+                }}
+              >
+                이번 주 작업 확인
+              </button>
+              <button
+                onClick={() => {
+                  setInput('이 프로젝트의 현재 비주얼 방향을 설명해 줘.');
+                  void newConv();
+                }}
+              >
+                비주얼 방향 탐색
+              </button>
+            </div>
+          </div>
         ) : (
           <>
             <div className="assistant-msgs">
@@ -254,7 +322,7 @@ export function Assistant() {
               {live && (
                 <div className="msg msg-assistant">
                   <div className="run-phase">
-                    상태: {live.phase}
+                    상태: {PHASE_KO[live.phase] ?? live.phase}
                     {live.status && <strong> · {STATUS_KO[live.status] ?? live.status}</strong>}
                   </div>
                   {!!live.coverage?.length && (
@@ -309,6 +377,17 @@ export function Assistant() {
               </div>
             )}
             <div className="assistant-input">
+              <button
+                className="input-tool"
+                onClick={() => {
+                  setPanelTab('files');
+                  fileInput.current?.click();
+                }}
+                aria-label="파일 추가"
+                title="파일 추가"
+              >
+                +
+              </button>
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -321,7 +400,7 @@ export function Assistant() {
                 disabled={busy || !input.trim()}
                 onClick={() => void send()}
               >
-                보내기
+                보내기 <span>↗</span>
               </button>
             </div>
           </>
@@ -329,6 +408,15 @@ export function Assistant() {
       </section>
 
       <aside className="assistant-side">
+        <div className="assistant-inspector-head">
+          <div>
+            <span className="eyebrow">PROJECT SIGNALS</span>
+            <h2>작업 패널</h2>
+          </div>
+          <button className="inspector-more" aria-label="패널 설정">
+            •••
+          </button>
+        </div>
         <div className="side-tabs">
           <button
             className={panelTab === 'schedule' ? 'active' : ''}
@@ -358,7 +446,7 @@ export function Assistant() {
         {panelTab === 'files' && (
           <>
             <button className="primary-button" onClick={() => fileInput.current?.click()}>
-              파일 업로드
+              레퍼런스 / 파일 추가
             </button>
             <input
               ref={fileInput}
@@ -371,12 +459,16 @@ export function Assistant() {
                 e.target.value = '';
               }}
             />
+            <div className="drop-zone" onClick={() => fileInput.current?.click()}>
+              <strong>파일을 놓거나 클릭해서 추가</strong>
+              <span>PDF · DOCX · PNG · JPG · WEBP</span>
+            </div>
             {(files ?? []).map((f: any) => (
               <div key={f.id} className="side-row">
                 <div className="side-row-title">{f.filename}</div>
                 <div className="dim">
                   {(f.bytes / 1024).toFixed(0)}KB ·{' '}
-                  {f.document_state === 'READY' ? '색인 완료' : f.state}
+                  {f.document_state === 'READY' ? '색인 완료' : f.state} · {f.mime}
                 </div>
                 <button
                   className="ghost-button"

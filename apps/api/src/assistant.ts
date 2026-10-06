@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { sql, first, rows } from '@meeting/knowledge-db';
 import { AssistantMode } from '@meeting/contracts';
@@ -16,7 +17,9 @@ import {
   InstallationTokenProvider,
   UploadStorage,
   ensureUploadSource,
-  extractUploadText,
+  extractUpload,
+  UpstageDocumentParse,
+  OpenRouterVision,
   magicOk,
   queueExtract,
   sha256,
@@ -351,7 +354,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
   app.setErrorHandler((error, _req, reply) => {
     const e = error as any;
     const status =
-      e.statusCode ?? e.status ??
+      e.statusCode ??
+      e.status ??
       (e.code === 'KNOWLEDGE_DISABLED' ? 503 : e.code === 'PROJECT_SCOPE_DENIED' ? 403 : 503);
     return reply.code(status).send({
       error: {
@@ -711,7 +715,46 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       await storage.put(u.storage_key, buf);
       await ctx.store.updateUpload(u.id, { state: 'EXTRACTING', error: null });
       try {
-        const text = await extractUploadText(buf, u.mime as UploadMime);
+        const documentParse =
+          u.mime === 'application/pdf' &&
+          process.env.UPSTAGE_DOCUMENT_PARSE_ENABLED === 'true' &&
+          process.env.UPSTAGE_API_KEY &&
+          process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT
+            ? new UpstageDocumentParse({
+                apiKey: process.env.UPSTAGE_API_KEY,
+                endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT,
+                timeoutMs: Number(process.env.UPSTAGE_DOCUMENT_PARSE_TIMEOUT_MS ?? 60_000),
+              })
+            : undefined;
+        const extracted = await extractUpload(buf, u.mime as UploadMime, {
+          documentParse,
+          expectedSha256: u.sha256,
+        });
+        let text = extracted.text;
+        let vision: unknown;
+        if (
+          u.mime.startsWith('image/') &&
+          process.env.OPENROUTER_VISION_ENABLED === 'true' &&
+          process.env.OPENROUTER_API_KEY
+        ) {
+          const observation = await new OpenRouterVision(
+            process.env.OPENROUTER_API_KEY,
+            process.env.OPENROUTER_VISION_MODEL ?? 'google/gemini-3.7-flash',
+          ).analyzeImage(buf, u.mime);
+          vision = observation;
+          text = [
+            observation.description,
+            observation.subjects.length ? 'Subjects: ' + observation.subjects.join(', ') : '',
+            observation.materials.length ? 'Materials: ' + observation.materials.join(', ') : '',
+            observation.lighting.length ? 'Lighting: ' + observation.lighting.join(', ') : '',
+            observation.palette.length ? 'Palette: ' + observation.palette.join(', ') : '',
+            observation.visible_text.length
+              ? 'Visible text: ' + observation.visible_text.join(' | ')
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n');
+        }
         const sourceId = await ensureUploadSource(ctx.store, projectId);
         const stableKey = `upload:${u.id}`;
         await ctx.store.markDocumentDirty(sourceId, stableKey, {
@@ -726,7 +769,28 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         await ctx.store.publishVersion(doc!.id, {
           contentHash: u.sha256,
           sourceRevision: u.sha256,
-          normalized: { text, filename: u.filename, mime: u.mime, upload_id: u.id },
+          normalized: {
+            ...extracted.normalized,
+            text,
+            filename: u.filename,
+            mime: u.mime,
+            upload_id: u.id,
+            vision,
+          },
+        });
+        await ctx.store.createUploadVersion({
+          uploadId: u.id,
+          extractorVersion: '2',
+          sourceRevision: u.sha256,
+          parserKind: extracted.parserKind,
+          parserVersion: extracted.normalized.parser?.version,
+          parseStatus: extracted.parseStatus,
+          parseRequestId: extracted.normalized.parser?.request_id,
+          parseErrorCode: extracted.parseError,
+          sourceSha256: u.sha256,
+          normalizedHash: createHash('sha256')
+            .update(JSON.stringify(extracted.normalized))
+            .digest('hex'),
         });
         await queueExtract(ctx.store, doc!.id, u.sha256);
         await ctx.store.updateUpload(u.id, { state: 'INDEXING', documentId: doc!.id });
