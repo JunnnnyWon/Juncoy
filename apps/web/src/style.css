@@ -2595,11 +2595,18 @@ small {
 }
 .art-toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
   align-items: center;
   padding: 11px 18px;
   border-bottom: 1px solid #cbc6bb;
   background: #f0ece3;
+}
+.art-toolbar select {
+  color: #383c36;
+  background: #f0ece3;
+  border-color: #b8b2a8;
+  font-size: 11px;
 }
 .art-tool {
   padding: 8px 10px;

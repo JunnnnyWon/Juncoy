@@ -351,7 +351,7 @@ export function ArtReferenceCanvas() {
             }}>{node.node_type === 'frame' ? '프레임' : '메모'}<button aria-label="노드 삭제" onClick={(event) => { event.stopPropagation(); setNodes((current) => current.filter((n) => n.id !== node.id)); setEdges((current) => current.filter((e) => e.source !== node.id && e.target !== node.id)); }}>×</button></div>
             <textarea aria-label="노드 내용" value={node.text} onChange={(event) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, text: event.target.value } : n))} />
           </div>)}
-          {refs.length === 0 && (
+          {refs.length === 0 && nodes.length === 0 && (
             <div className="art-empty-state">
               <span className="eyebrow">REFERENCE BOARD</span>
               <h2>팀의 시각 언어를 이곳에 모아보세요</h2>
