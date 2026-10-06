@@ -153,6 +153,17 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
           if (createHash('sha256').update(bytes).digest('hex') !== ref.sha256)
             throw new DomainError('REFERENCE_HASH_MISMATCH', '레퍼런스 원본 hash가 변경되었습니다.', 409);
         }
+        for (const [index, ref] of refs.entries()) {
+          await sql`INSERT INTO image_job_references(
+            id, image_job_id, upload_id, role_json, usage_strength, instruction, content_hash, acl_snapshot
+          ) VALUES (
+            ${randomUUID()}, ${jobId}, ${ref.id},
+            ${JSON.stringify({ role: after.reference_roles?.[ref.id] ?? 'project_reference' })},
+            ${after.reference_usage?.[ref.id] ?? 'STRONG_REFERENCE'},
+            ${after.reference_instructions?.[ref.id] ?? ''}, ${ref.sha256},
+            ${JSON.stringify({ project_id: ctx.projectId, user_id: ctx.userId })}
+          )`.execute(ctx.store.db);
+        }
         const out = await provider.generate(after.prompt, after.negative, referenceInputs);
         const buf = Buffer.from(out.b64, 'base64');
         const resultKey = `img-${randomUUID()}.png`;
