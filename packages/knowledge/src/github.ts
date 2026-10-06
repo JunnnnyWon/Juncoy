@@ -271,9 +271,11 @@ export class GitHubCollector {
       const buf = Buffer.from(b.body.content.replace(/\n/g, ''), 'base64');
       // git-lfs pointer 판별 (version https://git-lfs.github.com/spec/v1 헤더)
       const head = buf.subarray(0, 200).toString('utf8');
+      // NUL 바이트가 있으면 바이너리 — utf8 강제 변환은 pg text가 거부하는 \u0000을 만든다.
+      const isBinary = buf.subarray(0, 8000).includes(0x00);
       if (head.startsWith('version https://git-lfs.github.com/spec/v1')) lfsPointer = true;
       else if (buf.length > 2_000_000) oversize = true;
-      else text = buf.toString('utf8');
+      else if (!isBinary) text = buf.toString('utf8').replace(/\u0000/g, '');
     }
     const published = await this.store.publishVersion(doc.id, {
       contentHash: blobSha, // blob SHA 자체가 내용 해시 (§6.2-5)
