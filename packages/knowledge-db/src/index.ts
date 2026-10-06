@@ -146,9 +146,7 @@ export class KnowledgeStore {
       VALUES (${randomUUID()}, ${sourceId}, ${stableKey}, ${json(metadata)})
       ON CONFLICT (source_id, stable_key) DO UPDATE
         SET dirty=true, updated_at=now(),
-            metadata=documents.metadata || EXCLUDED.metadata,
-            state=CASE WHEN documents.state='UNAVAILABLE' THEN documents.state
-                       ELSE 'FETCH_PENDING' END`.execute(this.db);
+            metadata=documents.metadata || EXCLUDED.metadata`.execute(this.db);
     return true;
   }
 
