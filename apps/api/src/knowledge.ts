@@ -217,9 +217,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
         .code(400)
         .send({ error: { code: 'INVALID_ARGUMENT', message: '잘못된 요청입니다.' } });
     const status =
-      e.code === 'KNOWLEDGE_DISABLED' || e.code === 'PROJECT_SCOPE_DENIED' || e.statusCode
-        ? (e.statusCode ?? (e.code === 'KNOWLEDGE_DISABLED' ? 503 : 403))
-        : 503;
+      e.statusCode ?? e.status ??
+      (e.code === 'KNOWLEDGE_DISABLED' ? 503 : e.code === 'PROJECT_SCOPE_DENIED' ? 403 : 503);
     return reply.code(status).send({
       error: {
         code: e.code ?? 'TEMPORARY_FAILURE',

@@ -351,9 +351,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
   app.setErrorHandler((error, _req, reply) => {
     const e = error as any;
     const status =
-      e.code === 'KNOWLEDGE_DISABLED' || e.code === 'PROJECT_SCOPE_DENIED' || e.statusCode
-        ? (e.statusCode ?? (e.code === 'KNOWLEDGE_DISABLED' ? 503 : 403))
-        : 503;
+      e.statusCode ?? e.status ??
+      (e.code === 'KNOWLEDGE_DISABLED' ? 503 : e.code === 'PROJECT_SCOPE_DENIED' ? 403 : 503);
     return reply.code(status).send({
       error: {
         code: e.code ?? 'TEMPORARY_FAILURE',
