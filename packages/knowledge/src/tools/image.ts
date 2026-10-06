@@ -13,6 +13,7 @@ import {
 import type { UploadStorage } from '../uploads.ts';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
+import { orderedImageReferences } from '../image-references.ts';
 
 // 이미지 생성 — spec §12: preview는 프롬프트 합성만, generate는 명시적 승인 후 실행.
 // provider 미설정이면 "생성됐다"고 거짓 보고하지 않고 prompt_only로 보고한다.
@@ -128,23 +129,16 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
       if (!job.created && existingJob?.status !== 'FAILED')
         return { job_id: jobId, model: after.model, status: existingJob.status, reused: true };
       try {
-        const refs = await ctx.store.getUploadsByIds(
+        const fetchedRefs = await ctx.store.getUploadsByIds(
           ctx.projectId,
           after.reference_upload_ids ?? [],
         );
-        const missing = (after.reference_upload_ids ?? []).filter(
-          (id: string) => !refs.some((ref: any) => ref.id === id),
-        );
-        if (missing.length)
-          throw new DomainError('REFERENCE_NOT_FOUND', '이미지 레퍼런스를 찾을 수 없습니다.', 409);
-        const invalid = refs.filter((ref: any) => ref.state !== 'READY' || !/^image\/(png|jpeg|webp)$/.test(ref.mime));
-        if (invalid.length)
-          throw new DomainError('REFERENCE_NOT_READY', '준비되지 않은 이미지 레퍼런스가 포함되어 있습니다.', 409);
+        const refs = orderedImageReferences(after.reference_upload_ids ?? [], fetchedRefs);
         const referenceInputs = await Promise.all(
           refs.map(async (ref: any) => ({
             bytes: await storage.read(ref.storage_key),
             mime: ref.mime,
-            role: 'project reference',
+            role: after.reference_roles?.[ref.id] ?? 'project reference',
             instruction: after.reference_instructions?.[ref.id],
           })),
         );
@@ -155,13 +149,13 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
         }
         for (const [index, ref] of refs.entries()) {
           await sql`INSERT INTO image_job_references(
-            id, image_job_id, upload_id, role_json, usage_strength, instruction, content_hash, acl_snapshot
+            id, image_job_id, asset_id, upload_id, role_json, usage_strength, instruction, content_hash, acl_snapshot
           ) VALUES (
-            ${randomUUID()}, ${jobId}, ${ref.id},
+            ${randomUUID()}, ${jobId}, ${ref.asset_id ?? null}, ${ref.id},
             ${JSON.stringify({ role: after.reference_roles?.[ref.id] ?? 'project_reference' })},
             ${after.reference_usage?.[ref.id] ?? 'STRONG_REFERENCE'},
             ${after.reference_instructions?.[ref.id] ?? ''}, ${ref.sha256},
-            ${JSON.stringify({ project_id: ctx.projectId, user_id: ctx.userId })}
+            ${JSON.stringify({ project_id: ctx.projectId, user_id: ctx.userId, canonical_state: ref.canonical_state ?? null, asset_state: ref.asset_state ?? null })}
           )`.execute(ctx.store.db);
         }
         const out = await provider.generate(after.prompt, after.negative, referenceInputs);

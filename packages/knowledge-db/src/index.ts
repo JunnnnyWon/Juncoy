@@ -869,8 +869,11 @@ export class KnowledgeStore {
   async getUploadsByIds(projectId: string, ids: string[]) {
     if (!ids.length) return [];
     return rows<any>(
-      sql`SELECT id, filename, mime, storage_key, sha256, state
-      FROM knowledge_uploads WHERE project_id=${projectId} AND id = ANY(${ids}::uuid[]) AND state != 'DELETED'`,
+      sql`SELECT u.id, u.filename, u.mime, u.storage_key, u.sha256, u.state,
+        a.id AS asset_id, a.canonical_state, a.rights_note, a.state AS asset_state
+      FROM knowledge_uploads u
+      LEFT JOIN art_reference_assets a ON a.upload_id=u.id AND a.project_id=u.project_id
+      WHERE u.project_id=${projectId} AND u.id = ANY(${ids}::uuid[]) AND u.state != 'DELETED'`,
       this.db,
     );
   }

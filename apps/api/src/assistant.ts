@@ -1121,6 +1121,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
             model: 'openai/gpt-image-2.5-flare',
             reference_upload_ids: referenceUploadIds,
             reference_instructions: referenceInstructions,
+            reference_roles: Object.fromEntries(usableRefs.map((ref: any) => [ref.upload_id, ref.role])),
+            reference_usage: Object.fromEntries(usableRefs.map((ref: any) => [ref.upload_id, ref.usage])),
             style_version: approvedStyle?.version ?? null,
             evidence: [
               { board_id: board.id, revision: revision?.revision ?? board.current_revision },
