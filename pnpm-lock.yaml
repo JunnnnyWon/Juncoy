@@ -127,6 +127,12 @@ importers:
       '@meeting/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@meeting/knowledge':
+        specifier: workspace:*
+        version: link:../../packages/knowledge
+      '@meeting/knowledge-db':
+        specifier: workspace:*
+        version: link:../../packages/knowledge-db
 
   apps/bot:
     dependencies:
@@ -135,6 +141,21 @@ importers:
         version: link:../../packages/contracts
 
   apps/discord-context:
+    dependencies:
+      '@meeting/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@meeting/knowledge':
+        specifier: workspace:*
+        version: link:../../packages/knowledge
+      '@meeting/knowledge-db':
+        specifier: workspace:*
+        version: link:../../packages/knowledge-db
+      '@meeting/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+
+  apps/knowledge-worker:
     dependencies:
       '@meeting/contracts':
         specifier: workspace:*
