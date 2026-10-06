@@ -891,6 +891,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       process.env.OPENROUTER_VISION_MODEL ?? 'google/gemini-3.7-flash',
     ).analyzeImage(bytes, asset.mime);
     const extractionId = await ctx.store.saveArtExtraction({ assetId: asset.id, revision: asset.sha256, model: observation.model, observations: observation, ocr: { visible_text: observation.visible_text }, confidence: observation.confidence_note });
+    if (!extractionId) return reply.code(409).send({ error: { code: 'ART_ASSET_UNAVAILABLE' } });
     return { id: extractionId, status: 'DRAFT', model: observation.model, observations: observation };
   });
 

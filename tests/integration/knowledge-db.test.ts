@@ -49,6 +49,27 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('does not revive revoked art assets with late vision results', async (ctx) => {
+    skipIf(ctx);
+    const projectId = randomUUID();
+    await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'revoked art')`.execute(store!.db);
+    const hash = 'a'.repeat(64);
+    const upload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'ref.png', mime: 'image/png', bytes: 10, sha256: hash, storageKey: 'revoked-ref' });
+    await store!.updateUpload(upload.id, { state: 'READY' });
+    const assetId = (await store!.createArtReferenceAsset({ projectId, uploadId: upload.id, createdBy: 'owner' }))!;
+    const extraction = { assetId, revision: hash, model: 'vision-test', observations: { description: 'wall' } };
+    expect(await store!.saveArtExtraction(extraction)).not.toBeNull();
+    await store!.reviewArtReferenceAsset(projectId, assetId, 'owner', 'ARCHIVED');
+    expect(await store!.saveArtExtraction(extraction)).toBeNull();
+    const archived = await store!.getArtReferenceAsset(projectId, assetId);
+    expect(archived.canonical_state).toBe('ARCHIVED');
+    await store!.updateUpload(upload.id, { state: 'DELETED' });
+    expect(await store!.getArtReferenceAsset(projectId, assetId)).toBeUndefined();
+    expect(await store!.saveArtExtraction(extraction)).toBeNull();
+    expect(await store!.reviewArtReferenceAsset(projectId, assetId, 'owner', 'APPROVED_CANONICAL')).toBe(false);
+    const count = await first<any>(sql`SELECT count(*)::int AS count FROM art_extractions WHERE asset_id=${assetId}`, store!.db);
+    expect(count.count).toBe(1);
+  });
   it('reparses the same original twice and queues each changed normalized result', async (ctx) => {
     skipIf(ctx);
     const dir = await mkdtemp(join(tmpdir(), 'juncoy-reparse-test-'));
