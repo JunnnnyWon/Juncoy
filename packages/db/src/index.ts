@@ -824,7 +824,7 @@ export class Store {
       return m.view.transcript_version;
     });
   }
-  async recoverPendingAudio(guildId: string, id: string, cutoff: number) {
+  async recoverPendingAudio(guildId: string, id: string, cutoff: number, settleUnrecoverable = false) {
     const snapshot = await this.snapshot(guildId, id);
     for (const draft of snapshot.segments.filter((s) => !s.is_final)) {
       if (
@@ -866,6 +866,7 @@ export class Store {
       );
       const updated = { ...gap, end_ms: end, recoverable: Number(audio?.n) > 0 };
       await this.gap(guildId, id, updated);
+      Object.assign(gap, updated);
       if (updated.recoverable && end > gap.start_ms)
         await this.enqueueRecovery(guildId, id, `recovered-gap:${gap.gap_id}`, {
           guild_id: guildId,
@@ -875,6 +876,15 @@ export class Store {
           gap_id: gap.gap_id,
         });
     }
+    // Close gaps that can never be recovered so the meeting can finalize instead of staying PARTIAL forever.
+    if (settleUnrecoverable)
+      for (const gap of snapshot.gaps.filter(
+        (g) => !g.resolved && g.reason !== 'PAUSED' && !g.recoverable,
+      )) {
+        const closed = { ...gap, resolved: true, resolution: 'UNRECOVERABLE' as const };
+        await this.gap(guildId, id, closed);
+        Object.assign(gap, closed);
+      }
     await this.clearDrafts(guildId, id);
   }
   async clearDrafts(guildId: string, id: string, userId?: string) {
@@ -1137,6 +1147,7 @@ export class Store {
     partial: boolean,
     job: Job,
     proof?: { runId: string; outputHash: string },
+    pending = partial,
   ) {
     return this.withMeeting(guildId, id, async (tx, m) => {
       await this.assertJob(tx, job);
@@ -1188,7 +1199,7 @@ export class Store {
         );
       m.view.summary_version = next;
       m.view.summary_status = 'READY';
-      m.view.status = partial ? 'PARTIAL' : 'COMPLETED';
+      m.view.status = pending ? 'PARTIAL' : 'COMPLETED';
       m.view.title = publicResult.title || m.view.title;
       await this.saveView(tx, m);
       await this.event(tx, m, 'summary.updated', {
@@ -1201,7 +1212,7 @@ export class Store {
         meeting_id: id,
         summary_version: next,
       });
-      if (!partial)
+      if (!pending)
         await sql`UPDATE audio_chunks SET expires_at=least(expires_at,now()+interval '24 hours') WHERE meeting_id=${id}::uuid`.execute(
           tx,
         );
