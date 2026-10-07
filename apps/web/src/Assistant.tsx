@@ -475,7 +475,10 @@ export function Assistant() {
                   {(f.bytes / 1024).toFixed(0)}KB ·{' '}
                   {f.document_state === 'READY' ? '색인 완료' : f.state} · {f.mime}
                   {f.mime === 'application/pdf' && f.parse_status ?
-                    ` · Parse ${f.parse_status === 'READY' ? '완료' : f.parse_status === 'FALLBACK' ? '로컬 대체' : f.parse_status}` : ''}
+                    ` · Parse ${f.parse_status === 'READY' ? '완료' : f.parse_status === 'FALLBACK' ? '로컬 대체' : f.parse_status}` +
+                    (f.cache_hit ? ' · cache hit' : '') +
+                    (f.parser_version ? ` · ${f.parser_version}` : '') +
+                    (f.original_verified_at ? ' · 원본 hash 검증됨' : '') : ''}
                 </div>
                 <button
                   className="ghost-button"

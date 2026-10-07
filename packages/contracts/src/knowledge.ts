@@ -100,6 +100,13 @@ export const Evidence = z
     url: z.string().min(1),
     quote: z.string(),
     observed_at: z.iso.datetime(),
+    page_start: z.number().int().positive().optional(),
+    page_end: z.number().int().positive().optional(),
+    block_ids: z.array(z.string()).optional(),
+    block_locations: z.array(z.object({ id: z.string(), page: z.number().int().positive().optional(), bbox: z.unknown().optional() })).optional(),
+    bbox: z.unknown().optional(),
+    parser_version: z.string().optional(),
+    source_sha256: z.string().optional(),
   })
   .strict();
 export type Evidence = z.infer<typeof Evidence>;

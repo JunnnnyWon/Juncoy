@@ -9,7 +9,9 @@
   "dependencies": {
     "@meeting/contracts": "workspace:*",
     "@meeting/knowledge-db": "workspace:*",
+    "@napi-rs/canvas": "^0.1.100",
     "pdfjs-dist": "^4.10.38",
+    "sharp": "^0.34.5",
     "yauzl": "^3.4.0"
   },
   "devDependencies": {

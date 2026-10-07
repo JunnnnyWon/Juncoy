@@ -12,6 +12,9 @@ export interface ImageResult {
   b64: string;
   width?: number;
   height?: number;
+  requestId?: string;
+  mime?: string;
+  costUsd?: number;
 }
 export interface ImageReferenceInput {
   bytes: Buffer;
@@ -120,11 +123,16 @@ export class OpenRouterImages {
     if (!r.ok) throw Object.assign(new Error(`openrouter_${r.status}`), { status: r.status });
     const body = (await r.json()) as any;
     const item = body.data?.[0];
-    if (item?.b64_json) return { b64: item.b64_json };
+    if (item?.b64_json) return { b64: item.b64_json, requestId: body.id ?? r.headers.get('x-request-id') ?? undefined, mime: 'image/png', costUsd: Number(body.usage?.cost ?? NaN) || undefined };
     if (item?.url) {
       const img = await fetch(item.url, { signal: AbortSignal.timeout(60_000) });
       if (!img.ok) throw new Error(`image_fetch_${img.status}`);
-      return { b64: Buffer.from(await img.arrayBuffer()).toString('base64') };
+      return {
+        b64: Buffer.from(await img.arrayBuffer()).toString('base64'),
+        requestId: body.id ?? r.headers.get('x-request-id') ?? undefined,
+        mime: img.headers.get('content-type') ?? undefined,
+        costUsd: Number(body.usage?.cost ?? NaN) || undefined,
+      };
     }
     throw new Error('empty_image_response');
   }
@@ -161,7 +169,7 @@ export class OpenRouterImages {
     const url = msg?.images?.[0]?.image_url?.url ?? msg?.images?.[0]?.url;
     if (typeof url === 'string' && url.startsWith('data:')) {
       const b64 = url.slice(url.indexOf(',') + 1);
-      return { b64 };
+      return { b64, requestId: r.headers.get('x-request-id') ?? undefined, mime: url.slice(5, url.indexOf(';')) || 'image/png' };
     }
     throw new Error('no_image_in_response');
   }
@@ -190,17 +198,23 @@ export async function createImageJob(
     evidence?: unknown;
     options?: unknown;
     idempotencyKey: string;
+    briefHash?: string;
+    boardId?: string;
+    boardRevision?: number;
+    artBibleVersion?: number | null;
   },
 ) {
   const id = randomUUID();
   const promptHash = createHash('sha256').update(j.prompt).digest('hex');
   const r = await first<{ id: string }>(
     sql`INSERT INTO image_jobs(id, project_id, owner_id, approval_id, status, provider,
-            model, prompt, negative_prompt, evidence, prompt_hash, options, idempotency_key)
+            model, prompt, negative_prompt, evidence, prompt_hash, options, idempotency_key,
+            brief_hash, board_id, board_revision, art_bible_version)
         VALUES (${id}, ${j.projectId}, ${j.ownerId}, ${j.approvalId ?? null}, 'PENDING',
             'openrouter', ${j.model}, ${j.prompt}, ${j.negative ?? null},
             ${JSON.stringify(j.evidence ?? [])}, ${promptHash},
-            ${JSON.stringify(j.options ?? {})}, ${j.idempotencyKey})
+            ${JSON.stringify(j.options ?? {})}, ${j.idempotencyKey}, ${j.briefHash ?? null},
+            ${j.boardId ?? null}, ${j.boardRevision ?? null}, ${j.artBibleVersion ?? null})
         ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
         RETURNING id`,
     store.db,
@@ -211,6 +225,15 @@ export async function createImageJob(
     store.db,
   );
   return { id: existing!.id, created: false };
+}
+
+export async function claimImageJob(store: KnowledgeStore, jobId: string) {
+  const token = randomUUID();
+  const row = await first<{ execution_token: string }>(sql`
+    UPDATE image_jobs SET status='RUNNING', execution_token=${token}, execution_started_at=now()
+    WHERE id=${jobId} AND status IN ('PENDING', 'FAILED')
+    RETURNING execution_token`, store.db);
+  return row?.execution_token === token ? token : null;
 }
 
 export async function getImageJobResult(store: KnowledgeStore, projectId: string, jobId: string) {
@@ -227,23 +250,28 @@ export async function finishImageJob(
   jobId: string,
   status: 'DONE' | 'FAILED',
   error?: string,
-  result?: { storageKey: string; bytes: number; width?: number; height?: number; costUsd?: number },
+  result?: { storageKey: string; bytes: number; width?: number; height?: number; costUsd?: number; mime?: string; sha256?: string; requestId?: string },
+  executionToken?: string | null,
 ) {
-  await sql`UPDATE image_jobs SET status=${status}, error=${error ?? null},
-        finished_at=now() WHERE id=${jobId}`.execute(store.db);
-  if (result)
-    await sql`INSERT INTO image_results(id, job_id, storage_key, bytes, width, height, cost_usd)
+  await store.db.transaction().execute(async (tx) => {
+    const updated = await sql`UPDATE image_jobs SET status=${status}, error=${error ?? null},
+      provider_request_id=coalesce(${result?.requestId ?? null}, provider_request_id),
+      cost_status=${result?.costUsd == null ? 'UNKNOWN' : 'KNOWN'}, finished_at=now()
+      WHERE id=${jobId} AND status='RUNNING'
+        AND (${executionToken ?? null} IS NULL OR execution_token=${executionToken ?? null})`.execute(tx);
+    if (!Number(updated.numAffectedRows ?? 0)) return;
+    if (result) await sql`INSERT INTO image_results(id, job_id, storage_key, bytes, width, height, cost_usd, mime, sha256, cost_status)
       VALUES (${randomUUID()}, ${jobId}, ${result.storageKey}, ${result.bytes},
-        ${result.width ?? null}, ${result.height ?? null}, ${result.costUsd ?? null})`.execute(
-      store.db,
-    );
+        ${result.width ?? null}, ${result.height ?? null}, ${result.costUsd ?? null}, ${result.mime ?? 'image/png'}, ${result.sha256 ?? null}, ${result.costUsd == null ? 'UNKNOWN' : 'KNOWN'})
+      ON CONFLICT (job_id) DO NOTHING`.execute(tx);
+  });
 }
 
 export async function listImages(store: KnowledgeStore, projectId: string) {
   return rows<any>(
-        sql`SELECT r.id, r.job_id, r.bytes, r.width, r.height, r.created_at,
+        sql`SELECT r.id, r.job_id, r.bytes, r.width, r.height, r.mime, r.sha256, r.cost_status, r.created_at,
                r.review_status, r.reviewed_by, r.reviewed_at, r.review_note,
-               j.prompt, j.model, j.owner_id
+               j.prompt, j.model, j.owner_id, j.brief_hash, j.board_id, j.board_revision, j.art_bible_version, j.provider_request_id
         FROM image_results r JOIN image_jobs j ON j.id=r.job_id
         WHERE j.project_id=${projectId} ORDER BY r.created_at DESC LIMIT 100`,
     store.db,
@@ -252,8 +280,8 @@ export async function listImages(store: KnowledgeStore, projectId: string) {
 
 export async function getImage(store: KnowledgeStore, projectId: string, resultId: string) {
   return first<any>(
-    sql`SELECT r.*, j.prompt, j.project_id FROM image_results r
-        JOIN image_jobs j ON j.id=r.job_id
+    sql`SELECT r.*, j.prompt, j.project_id, j.model, j.brief_hash, j.board_id, j.board_revision, j.art_bible_version, j.provider_request_id
+        FROM image_results r JOIN image_jobs j ON j.id=r.job_id
         WHERE r.id=${resultId} AND j.project_id=${projectId}`,
     store.db,
   );
@@ -268,9 +296,27 @@ export async function reviewImageResult(
   role: string,
   note?: string,
 ) {
-  const r = await first<any>(sql`UPDATE image_results r SET
-      review_status=${status}, reviewed_by=${userId}, reviewed_at=now(), review_role=${role}, review_note=${note ?? null}
-    FROM image_jobs j WHERE r.id=${resultId} AND j.id=r.job_id AND j.project_id=${projectId}
-    RETURNING r.id`, store.db);
-  return Boolean(r);
+  return store.db.transaction().execute(async (tx) => {
+    const result = await first<any>(sql`SELECT r.*, j.project_id FROM image_results r
+      JOIN image_jobs j ON j.id=r.job_id
+      WHERE r.id=${resultId} AND j.project_id=${projectId} FOR UPDATE`, tx);
+    if (!result) return false;
+    if (status === 'APPROVED_CANONICAL' && !note?.trim()) return false;
+    await sql`UPDATE image_results SET review_status=${status}, reviewed_by=${userId},
+      reviewed_at=now(), review_role=${role}, review_note=${note ?? null}
+      WHERE id=${resultId}`.execute(tx);
+    if (status === 'APPROVED_CANONICAL') {
+      if (!result.sha256) return false;
+      const upload = await first<{ id: string }>(sql`INSERT INTO knowledge_uploads(
+        id, project_id, owner_id, filename, mime, bytes, sha256, storage_key, state, original_verified_at)
+        VALUES (${randomUUID()}, ${projectId}, ${userId}, ${'generated-' + resultId + '.png'}, ${result.mime ?? 'image/png'},
+          ${result.bytes}, ${result.sha256}, ${result.storage_key}, 'READY', now())
+        ON CONFLICT (project_id, sha256) DO UPDATE SET state='READY'
+        RETURNING id`, tx);
+      await sql`INSERT INTO art_reference_assets(id, project_id, upload_id, source_label, rights_note, state, canonical_state, created_by)
+        VALUES (${randomUUID()}, ${projectId}, ${upload!.id}, ${'generated-' + resultId}, ${note}, 'READY', 'APPROVED_CANONICAL', ${userId})
+        ON CONFLICT (project_id, upload_id) DO UPDATE SET rights_note=${note}, canonical_state='APPROVED_CANONICAL', state='READY', updated_at=now()`.execute(tx);
+    }
+    return true;
+  });
 }

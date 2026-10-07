@@ -17,8 +17,8 @@ export async function cachedParse<T extends { parseStatus: string }>(
       FROM document_parse_cache WHERE project_id=${key.projectId} AND upload_id=${key.uploadId}
       AND source_sha256=${key.sourceHash} AND parser_profile=${key.parserProfile} AND options_hash=${key.optionsHash}
       FOR UPDATE`, tx);
-    if (!force && row.result) return { cached: row.result as T };
     if (row.owner && row.leased) throw new Error('parse_cache_pending');
+    if (!force && row.result) return { cached: { ...row.result, cacheHit: true } as T };
     await sql`UPDATE document_parse_cache SET owner=${owner}, lease_until=now()+interval '180 seconds'
       WHERE project_id=${key.projectId} AND upload_id=${key.uploadId} AND source_sha256=${key.sourceHash}
       AND parser_profile=${key.parserProfile} AND options_hash=${key.optionsHash}`.execute(tx);
@@ -34,7 +34,7 @@ export async function cachedParse<T extends { parseStatus: string }>(
       AND parser_profile=${key.parserProfile} AND options_hash=${key.optionsHash}
       AND owner=${owner} AND lease_until > now()`.execute(store.db);
     if (!Number(saved.numAffectedRows)) throw new Error('parse_cache_lease_lost');
-    return result;
+    return { ...result, cacheHit: false };
   } finally {
     await sql`UPDATE document_parse_cache SET owner=null, lease_until=null
       WHERE project_id=${key.projectId} AND upload_id=${key.uploadId} AND source_sha256=${key.sourceHash}

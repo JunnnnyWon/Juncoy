@@ -3,6 +3,35 @@ import { api } from './api.ts';
 import type { ArtCanvasNode, ArtCanvasEdge } from '@meeting/contracts';
 import { changeCanvas, travelCanvas, type CanvasHistory } from './canvas-history.ts';
 
+const openDraftDb = () => new Promise<IDBDatabase>((resolve, reject) => {
+  const request = indexedDB.open('juncoy-art-drafts', 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('drafts');
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+});
+async function getDraft(key: string) {
+  const db = await openDraftDb();
+  return new Promise<any>((resolve, reject) => {
+    const request = db.transaction('drafts', 'readonly').objectStore('drafts').get(key);
+    request.onsuccess = () => { db.close(); resolve(request.result ?? null); };
+    request.onerror = () => { db.close(); reject(request.error); };
+  });
+}
+async function putDraft(key: string, value: unknown) {
+  const db = await openDraftDb();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('drafts', 'readwrite'); tx.objectStore('drafts').put(value, key);
+    tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}
+async function clearDraft(key: string) {
+  const db = await openDraftDb();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('drafts', 'readwrite'); tx.objectStore('drafts').delete(key);
+    tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}
+
 type Role =
   'face_shape' | 'modeling_language' | 'material_surface' | 'texture' | 'lighting' | 'mood';
 type Usage =
@@ -18,7 +47,16 @@ interface RefCard {
   role: Role;
   usage: Usage;
   note: string;
+  roles?: Role[];
+  roleUsage?: Partial<Record<Role, Usage>>;
   selected: boolean;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  crop?: { left: number; top: number; right: number; bottom: number } | null;
+  group_id?: string;
+  local_blob?: Blob;
 }
 const roleLabels: Record<Role, string> = {
   face_shape: '얼굴 형태',
@@ -49,6 +87,8 @@ export function ArtReferenceCanvas() {
     if (!loadedBoard.current) return;
     const present = { refs, nodes, edges, zoom, pan };
     if (restoring.current) { restoring.current = false; return; }
+    const changed = Boolean(history.current && JSON.stringify(history.current.present) !== JSON.stringify(present));
+    if (changed) dirtyRef.current = true;
     history.current = history.current ? changeCanvas(history.current, present) : { past: [], present, future: [] };
     setHistoryVersion((v) => v + 1);
   }, [refs, nodes, edges, zoom, pan]);
@@ -78,43 +118,71 @@ export function ArtReferenceCanvas() {
   const [connectSource, setConnectSource] = useState<string | null>(null);
   const [edgeType, setEdgeType] = useState<ArtCanvasEdge['edge_type']>('supports');
   const [selectedId, setSelectedId] = useState('ref-1');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [boardList, setBoardList] = useState<any[]>([]);
+  const [boardName, setBoardName] = useState('비주얼 레퍼런스 보드');
+  const [historyItems, setHistoryItems] = useState<any[]>([]);
+  const [mobilePanel, setMobilePanel] = useState<'canvas' | 'inspector'>('canvas');
   const [boardId, setBoardId] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [syncState, setSyncState] = useState('로컬 초안');
   const [brief, setBrief] = useState<any>(null);
   const [generated, setGenerated] = useState<any[]>([]);
   const [analysis, setAnalysis] = useState<any>(null);
+  const [analysisEdit, setAnalysisEdit] = useState('');
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [assetAnalysis, setAssetAnalysis] = useState<any>(null);
+  const [assetCorrections, setAssetCorrections] = useState('');
+  const [canonicalNote, setCanonicalNote] = useState('');
   const [assetAnalysisBusy, setAssetAnalysisBusy] = useState(false);
   const assetAnalysisGeneration = useRef(0);
   const [dragging, setDragging] = useState(false);
   const dragOrigin = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const inputRef = useRef<HTMLInputElement>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveQueue = useRef(Promise.resolve());
+  const autosaveEnabled = useRef(false);
+  const dirtyRef = useRef(false);
+  const revisionRef = useRef(0);
+  const draftKey = useRef('');
+  useEffect(() => { revisionRef.current = revision; }, [revision]);
   const selected = refs.find((ref) => ref.id === selectedId) ?? refs[0];
   const selectedCount = useMemo(() => refs.filter((ref) => ref.selected).length, [refs]);
+  const serverSnapshot = () => ({
+    references: refs.filter((ref) => ref.upload_id).map(({ url: _url, local_blob: _blob, ...ref }) => ref),
+    nodes, edges, viewport: { ...pan, zoom },
+  });
+  const localSnapshot = () => ({ references: refs.map(({ url: _url, ...ref }) => ref), nodes, edges, viewport: { ...pan, zoom } });
   useEffect(() => {
     const generation = ++assetAnalysisGeneration.current;
     setAssetAnalysis(null);
     const assetId = selected?.art_asset_id;
     if (assetId) {
       void api<any>('/api/assistant/art-assets/' + assetId + '/extraction').then((result) => {
-        if (generation === assetAnalysisGeneration.current) setAssetAnalysis(result);
+        if (generation === assetAnalysisGeneration.current) {
+          setAssetAnalysis(result);
+          setAssetCorrections(JSON.stringify(result.human_corrections ?? {}, null, 2));
+        }
       }).catch(() => {});
     }
     return () => { assetAnalysisGeneration.current++; };
   }, [selected?.art_asset_id]);
   useEffect(() => {
     void (async () => {
+      let activeBoardId = '';
       try {
         const boards = await api<any[]>('/api/assistant/art-boards');
+        setBoardList(boards);
         if (boards[0]) {
+          activeBoardId = boards[0].id;
           setBoardId(boards[0].id);
+          setBoardName(boards[0].name);
           setRevision(Number(boards[0].current_revision ?? 0));
+          setHistoryItems(await api<any[]>('/api/assistant/art-boards/' + boards[0].id + '/history'));
           const detail = await api<any>('/api/assistant/art-boards/' + boards[0].id);
           const saved = detail.revision?.snapshot?.references;
           history.current = { past: [], present: { refs: Array.isArray(saved) ? saved : [], nodes: detail.revision?.snapshot?.nodes ?? [], edges: detail.revision?.snapshot?.edges ?? [], zoom: detail.revision?.snapshot?.viewport?.zoom ?? 1, pan: { x: detail.revision?.snapshot?.viewport?.x ?? 0, y: detail.revision?.snapshot?.viewport?.y ?? 0 } }, future: [] };
-          if (Array.isArray(saved)) setRefs(saved);
+          if (Array.isArray(saved)) setRefs(saved.map((ref: RefCard) => ({ ...ref, url: ref.upload_id ? '/api/assistant/files/' + ref.upload_id + '/content' : ref.url ?? '' })));
           setNodes(detail.revision?.snapshot?.nodes ?? []);
           setEdges(detail.revision?.snapshot?.edges ?? []);
           const savedViewport = detail.revision?.snapshot?.viewport;
@@ -129,9 +197,24 @@ export function ArtReferenceCanvas() {
             body: JSON.stringify({ name: '비주얼 레퍼런스 보드' }),
           });
           setBoardId(created.id);
+          activeBoardId = created.id;
           history.current = { past: [], present: { refs: [], nodes: [], edges: [], zoom: 1, pan: { x: 0, y: 0 } }, future: [] };
         }
+        const owner = await api<{ user_id: string }>('/api/me');
+        draftKey.current = [owner.user_id, 'project', activeBoardId].join(':');
+        const localDraft = await getDraft(draftKey.current).catch(() => null);
+        if (localDraft?.snapshot && Number(localDraft.revision) === Number(boards[0]?.current_revision ?? 0)) {
+          if (window.confirm('저장되지 않은 로컬 초안이 있습니다. 복구할까요?')) {
+            setRefs((localDraft.snapshot.references ?? []).map((ref: RefCard) => ({ ...ref, url: ref.upload_id ? '/api/assistant/files/' + ref.upload_id + '/content' : ref.url ?? '' })));
+            setNodes(localDraft.snapshot.nodes ?? []); setEdges(localDraft.snapshot.edges ?? []);
+            setPan({ x: localDraft.snapshot.viewport?.x ?? 0, y: localDraft.snapshot.viewport?.y ?? 0 }); setZoom(localDraft.snapshot.viewport?.zoom ?? 1);
+            dirtyRef.current = true; setSyncState('로컬 초안 복구됨');
+          }
+        }
+        const storedBlobs = await getDraft(draftKey.current + ':blobs').catch(() => null);
+        if (storedBlobs && Array.isArray(storedBlobs)) setRefs((current) => current.map((ref) => { const item=storedBlobs.find((entry: any) => entry.id===ref.id); return item?.blob ? { ...ref, local_blob:item.blob, url:URL.createObjectURL(item.blob) } : ref; }));
         loadedBoard.current = true;
+        autosaveEnabled.current = true;
         setSyncState('서버에 연결됨');
         setGenerated(await api<any[]>('/api/assistant/images'));
       } catch {
@@ -147,13 +230,52 @@ export function ArtReferenceCanvas() {
         '/api/assistant/art-boards/' + boardId + '/revisions',
         {
           method: 'POST',
-          body: JSON.stringify({ base_revision: revision, snapshot: { references: refs, nodes, edges, viewport: { ...pan, zoom } } }),
+          body: JSON.stringify({ base_revision: revision, snapshot: serverSnapshot() }),
         },
       );
       setRevision(Number(result.revision));
+      dirtyRef.current = false;
+      setHistoryItems(await api<any[]>('/api/assistant/art-boards/' + boardId + '/history'));
       setSyncState('서버에 저장됨');
     } catch {
       setSyncState('충돌 확인 필요');
+    }
+  };
+  useEffect(() => {
+    if (!autosaveEnabled.current || !boardId || !dirtyRef.current) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    const snapshot = serverSnapshot();
+    saveTimer.current = setTimeout(() => {
+      saveQueue.current = saveQueue.current.then(async () => {
+        await putDraft(draftKey.current, { revision: revisionRef.current, saved_at: Date.now(), snapshot: localSnapshot() }).catch(() => {});
+        await putDraft(draftKey.current + ':blobs', refs.filter((ref) => ref.local_blob).map((ref) => ({ id: ref.id, blob: ref.local_blob, name: ref.name }))).catch(() => {});
+        setSyncState('자동 저장 중');
+        try {
+          const result = await api<{ revision: number }>('/api/assistant/art-boards/' + boardId + '/revisions', {
+            method: 'POST', body: JSON.stringify({ base_revision: revisionRef.current, snapshot }),
+          });
+          setRevision(Number(result.revision));
+          revisionRef.current = Number(result.revision);
+          dirtyRef.current = false;
+          await clearDraft(draftKey.current).catch(() => {});
+          await clearDraft(draftKey.current + ':blobs').catch(() => {});
+          setHistoryItems(await api<any[]>('/api/assistant/art-boards/' + boardId + '/history'));
+          setSyncState('자동 저장됨');
+        } catch { setSyncState('저장 충돌 - 최신 revision 확인 필요'); }
+      });
+    }, 1000);
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, [refs, nodes, edges, zoom, pan, boardId]);
+  const saveCorrections = async () => {
+    if (!selected?.art_asset_id) return;
+    try {
+      const corrections = JSON.parse(assetCorrections || '{}');
+      const saved = await api<any>('/api/assistant/art-assets/' + selected.art_asset_id + '/extraction', {
+        method: 'PATCH', body: JSON.stringify({ corrections }),
+      });
+      setAssetAnalysis((current: any) => current ? { ...current, human_corrections: saved.human_corrections } : current);
+    } catch {
+      window.alert('수정값은 JSON 형식이어야 합니다.');
     }
   };
   const previewBrief = async () => {
@@ -163,7 +285,7 @@ export function ArtReferenceCanvas() {
     try {
       const saved = await api<{ revision: number }>(
         '/api/assistant/art-boards/' + boardId + '/revisions',
-        { method: 'POST', body: JSON.stringify({ base_revision: revision, snapshot: { references: refs, nodes, edges, viewport: { ...pan, zoom } } }) },
+        { method: 'POST', body: JSON.stringify({ base_revision: revision, snapshot: serverSnapshot() }) },
       );
       savedRevision = Number(saved.revision);
       setRevision(savedRevision);
@@ -193,7 +315,8 @@ export function ArtReferenceCanvas() {
     if (!boardId || !revision || analysisBusy) return;
     setAnalysisBusy(true);
     try {
-      setAnalysis(await api<any>('/api/assistant/art-boards/' + boardId + '/analyze', { method: 'POST' }));
+      const draft = await api<any>('/api/assistant/art-boards/' + boardId + '/analyze', { method: 'POST' });
+      setAnalysis(draft); setAnalysisEdit(JSON.stringify(draft.result, null, 2));
     } catch {
       window.alert('보드 분석을 시작할 수 없습니다.');
     } finally {
@@ -258,7 +381,8 @@ export function ArtReferenceCanvas() {
             art_asset_id,
             name: file.name,
             url: upload_id ? '/api/assistant/files/' + upload_id + '/content' : URL.createObjectURL(file),
-            role: 'mood' as Role,
+            local_blob: upload_id ? undefined : file,
+            role: 'mood' as Role, roles: ['mood' as Role], roleUsage: { mood: 'REVIEW_REQUIRED' as Usage },
             usage: 'REVIEW_REQUIRED' as Usage,
             note: '새 레퍼런스. 분석 전 검토 필요',
             selected: false,
@@ -277,6 +401,44 @@ export function ArtReferenceCanvas() {
     setNodes((current) => [...current, { id, node_type, x: 60 + current.length * 30, y: 70 + current.length * 30, width: node_type === 'frame' ? 420 : 220, height: node_type === 'frame' ? 300 : 140, text: node_type === 'frame' ? '새 프레임' : '새 메모' }]);
     setActiveNodeId(id);
   };
+  const createBoard = async () => {
+    const name = window.prompt('새 보드 이름', '새 아트 보드');
+    if (!name?.trim()) return;
+    const result = await api<{ id: string }>('/api/assistant/art-boards', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+    const next = await api<any[]>('/api/assistant/art-boards'); setBoardList(next); setBoardId(result.id); setBoardName(name.trim()); setRevision(0);
+    setRefs([]); setNodes([]); setEdges([]); setPan({ x: 0, y: 0 }); setZoom(1); setBrief(null); setAnalysis(null); dirtyRef.current = false;
+  };
+  const restoreRevision = async (target: number) => {
+    if (!boardId) return;
+    const result = await api<any>('/api/assistant/art-boards/' + boardId + '/restore-revision', { method: 'POST', body: JSON.stringify({ revision: target }) });
+    setRevision(Number(result.revision)); revisionRef.current = Number(result.revision);
+    const detail = await api<any>('/api/assistant/art-boards/' + boardId);
+    const snap = detail.revision?.snapshot ?? {};
+    setRefs((snap.references ?? []).map((ref: RefCard) => ({ ...ref, url: ref.upload_id ? '/api/assistant/files/' + ref.upload_id + '/content' : ref.url ?? '' })));
+    setNodes(snap.nodes ?? []); setEdges(snap.edges ?? []);
+    setHistoryItems(await api<any[]>('/api/assistant/art-boards/' + boardId + '/history'));
+    dirtyRef.current = false; setBrief(null); setAnalysis(null);
+  };
+  const renameBoard = async () => {
+    const name = window.prompt('보드 이름 변경', boardName);
+    if (!name?.trim() || !boardId) return;
+    const result = await api<any>('/api/assistant/art-boards/' + boardId, { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) });
+    setBoardName(result.name); setBoardList(await api<any[]>('/api/assistant/art-boards'));
+  };
+  const moveSelection = (dx: number, dy: number) => {
+    if (!selectedIds.length) return;
+    const snap = (value: number) => Math.round(value / 16) * 16;
+    setRefs((current) => current.map((ref) => selectedIds.includes(ref.id) ? { ...ref, x: snap((ref.x ?? 80) + dx), y: snap((ref.y ?? 110) + dy) } : ref));
+  };
+  const groupSelection = () => {
+    const items = refs.filter((ref) => selectedIds.includes(ref.id));
+    if (items.length < 2) return;
+    const id = crypto.randomUUID();
+    const x = Math.min(...items.map((ref) => ref.x ?? 80)), y = Math.min(...items.map((ref) => ref.y ?? 110));
+    setNodes((current) => [...current, { id, node_type: 'group', x, y, width: 260, height: 90, text: '그룹 · ' + items.map((item) => item.name).join(', ') }]);
+    setRefs((current) => current.map((ref) => selectedIds.includes(ref.id) ? { ...ref, group_id: id } as RefCard : ref));
+    setSelectedIds([]);
+  };
   const chooseNode = (id: string) => {
     if (connectSource && connectSource !== id && nodes.some((node) => node.id === connectSource)) {
       setEdges((current) => current.some((e) => e.source === connectSource && e.target === id && e.edge_type === edgeType) ? current : [...current, { id: crypto.randomUUID(), source: connectSource, target: id, edge_type: edgeType }]);
@@ -289,7 +451,7 @@ export function ArtReferenceCanvas() {
       <header className="art-header">
         <div>
           <span className="eyebrow">ART DIRECTION / BOARD 01</span>
-          <h1>비주얼 레퍼런스 보드</h1>
+          <div className="art-board-title-row"><select aria-label="아트 보드" value={boardId ?? ''} onChange={async (event) => { const id = event.target.value; if (!id) return; const [detail, list] = await Promise.all([api<any>('/api/assistant/art-boards/' + id), api<any[]>('/api/assistant/art-boards/' + id + '/history')]); setBoardId(id); setBoardName(detail.board.name); setRevision(detail.board.current_revision); setHistoryItems(list); const snap = detail.revision?.snapshot ?? {}; setRefs((snap.references ?? []).map((ref: RefCard) => ({ ...ref, url: ref.upload_id ? '/api/assistant/files/' + ref.upload_id + '/content' : ref.url ?? '' }))); setNodes(snap.nodes ?? []); setEdges(snap.edges ?? []); setPan(snap.viewport ? { x: snap.viewport.x, y: snap.viewport.y } : { x: 0, y: 0 }); setZoom(snap.viewport?.zoom ?? 1); dirtyRef.current = false; }}><option value="">보드 선택</option>{boardList.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}</select><h1>{boardName}</h1><button className="icon-button" title="이름 변경" onClick={() => void renameBoard()}>✎</button><button className="icon-button" title="새 보드" onClick={() => void createBoard()}>＋</button></div>
           <p>반실사 얼굴 · 오래된 PC 호러 게임의 모델링 언어 · 실사 기반 재질</p>
         </div>
         <div className="art-header-actions">
@@ -312,6 +474,8 @@ export function ArtReferenceCanvas() {
         <button className="art-tool active">↖ 선택</button>
         <button className="art-tool" onClick={() => addNode('frame')}>▧ 프레임</button>
         <button className="art-tool" onClick={() => addNode('text_note')}>T 메모</button>
+        <button className="art-tool" onClick={() => addNode('group')}>그룹</button>
+        <button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(-16, 0)}>←</button><button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(16, 0)}>→</button><button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(0, -16)}>↑</button><button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(0, 16)}>↓</button><button className="art-tool" disabled={selectedIds.length < 2} onClick={groupSelection}>선택 묶기</button>
         <button className={'art-tool ' + (connectSource ? 'active' : '')} disabled={!activeNodeId} onClick={() => setConnectSource(connectSource ? null : activeNodeId)}>↗ 연결</button>
         <select aria-label="연결 관계" value={edgeType} onChange={(event) => setEdgeType(event.target.value as ArtCanvasEdge['edge_type'])}>
           <option value="supports">뒷받침</option><option value="contradicts">충돌</option><option value="variant_of">변형</option><option value="uses_only">부분 채택</option><option value="derived_from">파생</option>
@@ -326,6 +490,7 @@ export function ArtReferenceCanvas() {
         <span className="zoom-readout">{Math.round(zoom * 100)}%</span>
         <button className="art-tool viewport-button" onClick={() => setZoom((value) => Math.min(1.8, value + 0.1))}>＋</button>
         <button className="art-tool" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>맞춤 보기</button>
+        <select aria-label="보드 이력" value="" onChange={(event) => { if (event.target.value) void restoreRevision(Number(event.target.value)); }}><option value="">이력 v{revision}</option>{historyItems.map((item) => <option key={item.revision} value={item.revision}>v{item.revision} · {new Date(item.created_at).toLocaleString('ko-KR')}</option>)}</select>
         <input
           ref={inputRef}
           type="file"
@@ -339,8 +504,9 @@ export function ArtReferenceCanvas() {
         />
       </div>
       <main className="art-layout">
+        <nav className="art-mobile-tabs"><button className={mobilePanel === 'canvas' ? 'active' : ''} onClick={() => setMobilePanel('canvas')}>캔버스</button><button className={mobilePanel === 'inspector' ? 'active' : ''} onClick={() => setMobilePanel('inspector')}>검토 패널</button></nav>
         <section
-          className="art-board"
+          className={'art-board ' + (mobilePanel === 'inspector' ? 'mobile-hidden' : '')}
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => {
             event.preventDefault();
@@ -381,14 +547,14 @@ export function ArtReferenceCanvas() {
             })}
           </svg>
           {nodes.map((node) => <div key={node.id} className={'canvas-node ' + node.node_type + (activeNodeId === node.id ? ' active' : '')} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={() => chooseNode(node.id)}>
-            <div className="canvas-node-handle" onPointerDown={(event) => {
+          <div className="canvas-node-handle" onPointerDown={(event) => {
               event.stopPropagation();
               const origin = { x: event.clientX, y: event.clientY, nodeX: node.x, nodeY: node.y };
               const handle = event.currentTarget;
               handle.setPointerCapture(event.pointerId);
               handle.onpointermove = (move) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, x: origin.nodeX + (move.clientX - origin.x) / zoom, y: origin.nodeY + (move.clientY - origin.y) / zoom } : n));
               handle.onpointerup = () => { handle.onpointermove = null; handle.onpointerup = null; };
-            }}>{node.node_type === 'frame' ? '프레임' : '메모'}<button aria-label="노드 삭제" onClick={(event) => { event.stopPropagation(); setNodes((current) => current.filter((n) => n.id !== node.id)); setEdges((current) => current.filter((e) => e.source !== node.id && e.target !== node.id)); }}>×</button></div>
+            }}>{node.node_type === 'frame' ? '프레임' : node.node_type === 'group' ? '그룹' : '메모'}<button aria-label="노드 삭제" onClick={(event) => { event.stopPropagation(); setNodes((current) => current.filter((n) => n.id !== node.id)); setEdges((current) => current.filter((e) => e.source !== node.id && e.target !== node.id)); }}>×</button></div>
             <textarea aria-label="노드 내용" value={node.text} onChange={(event) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, text: event.target.value } : n))} />
           </div>)}
           {refs.length === 0 && nodes.length === 0 && (
@@ -399,49 +565,23 @@ export function ArtReferenceCanvas() {
               <button className="primary-button" onClick={() => inputRef.current?.click()}>첫 레퍼런스 추가</button>
             </div>
           )}
-          {refs.length > 0 && <div className="art-frame frame-character">
-            <div className="frame-title">01 / CHARACTER LANGUAGE</div>
-            <div className="ref-grid">
-              {refs.slice(0, 2).map((ref) => (
+          {refs.map((ref, index) => (
                 <ReferenceCard
                   key={ref.id}
                   refCard={ref}
                   active={ref.id === selectedId}
                   onClick={() => setSelectedId(ref.id)}
-                  onToggle={() =>
-                    setRefs((current) =>
-                      current.map((item) =>
-                        item.id === ref.id ? { ...item, selected: !item.selected } : item,
-                      ),
-                    )
-                  }
+                  onToggle={() => setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, selected: !item.selected } : item))}
+                  style={{ left: ref.x ?? 80 + (index % 4) * 260, top: ref.y ?? 110 + Math.floor(index / 4) * 250, width: ref.width ?? 220, height: ref.height ?? 210 }}
+                  onMove={(x, y) => setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, x, y } : item))}
+                  onResize={(width, height) => setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, width, height } : item))}
+                  selected={selectedIds.includes(ref.id)}
+                  onSelect={(multi) => setSelectedIds((current) => multi ? current.includes(ref.id) ? current.filter((id) => id !== ref.id) : [...current, ref.id] : [ref.id])}
                 />
-              ))}
-            </div>
-          </div>}
-          {refs.length > 2 && <div className="art-frame frame-environment">
-            <div className="frame-title">02 / SURFACE + ATMOSPHERE</div>
-            <div className="ref-grid single">
-              {refs.slice(2).map((ref) => (
-                <ReferenceCard
-                  key={ref.id}
-                  refCard={ref}
-                  active={ref.id === selectedId}
-                  onClick={() => setSelectedId(ref.id)}
-                  onToggle={() =>
-                    setRefs((current) =>
-                      current.map((item) =>
-                        item.id === ref.id ? { ...item, selected: !item.selected } : item,
-                      ),
-                    )
-                  }
-                />
-              ))}
-            </div>
-          </div>}
+          ))}
           </div>
         </section>
-        <aside className="art-inspector">
+        <aside className={'art-inspector ' + (mobilePanel === 'canvas' ? 'mobile-hidden' : '')}>
           {brief && (
             <div className="brief-card">
               <span className="eyebrow">IMAGEBRIEF / DRAFT</span>
@@ -492,6 +632,7 @@ export function ArtReferenceCanvas() {
                 <span>{analysis.status}</span>
               </div>
               <p>{analysis.result?.summary}</p>
+              {analysis.status === 'DRAFT' && <><label>Art Bible 초안 수정(JSON)<textarea rows={8} value={analysisEdit} onChange={(event) => setAnalysisEdit(event.target.value)} /></label><button className="secondary-button" onClick={async () => { try { const result = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision, { method: 'PATCH', body: JSON.stringify({ analysis_id: analysis.id, result: JSON.parse(analysisEdit) }) }); setAnalysis(result); setAnalysisEdit(JSON.stringify(result.result, null, 2)); } catch { window.alert('수정된 JSON이 올바르지 않습니다.'); } }}>수정 초안 저장</button><button className="asset-review-button" onClick={async () => { await api('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision + '/reject', { method: 'POST', body: JSON.stringify({ analysis_id: analysis.id }) }); setAnalysis({ ...analysis, status: 'REJECTED' }); }}>초안 거부</button></>}
               {analysis.status === 'DRAFT' && (
                 <button
                   className="secondary-button"
@@ -537,13 +678,10 @@ export function ArtReferenceCanvas() {
                   value={selected.role}
                   onChange={(event) => update({ role: event.target.value as Role })}
                 >
-                  {Object.entries(roleLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
+                  {Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </label>
+              <fieldset className="role-usage-list"><legend>복수 역할 · 역할별 강도</legend>{Object.entries(roleLabels).map(([value, label]) => { const role=value as Role; const active=(selected.roles ?? [selected.role]).includes(role); return <div key={role}><label><input type="checkbox" checked={active} onChange={(event) => { const roles=event.target.checked ? [...new Set([...(selected.roles ?? [selected.role]), role])] : (selected.roles ?? [selected.role]).filter((item) => item!==role); update({ roles: roles.length ? roles : [selected.role] }); }} />{label}</label>{active && <select aria-label={label + ' 사용 강도'} value={selected.roleUsage?.[role] ?? selected.usage} onChange={(event) => update({ roleUsage: { ...selected.roleUsage, [role]: event.target.value as Usage } })}>{Object.entries(usageLabels).map(([v, title]) => <option key={v} value={v}>{title}</option>)}</select>}</div>; })}</fieldset>
               <label>
                 사용 강도
                 <select
@@ -557,6 +695,7 @@ export function ArtReferenceCanvas() {
                   ))}
                 </select>
               </label>
+              {selected.usage === 'PARTIAL_REFERENCE' && <div className="crop-editor"><span>부분 채택 영역</span><div className="crop-preview"><img src={selected.url} alt="crop reference" /><div style={{ left: (selected.crop?.left ?? 0.1) * 100 + '%', top: (selected.crop?.top ?? 0.1) * 100 + '%', width: ((selected.crop?.right ?? 0.9) - (selected.crop?.left ?? 0.1)) * 100 + '%', height: ((selected.crop?.bottom ?? 0.9) - (selected.crop?.top ?? 0.1)) * 100 + '%' }} /></div><div className="crop-fields">{(['left', 'top', 'right', 'bottom'] as const).map((key) => <label key={key}>{key}<input type="number" min={0} max={1} step={0.05} value={selected.crop?.[key] ?? (key === 'right' || key === 'bottom' ? 0.9 : 0.1)} onChange={(event) => { const defaults = { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9 }; update({ crop: { ...defaults, ...selected.crop, [key]: Number(event.target.value) } }); }} /></label>)}</div></div>}
               <label>
                 팀 메모
                 <textarea
@@ -606,14 +745,18 @@ export function ArtReferenceCanvas() {
                     {(assetAnalysis.observations?.palette ?? []).slice(0, 4).map((item: string) => <span key={item}>{item}</span>)}
                   </div>
                   <small>AI 관찰은 초안이며 Art Bible 규칙이나 canonical 자산이 아닙니다.</small>
+                  <label>사람 수정값(JSON)
+                    <textarea rows={5} value={assetCorrections} onChange={(event) => setAssetCorrections(event.target.value)} />
+                  </label>
+                  <button className="asset-review-button" onClick={() => void saveCorrections()}>사람 수정 저장</button>
                 </div>
               )}
               <div className="inspector-rule" />
               <div className="inspector-meta">
                 <span>원본 픽셀</span>
-                <strong>보존됨</strong>
+                <strong>{selected.upload_id ? '원본 hash 검증 대상' : '로컬 초안'}</strong>
                 <span>권리 상태</span>
-                <strong>팀 검토 필요</strong>
+                <strong>{selected.rights_note?.trim() ? '권리 메모 있음' : '권리 메모 없음'}</strong>
                 <span>ImageBrief 포함</span>
                 <strong>{selectedCount}개 선택</strong>
               </div>
@@ -636,13 +779,16 @@ export function ArtReferenceCanvas() {
                     </a>
                     <small>{image.review_status ?? 'DRAFT'} · {image.model}</small>
                     {image.review_status !== 'APPROVED_CANONICAL' && (
-                      <button className="output-review" onClick={async () => {
+                      <div>
+                      <input className="output-rights-note" placeholder="canonical 권리 메모" value={canonicalNote} onChange={(event) => setCanonicalNote(event.target.value)} />
+                      <button className="output-review" disabled={!canonicalNote.trim()} onClick={async () => {
                         const result = await api<any>('/api/assistant/images/' + image.id + '/review', {
                           method: 'POST',
-                          body: JSON.stringify({ status: 'APPROVED_CANONICAL', review_role: 'art_reference' }),
+                          body: JSON.stringify({ status: 'APPROVED_CANONICAL', review_role: 'art_reference', note: canonicalNote }),
                         });
                         if (result.reviewed) setGenerated(await api<any[]>('/api/assistant/images'));
                       }}>canonical 승인</button>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -661,14 +807,26 @@ function ReferenceCard({
   active,
   onClick,
   onToggle,
+  style,
+  onMove,
+  onResize,
+  selected,
+  onSelect,
 }: {
   refCard: RefCard;
   active: boolean;
   onClick: () => void;
   onToggle: () => void;
+  style: React.CSSProperties;
+  onMove: (x: number, y: number) => void;
+  onResize: (width: number, height: number) => void;
+  selected: boolean;
+  onSelect: (multi: boolean) => void;
 }) {
+  const origin = useRef({ x: 0, y: 0, left: 0, top: 0 });
   return (
-    <article className={'reference-card ' + (active ? 'active' : '')} onClick={onClick}>
+    <article className={'reference-card canvas-reference-card ' + (active ? 'active' : '') + (selected ? ' multi-selected' : '')} style={style} onClick={(event) => { if (event.shiftKey || event.metaKey || event.ctrlKey) onSelect(true); else { onSelect(false); onClick(); } }}>
+      <button className="reference-drag-handle" aria-label="레퍼런스 이동" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); origin.current = { x: event.clientX, y: event.clientY, left: Number(style.left), top: Number(style.top) }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (!event.buttons) return; onMove(Math.round((origin.current.left + event.clientX - origin.current.x) / 16) * 16, Math.round((origin.current.top + event.clientY - origin.current.y) / 16) * 16); }}>⠿ 이동</button>
       <img src={refCard.url} alt={refCard.name} />
       <div className="reference-card-foot">
         <div>
@@ -688,6 +846,8 @@ function ReferenceCard({
           {refCard.selected ? '✓' : '○'}
         </button>
       </div>
+      <button className="reference-select" aria-label="다중 선택" aria-pressed={selected} onClick={(event) => { event.stopPropagation(); onSelect(true); }}>□</button>
+      <button className="reference-resize" aria-label="레퍼런스 크기 조절" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); const start = { x: event.clientX, width: Number(style.width), height: Number(style.height) }; event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.onpointermove = (next) => { const width = Math.max(160, start.width + next.clientX - start.x); const height = Math.max(140, start.height + next.clientX - start.x); const element = (next.currentTarget as HTMLElement).closest('.reference-card') as HTMLElement | null; if (element) { element.style.width = width + 'px'; element.style.height = height + 'px'; } }; event.currentTarget.onpointerup = (next) => { const width = Math.max(160, start.width + next.clientX - start.x); const height = Math.max(140, start.height + next.clientX - start.x); onResize(width, height); event.currentTarget.onpointermove = null; event.currentTarget.onpointerup = null; }; }}>↘</button>
     </article>
   );
 }

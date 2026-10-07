@@ -58,11 +58,13 @@ export const AssistantToolName = z.enum([
   'notion.preview_update_task',
   'file.preview_delete_or_replace',
   'image.preview_generation',
+  'art.preview_image_brief',
   'notion.commit_page_change',
   'notion.commit_schedule_change',
   'notion.commit_task_change',
   'file.commit_delete_or_replace',
   'image.generate',
+  'art.generate',
 ]);
 export type AssistantToolName = z.infer<typeof AssistantToolName>;
 

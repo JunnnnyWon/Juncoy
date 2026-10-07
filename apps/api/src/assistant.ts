@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { sql, first, rows } from '@meeting/knowledge-db';
-import { AssistantMode, ArtBoardSnapshot } from '@meeting/contracts';
+import { AssistantMode, ArtBoardSnapshot, ImageBrief, ImageBriefDraft } from '@meeting/contracts';
 import {
   ToolRegistry,
   registerReadTools,
@@ -30,6 +30,7 @@ import {
   UPLOAD_QUOTA_BYTES,
   type UploadMime,
   type ToolContext,
+  buildImagePrompt,
 } from '@meeting/knowledge';
 import type { AppConfig } from '@meeting/providers';
 import type { Auth } from './auth.ts';
@@ -643,7 +644,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     try {
       const stream = createReadStream(`${dir}/${img.storage_key}`);
       return reply
-        .header('Content-Type', 'image/png')
+        .header('Content-Type', img.mime ?? 'image/png')
         .header('Cache-Control', 'private, max-age=3600')
         .send(stream);
     } catch {
@@ -660,7 +661,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       note: z.string().max(1000).optional(),
     }).parse(req.body ?? {});
     const ok = await reviewImageResult(ctx.store, projectId, (req.params as any).id, session.user_id, body.status, body.review_role, body.note);
-    if (!ok) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    if (!ok) return reply.code(409).send({ error: { code: body.status === 'APPROVED_CANONICAL' ? 'CANONICAL_RIGHTS_REQUIRED' : 'NOT_FOUND' } });
     return { reviewed: true, status: body.status };
   });
 
@@ -799,6 +800,15 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return extraction;
   });
 
+  app.patch('/api/assistant/art-assets/:id/extraction', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const body = z.object({ corrections: z.record(z.string(), z.unknown()) }).parse(req.body ?? {});
+    const result = await ctx.store.updateArtExtractionCorrections(projectId, (req.params as any).id, body.corrections);
+    if (!result) return reply.code(404).send({ error: { code: 'EXTRACTION_NOT_FOUND' } });
+    return { ...result, updated_by: session.user_id };
+  });
+
   app.post('/api/assistant/art-assets/:id/analyze', async (req, reply) => {
     const { ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
@@ -860,6 +870,15 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return { queued: true, upload_id: upload.id, source_sha256: upload.sha256 };
   });
 
+  app.get('/api/assistant/files/:id/derived-assets/:assetId', async (req, reply) => {
+    const { ctx, projectId } = await requireSession(req);
+    const a = await ctx.store.getParseDerivative(projectId, (req.params as any).id, (req.params as any).assetId);
+    if (!a) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    const bytes = await storage.read(a.storage_key);
+    if (sha256(bytes) !== a.sha256) return reply.code(409).send({ error: { code: 'DERIVED_HASH_MISMATCH' } });
+    return reply.type(a.mime).header('Cache-Control', 'private, no-store').send(bytes);
+  });
+
   app.post('/api/assistant/files/:id/ingest', async (req, reply) => {
     const { ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
@@ -917,9 +936,62 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return ctx.store.listArtBoardHistory(projectId, session.user_id, (req.params as any).id);
   });
 
+  app.patch('/api/assistant/art-boards/:id', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const body = z.object({ name: z.string().min(1).max(120) }).parse(req.body ?? {});
+    const board = await ctx.store.renameArtBoard(projectId, session.user_id, (req.params as any).id, body.name);
+    if (!board) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return board;
+  });
+
+  app.post('/api/assistant/art-boards/:id/archive', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const board = await ctx.store.archiveArtBoard(projectId, session.user_id, (req.params as any).id);
+    if (!board) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return { archived: true, ...board };
+  });
+
+  app.post('/api/assistant/art-boards/:id/restore-revision', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const body = z.object({ revision: z.number().int().nonnegative() }).parse(req.body ?? {});
+    const result = await ctx.store.restoreArtBoardRevision(projectId, session.user_id, (req.params as any).id, body.revision);
+    if (result.kind === 'NOT_FOUND') return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    if (result.kind === 'CONFLICT') return reply.code(409).send({ error: { code: 'REVISION_CONFLICT' } });
+    return result;
+  });
+
+  app.get('/api/assistant/art-boards/:id/shares', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    const owner = await ctx.store.getArtBoardOwner(projectId, (req.params as any).id);
+    if (!owner || (owner.owner_id !== session.user_id && role !== 'admin')) return reply.code(403).send({ error: { code: 'BOARD_OWNER_REQUIRED' } });
+    const shares = await ctx.store.listArtBoardShares(projectId, session.user_id, (req.params as any).id);
+    return shares;
+  });
+
+  app.post('/api/assistant/art-boards/:id/shares', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role !== 'admin') return reply.code(403).send({ error: { code: 'ADMIN_REQUIRED' } });
+    const body = z.object({ user_id: z.string().min(1).max(100), role: z.enum(['reader', 'editor']) }).parse(req.body ?? {});
+    const share = await ctx.store.shareArtBoard(projectId, session.user_id, (req.params as any).id, body.user_id, body.role);
+    if (!share) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return share;
+  });
+
+  app.delete('/api/assistant/art-boards/:id/shares/:userId', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role !== 'admin') return reply.code(403).send({ error: { code: 'ADMIN_REQUIRED' } });
+    const removed = await ctx.store.removeArtBoardShare(projectId, session.user_id, (req.params as any).id, (req.params as any).userId);
+    if (!removed) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return { removed: true };
+  });
+
   app.post('/api/assistant/art-boards/:id/revisions', async (req, reply) => {
     const { session, ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    if (!(await ctx.store.canEditArtBoard(projectId, session.user_id, (req.params as any).id))) return reply.code(403).send({ error: { code: 'BOARD_EDITOR_REQUIRED' } });
     const body = z
       .object({
         base_revision: z.number().int().nonnegative(),
@@ -945,19 +1017,26 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
   app.post('/api/assistant/art-boards/:id/analyze', async (req, reply) => {
     const { session, ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    if (!(await ctx.store.canEditArtBoard(projectId, session.user_id, (req.params as any).id))) return reply.code(403).send({ error: { code: 'BOARD_EDITOR_REQUIRED' } });
     if (!ctx.model) return reply.code(503).send({ error: { code: 'MODEL_NOT_CONFIGURED' } });
     const board = await ctx.store.getArtBoard(projectId, session.user_id, (req.params as any).id);
     if (!board) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
     const revision = await ctx.store.getArtBoardRevision(projectId, session.user_id, board.id);
     if (!revision) return reply.code(409).send({ error: { code: 'REVISION_NOT_FOUND' } });
+    const refs = (revision.snapshot as any)?.references ?? [];
+    const uploadIds = refs.map((ref: any) => ref.upload_id).filter(Boolean);
+    const extractions = await ctx.store.getArtExtractionsForUploads(projectId, uploadIds);
     const schema = z.object({
       summary: z.string(),
       common_rules: z.array(z.object({ category: z.string(), statement: z.string(), evidence_ids: z.array(z.string()) })),
       conflicts: z.array(z.object({ statement: z.string(), evidence_ids: z.array(z.string()) })),
       suggestions: z.array(z.object({ asset_id: z.string(), role: z.string(), usage: z.string(), observation: z.string() })),
     });
-    const result = await ctx.model.structured(schema, { revision: revision.revision, references: (revision.snapshot as any)?.references ?? [], nodes: (revision.snapshot as any)?.nodes ?? [], edges: (revision.snapshot as any)?.edges ?? [] },
-      '현재 아트 보드의 레퍼런스 메모와 역할만 분석한다. 관찰은 초안이며 승인된 Art Bible 규칙으로 간주하지 않는다. 이미지에 보이지 않는 권리, 사실, 스타일을 추정하지 않는다. 공통 규칙과 충돌을 분리하고 각 항목에 asset id를 evidence_ids로 연결한다.');
+    const result = await ctx.model.structured(schema, { revision: revision.revision, references: refs, extractions, nodes: (revision.snapshot as any)?.nodes ?? [], edges: (revision.snapshot as any)?.edges ?? [] },
+      '현재 보드 revision의 레퍼런스, Gemini 시각 관찰, 사람 수정값, 메모, 그룹, 연결만 분석한다. 사람 수정값과 역할별 지시는 AI 관찰보다 우선한다. 관찰을 승인 규칙으로 취급하지 않는다. 이미지에 없는 사실, 권리, 스타일을 추정하지 않는다. 공통 규칙과 충돌을 분리하고 근거 asset id만 evidence_ids에 연결한다.');
+    const knownEvidence = new Set(refs.map((ref: any) => ref.id));
+    const invalidEvidence = [...(result.result.common_rules ?? []), ...(result.result.conflicts ?? [])].flatMap((item: any) => (item.evidence_ids ?? []).filter((id: string) => !knownEvidence.has(id)));
+    if (invalidEvidence.length) return reply.code(502).send({ error: { code: 'MODEL_EVIDENCE_OUT_OF_SCOPE' } });
     const resultHash = createHash('sha256').update(JSON.stringify(result.result)).digest('hex');
     const analysisId = await ctx.store.saveArtBoardAnalysis({ boardId: board.id, revision: revision.revision, userId: session.user_id, model: result.model, result: result.result, resultHash });
     return { id: analysisId, board_id: board.id, revision: revision.revision, status: 'DRAFT', model: result.model, result: result.result, result_hash: resultHash };
@@ -968,6 +1047,26 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const analysis = await ctx.store.getArtBoardAnalysis(projectId, session.user_id, (req.params as any).id, Number((req.params as any).revision));
     if (!analysis) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
     return analysis;
+  });
+
+  app.patch('/api/assistant/art-boards/:id/analysis/:revision', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const body = z.object({ analysis_id: z.string().uuid(), result: z.record(z.string(), z.unknown()) }).parse(req.body ?? {});
+    const current = await ctx.store.getArtBoardAnalysis(projectId, session.user_id, (req.params as any).id, Number((req.params as any).revision));
+    if (!current || current.id !== body.analysis_id || current.status !== 'DRAFT') return reply.code(409).send({ error: { code: 'ANALYSIS_NOT_EDITABLE' } });
+    const resultHash = createHash('sha256').update(JSON.stringify(body.result)).digest('hex');
+    const id = await ctx.store.createArtBoardAnalysisDraft({ boardId: current.board_id, revision: current.revision, userId: session.user_id, model: current.model, result: body.result, resultHash });
+    return { id, board_id: current.board_id, revision: current.revision, status: 'DRAFT', model: current.model, result: body.result, result_hash: resultHash, supersedes_id: current.id };
+  });
+
+  app.post('/api/assistant/art-boards/:id/analysis/:revision/reject', async (req, reply) => {
+    const { session, ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const body = z.object({ analysis_id: z.string().uuid() }).parse(req.body ?? {});
+    const rejected = await ctx.store.rejectArtBoardAnalysis(projectId, session.user_id, (req.params as any).id, Number((req.params as any).revision), body.analysis_id);
+    if (!rejected) return reply.code(409).send({ error: { code: 'ANALYSIS_NOT_REJECTABLE' } });
+    return { rejected: true, id: body.analysis_id };
   });
 
   app.post('/api/assistant/art-boards/:id/analysis/:revision/approve', async (req, reply) => {
@@ -1014,9 +1113,6 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       Boolean(ref.upload_id) && readyIds.has(ref.upload_id) && ref.usage !== 'EXCLUDED' && ref.usage !== 'REVIEW_REQUIRED',
     );
     const referenceUploadIds = usableRefs.map((ref: any) => ref.upload_id).filter(Boolean);
-    const referenceInstructions = Object.fromEntries(
-      usableRefs.map((ref: any) => [ref.upload_id, ref.role + ': ' + ref.note]),
-    );
     const approvedStyle = await ctx.store.getApprovedStyleProfile(projectId);
     const savedRules = approvedStyle ? await ctx.store.getApprovedStyleRules(projectId, approvedStyle.version) : [];
     const ruleSource = savedRules.length ? savedRules : approvedStyle?.body?.common_rules;
@@ -1026,9 +1122,61 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
           .map((rule: any) => String(rule.category ?? 'style') + ': ' + rule.statement)
       : [];
     const artDirection = [
-      ...usableRefs.map((ref: any) => ref.role + ': ' + ref.note),
+      ...usableRefs.map((ref: any) => (ref.roles ?? [ref.role]).join(', ') + ': ' + ref.note),
       ...approvedRules,
     ].join('\n');
+    if (!ctx.model) return reply.code(503).send({ error: { code: 'MODEL_NOT_CONFIGURED' } });
+    const rag = await buildImagePrompt(ctx.store, {
+      projectId, request: body.request, embeddings: ctx.embeddings, acl: { guilds: [deps.config.DISCORD_GUILD_ID] },
+    });
+    const drafted = await ctx.model.structured(ImageBriefDraft, {
+      request: body.request, project_evidence: rag.prompt, role_directives: usableRefs.map((ref: any) => ({ roles: ref.roles ?? [ref.role], instruction: ref.note })),
+      approved_art_bible_rules: approvedRules, default_negative_constraints: rag.negative,
+    }, '프로젝트 근거와 승인된 Art Bible, 사용자가 정한 역할 지시만 사용해 구조화된 이미지 브리프를 작성한다. 사람 수정/사용자 지시가 AI 관찰보다 우선한다. 근거 없는 고유 설정을 만들지 않는다. 출력 prompt는 GPT Image 2.5 Flare용으로 구체적인 장면/재질/구도를 설명하고 negative_constraints는 제외할 시각 요소만 담는다.');
+    const prompt = drafted.result.prompt;
+    const promptHash = createHash('sha256').update(prompt).digest('hex');
+    const sourceRows = await rows<any>(sql`SELECT s.kind, s.status, max(c.last_reconciled_at) AS latest_at
+      FROM knowledge_sources s LEFT JOIN connector_cursors c ON c.source_id=s.id
+      WHERE s.project_id=${projectId} GROUP BY s.kind, s.status`, ctx.store.db);
+    let discordLive: { ok: boolean; gaps: string[] } = { ok: true, gaps: [] };
+    if (ctx.discordRead) {
+      try { discordLive = await ctx.discordRead(10_000); } catch { discordLive = { ok: false, gaps: ['discord_live_read_failed'] }; }
+    } else discordLive = { ok: false, gaps: ['discord_context_disabled'] };
+    const coverage = Object.fromEntries(['notion', 'github', 'discord', 'meeting'].map((source) => {
+      const row = sourceRows.find((item: any) => item.kind === source);
+      const sourceEvidence = rag.evidence.some((item) => item.stable_key.startsWith(source + ':'));
+      const gaps: string[] = [];
+      let read_status: 'OK' | 'PARTIAL' | 'FAILED' | 'NOT_CONFIGURED' = 'NOT_CONFIGURED';
+      let latest_at: string | null = row?.latest_at ? new Date(row.latest_at).toISOString() : null;
+      if (row?.status && row.status !== 'ACTIVE') { read_status = 'FAILED'; gaps.push('source_' + String(row.status).toLowerCase()); }
+      else if (source === 'discord' && !discordLive.ok) { read_status = 'PARTIAL'; gaps.push(...discordLive.gaps); latest_at = new Date().toISOString(); }
+      else if (row) {
+        read_status = latest_at ? 'OK' : 'PARTIAL';
+        if (!latest_at) gaps.push('never_reconciled');
+        if (!sourceEvidence) gaps.push('관련 근거 없음');
+      }
+      return [source, { read_status, latest_at, gaps }];
+    }));
+    const briefBase = {
+      schema_version: 1 as const, request: body.request,
+      role_directives: usableRefs.flatMap((ref: any) => (ref.roles ?? [ref.role]).map((role: string) => ({ role, instruction: ref.note || '원본의 해당 역할만 참고' }))),
+      negative_constraints: drafted.result.negative_constraints,
+      board_id: board.id, board_revision: revision?.revision ?? board.current_revision,
+      art_bible_version: approvedStyle?.version ?? null,
+      references: usableRefs.map((ref: any, index: number) => ({
+        asset_id: uploads.find((upload: any) => upload.id === ref.upload_id)?.asset_id ?? ref.art_asset_id ?? null, upload_id: ref.upload_id,
+        asset_revision: uploads.find((upload: any) => upload.id === ref.upload_id)?.sha256 ?? ref.sha256,
+        source_sha256: uploads.find((upload: any) => upload.id === ref.upload_id)?.sha256 ?? ref.sha256, order: index, role: ref.roles ?? [ref.role], usage: ref.roleUsage ?? Object.fromEntries((ref.roles ?? [ref.role]).map((item: string) => [item, ref.usage])),
+        crop: ref.crop ?? null, instruction: ref.note ?? '',
+      })),
+      evidence: [
+        { id: `board:${board.id}:${revision?.revision ?? board.current_revision}`, source: 'art_board' as const, stable_key: `art_board:${board.id}`, revision: String(revision?.revision ?? board.current_revision), read_status: 'OK' as const },
+        ...rag.evidence.map((item, index) => ({ id: `rag:${index}:${item.stable_key}`, source: (item.stable_key.split(':')[0] as any), stable_key: item.stable_key, revision: item.revision, read_status: 'OK' as const })),
+      ],
+      coverage, provider: 'openrouter' as const, model: 'openai/gpt-image-2.5-flare' as const,
+      prompt, prompt_hash: promptHash,
+    };
+    const brief = ImageBrief.parse({ ...briefBase, brief_hash: createHash('sha256').update(JSON.stringify(briefBase)).digest('hex') });
     const providerReady =
       role !== 'reader' &&
       process.env.IMAGE_GENERATION_ENABLED === 'true' &&
@@ -1040,25 +1188,11 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
           kind: 'image_generate',
           target: {
             board_id: board.id,
-            board_revision: revision?.revision ?? board.current_revision,
-            reference_upload_ids: referenceUploadIds,
+            board_revision: brief.board_revision, brief_hash: brief.brief_hash,
           },
           beforeHash: null,
           after: {
-            prompt:
-              body.request +
-              '\n\nArt direction:\n' +
-              artDirection,
-            negative: '글자, 워터마크, 로고, 저해상도, 왜곡된 손, 어색한 비율',
-            model: 'openai/gpt-image-2.5-flare',
-            reference_upload_ids: referenceUploadIds,
-            reference_instructions: referenceInstructions,
-            reference_roles: Object.fromEntries(usableRefs.map((ref: any) => [ref.upload_id, ref.role])),
-            reference_usage: Object.fromEntries(usableRefs.map((ref: any) => [ref.upload_id, ref.usage])),
-            style_version: approvedStyle?.version ?? null,
-            evidence: [
-              { board_id: board.id, revision: revision?.revision ?? board.current_revision },
-            ],
+            image_brief: brief, prompt: brief.prompt, model: brief.model, negative: drafted.result.negative_constraints.join(', '),
           },
           expiresAt: new Date(
             Date.now() + Number(process.env.ASSISTANT_APPROVAL_TTL_MS ?? 600_000),
@@ -1069,24 +1203,25 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       status: 'DRAFT',
       board_id: board.id,
       board_revision: revision?.revision ?? board.current_revision,
-      request: body.request,
-      model: 'openai/gpt-image-2.5-flare',
+      model: brief.model,
       provider: 'openrouter',
       references: refs.map((ref: any) => ({
         asset_key: ref.id,
         upload_id: ref.upload_id,
-        role: ref.role,
-        usage: ref.usage,
+        role: ref.role, usage: ref.usage, crop: ref.crop ?? null,
         note: ref.note,
         ready: Boolean(ref.upload_id && readyIds.has(ref.upload_id)),
       })),
-      reference_upload_ids: refs.map((ref: any) => ref.upload_id).filter(Boolean),
+      reference_upload_ids: referenceUploadIds,
       approval_id: approvalId,
       generation_ready: Boolean(approvalId),
       blocked_reference_count: refs.length - usableRefs.length,
       instructions: usableRefs.map((ref: any) => ref.role + ': ' + ref.note).join('\n'),
       style_version: approvedStyle?.version ?? null,
       style_approved: Boolean(approvedStyle),
+      brief,
+      brief_hash: brief.brief_hash,
+      coverage: brief.coverage,
       note: 'ImageBrief 초안입니다. 승인 후 OpenRouter 이미지 생성으로 전달됩니다.',
     };
   });

@@ -5,6 +5,7 @@ import { UpstageDocumentParse } from './document-parse-upstage.ts';
 import { UploadStorage, extractUpload, sha256, ensureUploadSource, magicOk, type UploadMime } from './uploads.ts';
 import { OpenRouterVision } from './vision-openrouter.ts';
 import { cachedParse } from './parse-cache.ts';
+import { openPdf, renderPdfDerivatives } from './pdf-derivatives.ts';
 
 // 추출/인덱싱 워커 — publish된 current 버전을 청크로 만들고 비활성 set에 채운 뒤
 // swapChunkSet으로 원자 공개한다 (§8.1). 임베딩은 활성 profile 단위.
@@ -32,18 +33,26 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string, job
   const bytes = await storage.read(upload.storage_key);
   if (sha256(bytes) !== upload.sha256) throw new Error('upload_source_hash_mismatch');
   if (!magicOk(bytes, upload.mime as UploadMime)) throw new Error('upload_magic_mismatch');
-  const parser = process.env.UPSTAGE_DOCUMENT_PARSE_ENABLED === 'true' && process.env.UPSTAGE_API_KEY && process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT
+  const policy = await first<{ external_processing_allowed: boolean }>(sql`SELECT external_processing_allowed FROM knowledge_projects WHERE id=${upload.project_id}`, store.db);
+  if (upload.mime === 'application/pdf' && bytes.length > Number(process.env.UPSTAGE_DOCUMENT_PARSE_MAX_BYTES ?? 52428800)) throw new Error('pdf_byte_limit');
+  const parser = policy?.external_processing_allowed && process.env.UPSTAGE_DOCUMENT_PARSE_ENABLED === 'true' && process.env.UPSTAGE_API_KEY && process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT
     ? new UpstageDocumentParse({ apiKey: process.env.UPSTAGE_API_KEY, endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT, timeoutMs: Number(process.env.UPSTAGE_DOCUMENT_PARSE_TIMEOUT_MS ?? 60_000) })
     : undefined;
   const extract = () => extractUpload(bytes, upload.mime, { documentParse: parser, expectedSha256: upload.sha256 });
+  const parserProfile = process.env.UPSTAGE_DOCUMENT_PARSE_PROFILE ?? 'document-parse-260930';
+  const optionsHash = sha256(JSON.stringify({ endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT, output: 'html', coordinates: true }));
   const extracted = upload.mime === 'application/pdf' && parser
     ? await cachedParse(store, { projectId: upload.project_id, uploadId: upload.id, sourceHash: upload.sha256,
-        parserProfile: process.env.UPSTAGE_DOCUMENT_PARSE_PROFILE ?? 'document-parse-260930',
-        optionsHash: sha256(JSON.stringify({ endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT, output: 'html', coordinates: true })) }, extract, force || job?.payload.force === true)
+        parserProfile, optionsHash }, extract, force || job?.payload.force === true)
     : await extract();
+  let derivatives: Awaited<ReturnType<typeof renderPdfDerivatives>> = [];
+  if (upload.mime === 'application/pdf') {
+    try { derivatives = await renderPdfDerivatives(bytes, storage, extracted.normalized.blocks); }
+    catch (error) { if ((error as Error).message === 'pdf_page_limit') throw error; }
+  }
   let vision: unknown;
   let text = extracted.text;
-  if (upload.mime.startsWith('image/') && process.env.OPENROUTER_VISION_ENABLED === 'true') {
+  if (policy?.external_processing_allowed && upload.mime.startsWith('image/') && process.env.OPENROUTER_VISION_ENABLED === 'true') {
     if (!process.env.OPENROUTER_API_KEY) throw new Error('vision_not_configured');
     const observation = await new OpenRouterVision(process.env.OPENROUTER_API_KEY, process.env.OPENROUTER_VISION_MODEL ?? 'google/gemini-3.7-flash').analyzeImage(bytes, upload.mime);
     vision = observation;
@@ -72,8 +81,12 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string, job
     parseErrorCode: extracted.parseError,
     sourceSha256: upload.sha256,
     normalizedHash,
+    cacheHit: 'cacheHit' in extracted && extracted.cacheHit === true,
+    parserProfile: upload.mime === 'application/pdf' && parser ? parserProfile : undefined,
+    optionsHash: upload.mime === 'application/pdf' && parser ? optionsHash : undefined,
   });
   await scoped.saveDocumentParseStructure(versionId, extracted.normalized);
+  await scoped.saveParseDerivatives(versionId, derivatives);
   const published = await scoped.publishVersion(upload.document_id, {
     contentHash: normalizedHash,
     sourceRevision: upload.sha256,
@@ -82,7 +95,7 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string, job
   }, undefined, connection);
   if (!published) return { skipped: 'publish_rejected' } as const;
   await scoped.enqueueJob('extract:' + upload.document_id + ':' + normalizedHash + ':' + versionId, 'extract', { document_id: upload.document_id, content_hash: normalizedHash });
-  await sql`UPDATE knowledge_uploads SET state='INDEXING', document_id=${upload.document_id}
+  await sql`UPDATE knowledge_uploads SET state='INDEXING', document_id=${upload.document_id}, original_verified_at=now()
     WHERE id=${upload.id} AND state != 'DELETED'`.execute(scoped.db);
   return { reparsed: true, parser: extracted.parserKind } as const;
   })) ?? { skipped: 'fenced_or_deleted' } as const;

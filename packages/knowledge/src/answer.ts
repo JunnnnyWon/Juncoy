@@ -68,7 +68,7 @@ interface CoverageInput {
 }
 
 /** stable_key → 사람이 열 수 있는 URL (출처별 형식, §13 evidence.url). */
-export function stableKeyToUrl(stableKey: string): string {
+export function stableKeyToUrl(stableKey: string, span: Record<string, any> = {}): string {
   const [kind, ...rest] = stableKey.split(':');
   if (kind === 'discord') {
     const [guild, channel, message] = rest;
@@ -82,6 +82,10 @@ export function stableKeyToUrl(stableKey: string): string {
   }
   if (kind === 'notion') return `https://notion.so/${rest[1]?.replace(/-/g, '') ?? rest.join('')}`;
   if (kind === 'meeting') return `https://juncoystt.junnnny.kr/meetings/${rest[1]}`;
+  if (kind === 'upload') {
+    const page = Number(span.page_start ?? 0);
+    return `/api/assistant/files/${rest[0]}/content${page > 0 ? `#page=${page}` : ''}`;
+  }
   return '';
 }
 
@@ -282,9 +286,16 @@ export async function answerQuestion(
         source: c.source as any,
         document_id: c.document_id,
         revision: rev || 'unknown',
-        url: stableKeyToUrl(c.stable_key),
+        url: stableKeyToUrl(c.stable_key, c.span),
         quote: c.content.slice(0, 500),
         observed_at: new Date().toISOString(),
+        ...(Number.isInteger(c.span?.page_start) && c.span.page_start > 0 ? { page_start: c.span.page_start } : {}),
+        ...(Number.isInteger(c.span?.page_end) && c.span.page_end > 0 ? { page_end: c.span.page_end } : {}),
+        ...(Array.isArray(c.span?.block_ids) ? { block_ids: c.span.block_ids } : {}),
+        ...(Array.isArray(c.span?.block_locations) ? { block_locations: c.span.block_locations } : {}),
+        ...(c.span?.bbox ? { bbox: c.span.bbox } : {}),
+        ...(c.span?.parser_version ? { parser_version: c.span.parser_version } : {}),
+        ...(c.span?.source_sha256 ? { source_sha256: c.span.source_sha256 } : {}),
       });
     }
     const validIds = new Set(evidence.map((e) => e.id));

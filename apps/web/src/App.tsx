@@ -1330,6 +1330,12 @@ interface KnowledgeEvidence {
   document_id: string;
   url: string;
   quote: string;
+  page_start?: number;
+  page_end?: number;
+  block_ids?: string[];
+  bbox?: unknown;
+  parser_version?: string;
+  source_sha256?: string;
 }
 interface KnowledgeAnswer {
   answer_id: string;
@@ -1482,7 +1488,7 @@ function KnowledgeAsk() {
           {answer.evidence.length > 0 && (
             <div className="ask-evidence">
               <h3>근거</h3>
-              {answer.evidence.map((e) => (
+                  {answer.evidence.map((e) => (
                 <div key={e.id} id={'ev-' + e.id} className="evidence-item">
                   <div className="evidence-head">
                     <span className="coverage-chip">{e.id}</span>
@@ -1493,7 +1499,14 @@ function KnowledgeAsk() {
                       </a>
                     )}
                   </div>
-                  <p>{e.quote}</p>
+                    <p>{e.quote}</p>
+                    {(e.page_start || e.block_ids?.length) && (
+                      <small className="parse-citation">
+                        {e.page_start ? `PDF ${e.page_start}${e.page_end && e.page_end !== e.page_start ? `–${e.page_end}` : ''}페이지` : '문서 근거'}
+                        {e.block_ids?.length ? ` · block ${e.block_ids.join(', ')}` : ''}
+                        {e.parser_version ? ` · ${e.parser_version}` : ''}
+                      </small>
+                    )}
                 </div>
               ))}
             </div>

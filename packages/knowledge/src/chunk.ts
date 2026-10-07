@@ -236,6 +236,7 @@ export function chunkDocument(
           page_start: pages.length ? Math.min(...pages) : null,
           page_end: pages.length ? Math.max(...pages) : null,
           block_ids: [...blockIds],
+          block_locations: blocks.filter((b: any) => blockIds.includes(String(b.block_id))).map((b: any) => ({ id: String(b.block_id), page: typeof b.page === 'number' ? b.page : undefined, bbox: b.metadata?.bbox })),
           parser_kind: normalized.parser?.kind ?? null,
           parser_version: normalized.parser?.version ?? null,
           source_sha256: normalized.parser?.source_sha256 ?? null,

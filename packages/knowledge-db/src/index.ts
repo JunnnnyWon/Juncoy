@@ -481,7 +481,9 @@ export class KnowledgeStore {
   async listArtBoards(projectId: string, ownerId: string) {
     return rows<any>(
       sql`SELECT id, name, description, status, current_revision, created_at, updated_at
-      FROM art_boards WHERE project_id=${projectId} AND owner_id=${ownerId} AND archived_at IS NULL
+      FROM art_boards WHERE project_id=${projectId} AND archived_at IS NULL
+        AND (owner_id=${ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=art_boards.id AND s.user_id=${ownerId})
+          OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=art_boards.project_id AND m.user_id=${ownerId} AND m.role='admin'))
       ORDER BY updated_at DESC`,
       this.db,
     );
@@ -490,9 +492,76 @@ export class KnowledgeStore {
   async getArtBoard(projectId: string, ownerId: string, boardId: string) {
     return first<any>(
       sql`SELECT id, name, description, status, current_revision, created_at, updated_at
-      FROM art_boards WHERE id=${boardId} AND project_id=${projectId} AND owner_id=${ownerId} AND archived_at IS NULL`,
+      FROM art_boards WHERE id=${boardId} AND project_id=${projectId} AND archived_at IS NULL
+        AND (owner_id=${ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=art_boards.id AND s.user_id=${ownerId})
+          OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=art_boards.project_id AND m.user_id=${ownerId} AND m.role='admin'))`,
       this.db,
     );
+  }
+
+  async canEditArtBoard(projectId: string, userId: string, boardId: string) {
+    const row = await first<any>(sql`SELECT 1 FROM art_boards b WHERE b.id=${boardId} AND b.project_id=${projectId}
+      AND b.archived_at IS NULL AND (b.owner_id=${userId} OR EXISTS(SELECT 1 FROM art_board_shares s WHERE s.board_id=b.id AND s.user_id=${userId} AND s.role='editor')
+        OR EXISTS(SELECT 1 FROM project_memberships m WHERE m.project_id=b.project_id AND m.user_id=${userId} AND m.role='admin'))`, this.db);
+    return Boolean(row);
+  }
+
+  async renameArtBoard(projectId: string, ownerId: string, boardId: string, name: string) {
+    const r = await sql`UPDATE art_boards SET name=${name}, updated_at=now()
+      WHERE id=${boardId} AND project_id=${projectId} AND archived_at IS NULL
+        AND (owner_id=${ownerId} OR EXISTS(SELECT 1 FROM art_board_shares s WHERE s.board_id=art_boards.id AND s.user_id=${ownerId} AND s.role='editor')
+          OR EXISTS(SELECT 1 FROM project_memberships m WHERE m.project_id=art_boards.project_id AND m.user_id=${ownerId} AND m.role='admin'))
+      RETURNING id, name, current_revision, updated_at`.execute(this.db);
+    return r.rows[0] ?? null;
+  }
+
+  async archiveArtBoard(projectId: string, ownerId: string, boardId: string) {
+    const r = await sql`UPDATE art_boards SET archived_at=now(), status='ARCHIVED', updated_at=now()
+      WHERE id=${boardId} AND project_id=${projectId} AND archived_at IS NULL
+        AND (owner_id=${ownerId} OR EXISTS(SELECT 1 FROM project_memberships m WHERE m.project_id=art_boards.project_id AND m.user_id=${ownerId} AND m.role='admin'))
+      RETURNING id, archived_at`.execute(this.db);
+    return r.rows[0] ?? null;
+  }
+
+  async restoreArtBoardRevision(projectId: string, ownerId: string, boardId: string, revision: number) {
+    const source = await this.getArtBoardRevision(projectId, ownerId, boardId, revision);
+    const board = await this.getArtBoard(projectId, ownerId, boardId);
+    if (!source || !board) return { kind: 'NOT_FOUND' as const };
+    return this.saveArtBoardRevision({
+      projectId, ownerId, boardId, baseRevision: Number(board.current_revision),
+      snapshot: source.snapshot, snapshotHash: createHash('sha256').update(JSON.stringify(source.snapshot)).digest('hex'),
+    });
+  }
+
+  async shareArtBoard(projectId: string, ownerId: string, boardId: string, userId: string, role: 'reader' | 'editor') {
+    const board = await first<{ id: string; owner_id: string }>(sql`SELECT id, owner_id FROM art_boards
+      WHERE id=${boardId} AND project_id=${projectId} AND archived_at IS NULL
+        AND (owner_id=${ownerId} OR EXISTS(SELECT 1 FROM project_memberships m WHERE m.project_id=art_boards.project_id AND m.user_id=${ownerId} AND m.role='admin'))`, this.db);
+    if (!board) return null;
+    return first<any>(sql`INSERT INTO art_board_shares(board_id, user_id, role, created_by)
+      VALUES (${boardId}, ${userId}, ${role}, ${ownerId})
+      ON CONFLICT (board_id, user_id) DO UPDATE SET role=excluded.role, updated_at=now()
+      RETURNING board_id, user_id, role`, this.db);
+  }
+
+  async getArtBoardOwner(projectId: string, boardId: string) {
+    return first<any>(sql`SELECT id, owner_id FROM art_boards WHERE id=${boardId} AND project_id=${projectId}`, this.db);
+  }
+
+  async listArtBoardShares(projectId: string, ownerId: string, boardId: string) {
+    return rows<any>(sql`SELECT s.user_id, s.role, s.created_at, s.updated_at
+      FROM art_board_shares s JOIN art_boards b ON b.id=s.board_id
+      WHERE s.board_id=${boardId} AND b.project_id=${projectId} AND (b.owner_id=${ownerId}
+        OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=b.project_id AND m.user_id=${ownerId} AND m.role='admin'))
+      ORDER BY s.user_id`, this.db);
+  }
+
+  async removeArtBoardShare(projectId: string, ownerId: string, boardId: string, userId: string) {
+    const r = await sql`DELETE FROM art_board_shares s USING art_boards b
+      WHERE s.board_id=${boardId} AND s.user_id=${userId} AND b.id=s.board_id
+        AND b.project_id=${projectId} AND (b.owner_id=${ownerId}
+          OR EXISTS(SELECT 1 FROM project_memberships m WHERE m.project_id=b.project_id AND m.user_id=${ownerId} AND m.role='admin'))`.execute(this.db);
+    return Number(r.numAffectedRows ?? 0) > 0;
   }
 
   async saveArtBoardRevision(input: {
@@ -507,7 +576,9 @@ export class KnowledgeStore {
     return this.db.transaction().execute(async (tx) => {
       const board = await first<{ current_revision: number }>(
         sql`SELECT current_revision FROM art_boards
-        WHERE id=${input.boardId} AND project_id=${input.projectId} AND owner_id=${input.ownerId} AND archived_at IS NULL FOR UPDATE`,
+        WHERE id=${input.boardId} AND project_id=${input.projectId} AND archived_at IS NULL
+          AND (owner_id=${input.ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=art_boards.id AND s.user_id=${input.ownerId} AND s.role='editor'))
+          FOR UPDATE`,
         tx,
       );
       if (!board) return { kind: 'NOT_FOUND' as const };
@@ -537,11 +608,12 @@ export class KnowledgeStore {
       for (const ref of references) {
         if (!ref || typeof ref.id !== 'string') continue;
         await sql`INSERT INTO art_board_assets(
-          board_id, asset_key, source_upload_id, role, usage_strength, note, selected, source_sha256
+          board_id, asset_key, source_upload_id, role, usage_strength, note, selected, source_sha256, roles, role_usage, crop, group_id
         ) VALUES (
           ${input.boardId}, ${ref.id}, ${ref.upload_id ?? null},
-          ${ref.role ?? 'mood'}, ${ref.usage ?? 'REVIEW_REQUIRED'},
-          ${ref.note ?? ''}, ${Boolean(ref.selected)}, ${ref.sha256 ?? null}
+          ${ref.role ?? 'mood'}, ${ref.usage ?? 'REVIEW_REQUIRED'}, ${ref.note ?? ''},
+          ${Boolean(ref.selected)}, ${ref.sha256 ?? null}, ${json(ref.roles ?? [ref.role ?? 'mood'])},
+          ${json(ref.roleUsage ?? {})}, ${ref.crop ? json(ref.crop) : null}, ${ref.group_id ?? null}
         )`.execute(tx);
       }
       await sql`UPDATE art_boards SET current_revision=${revision}, updated_at=now() WHERE id=${input.boardId}`.execute(
@@ -561,7 +633,10 @@ export class KnowledgeStore {
     if (!board) return null;
     return first<any>(
       sql`SELECT r.id, r.revision, r.snapshot, r.snapshot_hash, r.analysis_state, r.created_at
-      FROM art_board_revisions r WHERE r.board_id=${boardId} AND r.revision=${revision ?? board.current_revision}`,
+      FROM art_board_revisions r WHERE r.board_id=${boardId} AND r.revision=${revision ?? board.current_revision}
+        AND EXISTS (SELECT 1 FROM art_boards b WHERE b.id=r.board_id AND b.project_id=${projectId}
+        AND (b.owner_id=${ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=b.id AND s.user_id=${ownerId})
+          OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=b.project_id AND m.user_id=${ownerId} AND m.role='admin')))` ,
       this.db,
     );
   }
@@ -570,7 +645,9 @@ export class KnowledgeStore {
     return rows<any>(sql`SELECT r.id, r.revision, r.created_by, r.snapshot_hash,
         r.analysis_state, r.created_at
       FROM art_board_revisions r JOIN art_boards b ON b.id=r.board_id
-      WHERE r.board_id=${boardId} AND b.project_id=${projectId} AND b.owner_id=${ownerId}
+      WHERE r.board_id=${boardId} AND b.project_id=${projectId}
+        AND (b.owner_id=${ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=b.id AND s.user_id=${ownerId})
+          OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=b.project_id AND m.user_id=${ownerId} AND m.role='admin'))
       ORDER BY r.revision DESC LIMIT 100`, this.db);
   }
 
@@ -593,8 +670,33 @@ export class KnowledgeStore {
     return first<any>(sql`SELECT a.* FROM art_board_analyses a
       JOIN art_boards b ON b.id=a.board_id
       WHERE a.board_id=${boardId} AND a.revision=${revision}
-        AND b.project_id=${projectId} AND b.owner_id=${ownerId}
+        AND b.project_id=${projectId}
+        AND (b.owner_id=${ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=b.id AND s.user_id=${ownerId})
+          OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=b.project_id AND m.user_id=${ownerId} AND m.role='admin'))
       ORDER BY a.created_at DESC, a.id DESC LIMIT 1`, this.db);
+  }
+
+  async updateArtExtractionCorrections(projectId: string, assetId: string, corrections: unknown) {
+    const result = await sql`UPDATE art_extractions e SET human_corrections=${json(corrections)}
+      FROM art_reference_assets a WHERE e.id=(SELECT e2.id FROM art_extractions e2
+        JOIN art_reference_assets a2 ON a2.id=e2.asset_id JOIN knowledge_uploads u2 ON u2.id=a2.upload_id
+        WHERE e2.asset_id=${assetId} AND a2.project_id=${projectId} AND u2.state!='DELETED'
+        ORDER BY e2.created_at DESC LIMIT 1) AND a.id=e.asset_id AND a.project_id=${projectId}
+      RETURNING e.id, e.human_corrections, e.asset_revision`.execute(this.db);
+    return result.rows[0] ?? null;
+  }
+
+  async createArtBoardAnalysisDraft(input: { boardId: string; revision: number; userId: string; model: string; result: unknown; resultHash: string }) {
+    return this.saveArtBoardAnalysis(input);
+  }
+
+  async rejectArtBoardAnalysis(projectId: string, ownerId: string, boardId: string, revision: number, analysisId: string) {
+    const result = await sql`UPDATE art_board_analyses a SET status='REJECTED'
+      FROM art_boards b WHERE a.id=${analysisId} AND a.board_id=${boardId} AND a.revision=${revision}
+        AND b.id=a.board_id AND b.project_id=${projectId}
+        AND (b.owner_id=${ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=b.id AND s.user_id=${ownerId} AND s.role='editor'))
+        AND a.status='DRAFT' RETURNING a.id`.execute(this.db);
+    return Boolean(result.rows[0]);
   }
 
   async approveArtBoardAnalysis(input: {
@@ -612,7 +714,9 @@ export class KnowledgeStore {
       const analysis = await first<any>(sql`SELECT a.*, b.current_revision, b.archived_at FROM art_board_analyses a
         JOIN art_boards b ON b.id=a.board_id
         WHERE a.id=${input.analysisId} AND a.board_id=${input.boardId} AND a.revision=${input.revision}
-          AND b.project_id=${input.projectId} AND b.owner_id=${input.ownerId} FOR UPDATE`, tx);
+          AND b.project_id=${input.projectId}
+          AND (b.owner_id=${input.ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=b.id AND s.user_id=${input.ownerId} AND s.role='editor')
+            OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=b.project_id AND m.user_id=${input.ownerId} AND m.role='admin')) FOR UPDATE`, tx);
       if (!analysis) return { kind: 'NOT_FOUND' as const };
       if (analysis.result_hash !== input.expectedHash) return { kind: 'RESULT_CHANGED' as const };
       if (analysis.status === 'APPROVED') {
@@ -926,7 +1030,8 @@ export class KnowledgeStore {
     return first<any>(
       sql`SELECT u.*, d.state AS document_state, d.id AS document_id,
           pv.parser_kind, pv.parser_version, pv.parse_status, pv.parse_error_code,
-          pv.parse_request_id, pv.parse_latency_ms, pv.source_sha256 AS parsed_source_sha256
+          pv.parse_request_id, pv.parse_latency_ms, pv.source_sha256 AS parsed_source_sha256,
+          pv.cache_hit, pv.parser_profile, pv.options_hash, u.original_verified_at
           FROM knowledge_uploads u
           LEFT JOIN documents d ON d.id=u.document_id
              OR d.stable_key='upload:' || u.id::text
@@ -942,7 +1047,8 @@ export class KnowledgeStore {
       sql`SELECT u.id, u.filename, u.mime, u.bytes, u.sha256, u.state, u.error,
                  u.owner_id, u.created_at, d.state AS document_state, d.id AS document_id,
                  pv.parser_kind, pv.parser_version, pv.parse_status, pv.parse_error_code,
-                 pv.parse_request_id, pv.parse_latency_ms, pv.source_sha256 AS parsed_source_sha256
+                 pv.parse_request_id, pv.parse_latency_ms, pv.source_sha256 AS parsed_source_sha256,
+                 pv.cache_hit, pv.parser_profile, pv.options_hash, u.original_verified_at
           FROM knowledge_uploads u
           LEFT JOIN documents d ON d.id=u.document_id
              OR d.stable_key='upload:' || u.id::text
@@ -1002,6 +1108,16 @@ export class KnowledgeStore {
       ORDER BY e.created_at DESC, e.id DESC LIMIT 1`, this.db);
   }
 
+  async getArtExtractionsForUploads(projectId: string, uploadIds: string[]) {
+    if (!uploadIds.length) return [];
+    return rows<any>(sql`SELECT DISTINCT ON (u.id) u.id AS upload_id, a.id AS asset_id, u.sha256 AS asset_revision,
+      e.observations, e.human_corrections, e.machine_confidence, e.created_at
+      FROM knowledge_uploads u LEFT JOIN art_reference_assets a ON a.upload_id=u.id AND a.project_id=u.project_id
+      LEFT JOIN art_extractions e ON e.asset_id=a.id AND e.asset_revision=u.sha256
+      WHERE u.project_id=${projectId} AND u.id=ANY(${uploadIds}::uuid[]) AND u.state!='DELETED'
+      ORDER BY u.id, e.created_at DESC NULLS LAST`, this.db);
+  }
+
   async saveArtExtraction(input: { assetId: string; revision: string; model: string; observations: unknown; ocr?: unknown; confidence?: string }) {
     return this.db.transaction().execute(async (tx) => {
       const asset = await first<any>(sql`SELECT a.id FROM art_reference_assets a
@@ -1051,17 +1167,20 @@ export class KnowledgeStore {
     parseErrorCode?: string;
     sourceSha256: string;
     normalizedHash: string;
+    cacheHit?: boolean;
+    parserProfile?: string;
+    optionsHash?: string;
   }) {
     const id = randomUUID();
     await sql`INSERT INTO knowledge_upload_versions(
       id, upload_id, extractor_version, source_revision, state, parser_kind,
       parser_version, parse_status, parse_request_id, parse_latency_ms,
-      parse_error_code, source_sha256, normalized_hash
+      parse_error_code, source_sha256, normalized_hash, cache_hit, parser_profile, options_hash
     ) VALUES (
       ${id}, ${v.uploadId}, ${v.extractorVersion}, ${v.sourceRevision},
       ${v.parseStatus}, ${v.parserKind}, ${v.parserVersion ?? null}, ${v.parseStatus},
       ${v.parseRequestId ?? null}, ${v.parseLatencyMs ?? null}, ${v.parseErrorCode ?? null},
-      ${v.sourceSha256}, ${v.normalizedHash}
+      ${v.sourceSha256}, ${v.normalizedHash}, ${v.cacheHit ?? false}, ${v.parserProfile ?? null}, ${v.optionsHash ?? null}
     )`.execute(this.db);
     return id;
   }
@@ -1096,10 +1215,11 @@ export class KnowledgeStore {
   async getDocumentParse(projectId: string, uploadId: string) {
     const version = await first<any>(sql`
       SELECT v.id, v.parser_kind, v.parser_version, v.parse_status, v.parse_request_id,
-             v.parse_latency_ms, v.parse_error_code, v.source_sha256, v.normalized_hash
+             v.parse_latency_ms, v.parse_error_code, v.source_sha256, v.normalized_hash, v.cache_hit,
+             v.parser_profile, v.options_hash, u.original_verified_at
       FROM knowledge_upload_versions v
       JOIN knowledge_uploads u ON u.id=v.upload_id
-      WHERE u.project_id=${projectId} AND u.id=${uploadId}
+      WHERE u.project_id=${projectId} AND u.id=${uploadId} AND u.state != 'DELETED'
       ORDER BY v.created_at DESC LIMIT 1`, this.db);
     if (!version) return null;
     const blocks = await rows<any>(sql`
@@ -1110,7 +1230,24 @@ export class KnowledgeStore {
       SELECT page_number, text, block_ids, page_hash
       FROM document_parse_pages WHERE upload_version_id=${version.id}
       ORDER BY page_number`, this.db);
-    return { version, blocks, pages };
+    const derived_assets = await rows<any>(sql`SELECT id, page_number, block_id, mime, bytes, sha256,
+      source_sha256, kind, bbox, origin FROM document_parse_derived_assets WHERE upload_version_id=${version.id}
+      ORDER BY page_number, kind`, this.db);
+    return { version, blocks, pages, derived_assets };
+  }
+
+  async saveParseDerivatives(versionId: string, assets: any[]) {
+    for (const a of assets) await sql`INSERT INTO document_parse_derived_assets
+      (id, upload_version_id, page_number, block_id, storage_key, mime, bytes, sha256, source_sha256, kind, bbox, origin)
+      VALUES (${randomUUID()}, ${versionId}, ${a.page}, ${a.block_id ?? null}, ${a.key}, ${a.mime}, ${a.bytes},
+      ${a.sha256}, ${a.source_sha256}, ${a.kind}, ${json(a.bbox ?? null)}, ${a.origin})`.execute(this.db);
+  }
+
+  async getParseDerivative(projectId: string, uploadId: string, assetId: string) {
+    return first<any>(sql`SELECT a.* FROM document_parse_derived_assets a
+      JOIN knowledge_upload_versions v ON v.id=a.upload_version_id JOIN knowledge_uploads u ON u.id=v.upload_id
+      WHERE a.id=${assetId} AND u.id=${uploadId} AND u.project_id=${projectId} AND u.state != 'DELETED'
+        AND a.source_sha256=u.sha256`, this.db);
   }
 
   async uploadQuotaUsed(projectId: string) {
