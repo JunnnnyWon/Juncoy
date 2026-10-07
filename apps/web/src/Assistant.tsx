@@ -268,7 +268,12 @@ function AssistantView() {
     const r = await api<any[]>('/api/assistant/files');
     setFiles(asArray(r));
   };
-  useEffect(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), [messages, live]);
+  useEffect(() => {
+    const element = bottomRef.current;
+    if (element && typeof element.scrollIntoView === 'function') {
+      element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [messages, live]);
   useEffect(() => () => esRef.current?.close(), []);
 
   return (
