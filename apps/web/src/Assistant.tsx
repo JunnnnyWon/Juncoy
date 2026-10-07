@@ -347,8 +347,8 @@ function AssistantView() {
             <div className="assistant-msgs">
               {asArray<Msg>(messages).map((m) => (
                 <div key={m.id} className={`msg msg-${m.role}`}>
-                  <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}<time>{new Date(m.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></div>
-                  <div className="msg-body">{renderMessage(m.content)}</div>
+                  <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}</div>
+                  <div className="msg-body">{safeText(m.content, '응답 내용이 없습니다.')}</div>
                   {Array.isArray(m.citations) && m.citations.filter((citation: any) => citation && typeof citation === 'object').length > 0 && <details className="message-citations"><summary>참고한 근거 {m.citations.filter((citation: any) => citation && typeof citation === 'object').length}건</summary>{m.citations.filter((citation: any) => citation && typeof citation === 'object').map((citation: any, index: number) => <div key={citation?.id ?? index} className="citation-row"><strong>{safeText(citation?.source ?? citation?.title, '프로젝트 자료')}</strong><span>{safeText(citation?.quote ?? citation?.excerpt ?? citation?.stable_key ?? citation?.url, '근거 세부 정보')}</span>{citation?.page && <small>페이지 {safeText(citation.page)}{citation.block ? ' · ' + safeText(citation.block) : ''}</small>}</div>)}</details>}
                 </div>
               ))}
