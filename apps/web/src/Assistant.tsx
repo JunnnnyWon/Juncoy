@@ -154,7 +154,9 @@ function AssistantView() {
         setLive(null);
         if (kind === 'done' || kind === 'result' || kind === 'error') {
           es.close();
-          if (convId) void openConv(convId);
+          // Do not replace the active React tree with an untrusted server payload during SSE completion.
+          // The next explicit conversation open will fetch and normalize the persisted messages.
+          setLive(null);
         }
       });
     }
