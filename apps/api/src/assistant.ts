@@ -170,7 +170,7 @@ async function executeRun(
         phase:
           ans.status === 'COMPLETE' ? 'completed' : ans.status === 'FAILED' ? 'failed' : 'partial',
         text: ans.answer,
-        extra: { answer_id: ans.answer_id, warnings: ans.warnings },
+        extra: { answer_id: ans.answer_id, warnings: ans.warnings, evidence: ans.evidence ?? [] },
       };
     } else if (mode === 'search') {
       await phase('executing_tool');
@@ -208,8 +208,13 @@ async function executeRun(
     }
     const msgId = await store.createMessage(conversationId, 'assistant', final.text, {
       runId,
-      citations: final.extra?.answer_id ? [{ answer_id: final.extra.answer_id }] : [],
+      citations: final.extra?.evidence ?? (final.extra?.answer_id ? [{ answer_id: final.extra.answer_id }] : []),
     });
+    // Provider responses are structured rather than token-streamed. Emit safe deltas so the UI
+    // can show progress immediately without changing the provider contract.
+    for (let offset = 0; offset < final.text.length; offset += 80) {
+      await store.emitRunEvent(runId, 'delta', { text: final.text.slice(offset, offset + 80), done: offset + 80 >= final.text.length });
+    }
     await store.emitRunEvent(runId, 'result', {
       status: final.status,
       message_id: msgId,

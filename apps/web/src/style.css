@@ -2469,6 +2469,7 @@ small {
 .approval-summary h3 { font-size:15px; margin-bottom:6px; }
 .approval-summary p { color:var(--text-secondary); font-size:12px; margin:5px 0; }
 .approval-date { font-family:ui-monospace,monospace; }
+.msg-body p{margin:0 0 8px}.msg-body p:last-child{margin-bottom:0}.md-heading{margin:4px 0 8px;font-size:15px;color:var(--text-primary)}.md-bullet{display:flex;gap:8px;margin:5px 0}.md-bullet span{color:var(--accent-coral)}.md-spacer{height:5px}.msg-body code{padding:2px 5px;background:#171a1d;border:1px solid var(--border-subtle);border-radius:3px;color:#f2c0b5;font:11px ui-monospace,monospace}.live-answer{border-top:1px solid var(--border-subtle);margin-top:8px;padding-top:10px}.citation-row a{color:#f0a18e;font-size:11px;text-decoration:underline}
 .approval-raw { margin:9px 0; }
 .approval-raw pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:140px; overflow:auto; color:var(--text-secondary); font-size:10px; background:#171a1d; padding:9px; border-radius:4px; }
 

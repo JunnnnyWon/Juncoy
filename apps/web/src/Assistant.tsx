@@ -30,6 +30,7 @@ interface LiveRun {
   status?: string;
   coverage?: any[];
   evidence: any[];
+  text?: string;
 }
 
 const asArray = <T,>(value: unknown): T[] => Array.isArray(value) ? value as T[] : [];
@@ -157,8 +158,8 @@ function AssistantView() {
     esRef.current?.close();
     const es = new EventSource(`/api/assistant/runs/${runId}/stream`);
     esRef.current = es;
-    const liveRun: LiveRun = { phase: 'idle', evidence: [] };
-    setLive(null);
+    const liveRun: LiveRun = { phase: 'idle', evidence: [], text: '' };
+    setLive({ ...liveRun });
     es.onmessage = () => {};
     for (const kind of [
       'phase',
@@ -169,24 +170,26 @@ function AssistantView() {
       'error',
       'done',
       'approval',
+      'delta',
     ]) {
       es.addEventListener(kind, (ev) => {
         const data = JSON.parse((ev as MessageEvent).data || '{}');
         if (kind === 'phase') liveRun.phase = data.phase;
         else if (kind === 'evidence') liveRun.evidence.push(data);
         else if (kind === 'coverage') liveRun.coverage = asArray(data.source_coverage);
+        else if (kind === 'delta') liveRun.text = (liveRun.text ?? '') + String(data.text ?? '');
         else if (kind === 'result') liveRun.status = data.status;
         else if (kind === 'error') liveRun.status = 'FAILED';
         else if (kind === 'approval' && convId)
           void api<{ pending_approvals: Approval[] }>(
             `/api/assistant/conversations/${convId}`,
           ).then((r) => setApprovals(asArray<Approval>(r.pending_approvals)));
-        setLive(null);
+        setLive({ ...liveRun, evidence: [...liveRun.evidence] });
         if (kind === 'done' || kind === 'result' || kind === 'error') {
           es.close();
           // Do not replace the active React tree with an untrusted server payload during SSE completion.
           // The next explicit conversation open will fetch and normalize the persisted messages.
-          setLive(null);
+          setLive({ ...liveRun, evidence: [...liveRun.evidence] });
         }
       });
     }
@@ -384,7 +387,8 @@ function AssistantView() {
               {asArray<Msg>(messages).map((m) => (
                 <div key={m.id} className={`msg msg-${m.role}`}>
                   <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}</div>
-                  <div className="msg-body">{safeText(m.content, '응답 내용이 없습니다.')}</div>
+                  <div className="msg-body">{renderMarkdown(m.content)}</div>
+                  <CitationList citations={m.citations} />
                   {Array.isArray(m.citations) && m.citations.filter((citation: any) => citation && typeof citation === 'object').length > 0 && <details className="message-citations"><summary>참고한 근거 {m.citations.filter((citation: any) => citation && typeof citation === 'object').length}건</summary>{m.citations.filter((citation: any) => citation && typeof citation === 'object').map((citation: any, index: number) => <div key={citation?.id ?? index} className="citation-row"><strong>{safeText(citation?.source ?? citation?.title, '프로젝트 자료')}</strong><span>{safeText(citation?.quote ?? citation?.excerpt ?? citation?.stable_key ?? citation?.url, '근거 세부 정보')}</span>{citation?.page && <small>페이지 {safeText(citation.page)}{citation.block ? ' · ' + safeText(citation.block) : ''}</small>}</div>)}</details>}
                 </div>
               ))}
@@ -394,6 +398,7 @@ function AssistantView() {
                     상태: {PHASE_KO[live.phase] ?? live.phase}
                     {live.status && <strong> · {STATUS_KO[live.status] ?? live.status}</strong>}
                   </div>
+                  {!!live.text && <div className="msg-body live-answer">{renderMarkdown(live.text)}</div>}
                   {!!live.coverage?.length && (
                     <div className="coverage">
                       {asArray<any>(live.coverage).filter((c) => c && typeof c === 'object').map((c: any, index: number) => (
@@ -592,6 +597,34 @@ function safeText(value: unknown, fallback = '') {
     return '요청 처리 결과를 확인했습니다.';
   }
   return fallback;
+}
+
+function renderMarkdown(value: unknown) {
+  const text = safeText(value, '응답 내용이 없습니다.');
+  return text.split(/\n/).map((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return <div key={index} className="md-spacer" />;
+    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+    const content = formatInline(heading?.[2] ?? bullet?.[1] ?? trimmed);
+    if (heading) return <h3 key={index} className="md-heading">{content}</h3>;
+    if (bullet) return <div key={index} className="md-bullet"><span>•</span>{content}</div>;
+    return <p key={index}>{content}</p>;
+  });
+}
+
+function formatInline(text: string) {
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
+    return <span key={index}>{part}</span>;
+  });
+}
+
+function CitationList({ citations }: { citations: unknown }) {
+  const items = asArray<any>(citations).filter((item) => item && typeof item === 'object' && (item.url || item.quote || item.stable_key));
+  if (!items.length) return null;
+  return <details className="message-citations"><summary>참고한 근거 {items.length}건</summary>{items.map((citation: any, index: number) => <div key={citation.id ?? index} className="citation-row"><strong>{safeText(citation.source ?? citation.title, '프로젝트 자료')}</strong><span>{safeText(citation.quote ?? citation.excerpt ?? citation.stable_key, '근거 세부 정보')}</span><small>{citation.page_start ? '페이지 ' + citation.page_start : ''}{citation.parser_version ? ' · ' + citation.parser_version : ''}</small>{typeof citation.url === 'string' && citation.url && <a href={citation.url} target="_blank" rel="noreferrer">원문과 근거 위치 열기 ↗</a>}</div>)}</details>;
 }
 
 function renderMessage(rawContent: unknown) {
