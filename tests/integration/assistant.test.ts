@@ -5,6 +5,7 @@ import { buildServer } from '../../apps/api/src/server.ts';
 import { Auth } from '../../apps/api/src/auth.ts';
 import { fixture, guild, user } from './helpers.ts';
 import { KnowledgeStore, sql, first } from '@meeting/knowledge-db';
+import { indexerTick } from '@meeting/knowledge';
 
 // 어시스턴트 API 통합 테스트 — 대화/run/승인/파일 경로를 격리 스키마에서 검증한다.
 // knowledge DB는 별도 스키마, meeting DB는 helpers.fixture의 스키마.
@@ -195,7 +196,9 @@ describe('assistant', () => {
         },
         payload: buf,
       });
-      expect(complete.statusCode).toBe(200);
+      expect(complete.statusCode).toBe(202);
+      expect(complete.json().state).toBe('EXTRACTING');
+      await indexerTick(kstore!, 'assistant-upload-qa');
       const file = (
         await app.inject({ url: `/api/assistant/files/${id}`, headers: { cookie } })
       ).json();

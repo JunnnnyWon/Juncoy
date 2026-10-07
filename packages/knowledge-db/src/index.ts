@@ -584,6 +584,12 @@ export class KnowledgeStore {
       await sql`INSERT INTO style_profiles(id, project_id, version, body, approved_by, approved_at, epoch)
         VALUES (${randomUUID()}, ${input.projectId}, ${version}, ${json({ ...analysis.result, provenance: { board_id: input.boardId, revision: input.revision, analysis_id: analysis.id, result_hash: analysis.result_hash } })}, ${input.approvedBy}, now(), ${version})`.execute(tx);
       await sql`UPDATE art_board_analyses SET status='APPROVED', approved_style_version=${version} WHERE id=${analysis.id}`.execute(tx);
+      for (const rule of analysis.result.common_rules ?? []) {
+        await sql`INSERT INTO style_profile_rules(id, project_id, style_version, category, statement, strength, provenance, status, approved_by, approved_at)
+          VALUES (${randomUUID()}, ${input.projectId}, ${version}, ${rule.category}, ${rule.statement}, 'STRONG_REFERENCE',
+            ${json({ board_id: input.boardId, revision: input.revision, analysis_id: analysis.id, evidence_ids: rule.evidence_ids ?? [] })},
+            'APPROVED', ${input.approvedBy}, now())`.execute(tx);
+      }
       return { kind: 'APPROVED' as const, version, result: analysis.result };
     });
   }
@@ -592,6 +598,13 @@ export class KnowledgeStore {
     return first<any>(sql`SELECT version, body, approved_by, approved_at FROM style_profiles
       WHERE project_id=${projectId} AND approved_by IS NOT NULL AND approved_at IS NOT NULL
       ORDER BY version DESC LIMIT 1`, this.db);
+  }
+
+  async getApprovedStyleRules(projectId: string, version: number) {
+    return rows<any>(sql`SELECT id, category, statement, strength, provenance, approved_by, approved_at
+      FROM style_profile_rules WHERE project_id=${projectId} AND style_version=${version}
+        AND status='APPROVED' AND approved_by IS NOT NULL AND approved_at IS NOT NULL
+      ORDER BY created_at, id`, this.db);
   }
 
   /** 대화는 owner+project 스코프로만 조회 — id만으로 타인 대화를 열지 않는다. */

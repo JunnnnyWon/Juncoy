@@ -1017,8 +1017,10 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       usableRefs.map((ref: any) => [ref.upload_id, ref.role + ': ' + ref.note]),
     );
     const approvedStyle = await ctx.store.getApprovedStyleProfile(projectId);
-    const approvedRules = Array.isArray(approvedStyle?.body?.common_rules)
-      ? approvedStyle.body.common_rules
+    const savedRules = approvedStyle ? await ctx.store.getApprovedStyleRules(projectId, approvedStyle.version) : [];
+    const ruleSource = savedRules.length ? savedRules : approvedStyle?.body?.common_rules;
+    const approvedRules = Array.isArray(ruleSource)
+      ? ruleSource
           .filter((rule: any) => typeof rule?.statement === 'string')
           .map((rule: any) => String(rule.category ?? 'style') + ': ' + rule.statement)
       : [];
