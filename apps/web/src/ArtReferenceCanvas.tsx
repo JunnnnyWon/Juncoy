@@ -401,6 +401,12 @@ export function ArtReferenceCanvas() {
     setNodes((current) => [...current, { id, node_type, x: 60 + current.length * 30, y: 70 + current.length * 30, width: node_type === 'frame' ? 420 : 220, height: node_type === 'frame' ? 300 : 140, text: node_type === 'frame' ? '새 프레임' : '새 메모' }]);
     setActiveNodeId(id);
   };
+  const deleteNode = (id: string) => {
+    setNodes((current) => current.filter((node) => node.id !== id));
+    setEdges((current) => current.filter((edge) => edge.source !== id && edge.target !== id));
+    if (activeNodeId === id) setActiveNodeId(null);
+  };
+  const deleteActiveNode = () => { if (activeNodeId) deleteNode(activeNodeId); };
   const createBoard = async () => {
     const name = window.prompt('새 보드 이름', '새 아트 보드');
     if (!name?.trim()) return;
@@ -446,6 +452,16 @@ export function ArtReferenceCanvas() {
     }
     setActiveNodeId(id);
   };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!['Delete', 'Backspace'].includes(event.key)) return;
+      if ((event.target as HTMLElement).closest('input, textarea, select, [contenteditable=true]')) return;
+      if (!activeNodeId) return;
+      event.preventDefault(); deleteNode(activeNodeId);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeNodeId]);
   return (
     <div className="art-workspace">
       <header className="art-header">
@@ -477,6 +493,7 @@ export function ArtReferenceCanvas() {
         <button className="art-tool" onClick={() => addNode('group')}>그룹</button>
         <button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(-16, 0)}>←</button><button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(16, 0)}>→</button><button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(0, -16)}>↑</button><button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(0, 16)}>↓</button><button className="art-tool" disabled={selectedIds.length < 2} onClick={groupSelection}>선택 묶기</button>
         <button className={'art-tool ' + (connectSource ? 'active' : '')} disabled={!activeNodeId} onClick={() => setConnectSource(connectSource ? null : activeNodeId)}>↗ 연결</button>
+        <button className="art-tool danger-tool" aria-label="선택 요소 삭제" disabled={!activeNodeId} onClick={deleteActiveNode}>⌫ 삭제</button>
         <select aria-label="연결 관계" value={edgeType} onChange={(event) => setEdgeType(event.target.value as ArtCanvasEdge['edge_type'])}>
           <option value="supports">뒷받침</option><option value="contradicts">충돌</option><option value="variant_of">변형</option><option value="uses_only">부분 채택</option><option value="derived_from">파생</option>
         </select>
@@ -554,7 +571,8 @@ export function ArtReferenceCanvas() {
               handle.setPointerCapture(event.pointerId);
               handle.onpointermove = (move) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, x: origin.nodeX + (move.clientX - origin.x) / zoom, y: origin.nodeY + (move.clientY - origin.y) / zoom } : n));
               handle.onpointerup = () => { handle.onpointermove = null; handle.onpointerup = null; };
-            }}>{node.node_type === 'frame' ? '프레임' : node.node_type === 'group' ? '그룹' : '메모'}<button aria-label="노드 삭제" onClick={(event) => { event.stopPropagation(); setNodes((current) => current.filter((n) => n.id !== node.id)); setEdges((current) => current.filter((e) => e.source !== node.id && e.target !== node.id)); }}>×</button></div>
+            }}>{node.node_type === 'frame' ? '프레임' : node.node_type === 'group' ? '그룹' : '메모'}<span className="node-handle-hint">이동</span></div>
+            <button className="node-delete" aria-label="노드 삭제" title="요소 삭제" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); deleteNode(node.id); }}>삭제</button>
             <textarea aria-label="노드 내용" value={node.text} onChange={(event) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, text: event.target.value } : n))} />
           </div>)}
           {refs.length === 0 && nodes.length === 0 && (

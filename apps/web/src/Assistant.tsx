@@ -175,6 +175,15 @@ export function Assistant() {
     }
   };
 
+  const startPrompt = async (prompt: string) => {
+    const { id } = await api<{ id: string }>('/api/assistant/conversations', { method: 'POST', body: JSON.stringify({}) });
+    await loadConvs();
+    setConvId(id);
+    setMessages([]);
+    setApprovals([]);
+    setInput(prompt);
+  };
+
   const decide = async (id: string, approve: boolean) => {
     await api(`/api/assistant/approvals/${id}/${approve ? 'approve' : 'reject'}`, {
       method: 'POST',
@@ -296,24 +305,21 @@ export function Assistant() {
             <div className="prompt-starters">
               <button
                 onClick={() => {
-                  setInput('최근 회의와 Discord에서 아트 방향에 합의된 내용을 정리해 줘.');
-                  void newConv();
+                  void startPrompt('최근 회의와 Discord에서 아트 방향에 합의된 내용을 정리해 줘.');
                 }}
               >
                 최근 아트 결정 요약
               </button>
               <button
                 onClick={() => {
-                  setInput('이번 주 작업 중 마감이 임박한 항목을 보여 줘.');
-                  void newConv();
+                  void startPrompt('이번 주 작업 중 마감이 임박한 항목을 보여 줘.');
                 }}
               >
                 이번 주 작업 확인
               </button>
               <button
                 onClick={() => {
-                  setInput('이 프로젝트의 현재 비주얼 방향을 설명해 줘.');
-                  void newConv();
+                  void startPrompt('이 프로젝트의 현재 비주얼 방향을 설명해 줘.');
                 }}
               >
                 비주얼 방향 탐색
@@ -325,7 +331,9 @@ export function Assistant() {
             <div className="assistant-msgs">
               {messages.map((m) => (
                 <div key={m.id} className={`msg msg-${m.role}`}>
-                  <div className="msg-body">{m.content}</div>
+                  <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}<time>{new Date(m.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></div>
+                  <div className="msg-body">{renderMessage(m.content)}</div>
+                  {!!m.citations?.length && <details className="message-citations"><summary>참고한 근거 {m.citations.length}건</summary>{m.citations.map((citation: any, index: number) => <div key={citation.id ?? index} className="citation-row"><strong>{citation.source ?? citation.title ?? '프로젝트 자료'}</strong><span>{citation.quote ?? citation.excerpt ?? citation.stable_key ?? citation.url ?? '근거 세부 정보'}</span>{citation.page && <small>페이지 {citation.page}{citation.block ? ' · ' + citation.block : ''}</small>}</div>)}</details>}
                 </div>
               ))}
               {live && (
@@ -372,7 +380,7 @@ export function Assistant() {
                     <div className="approval-head">
                       {a.kind} · 만료 {new Date(a.expires_at).toLocaleTimeString('ko-KR')}
                     </div>
-                    <pre>{JSON.stringify(a.after, null, 2)}</pre>
+                    <ApprovalSummary approval={a} />
                     <div className="approval-actions">
                       <button className="primary-button" onClick={() => void decide(a.id, true)}>
                         승인
@@ -518,4 +526,29 @@ export function Assistant() {
       )}
     </div>
   );
+}
+
+function renderMessage(content: string) {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed === 'object') {
+      const entries = Object.entries(parsed).filter(([, value]) => value !== null && value !== undefined && typeof value !== 'object');
+      const summary = parsed.summary ?? parsed.message ?? parsed.text ?? parsed.result?.summary;
+      if (summary || entries.length) return <><p>{String(summary ?? '요청 처리 결과')}</p>{entries.length > 0 && <dl className="message-data">{entries.map(([key, value]) => <div key={key}><dt>{humanizeKey(key)}</dt><dd>{String(value)}</dd></div>)}</dl>}</>;
+    }
+  } catch { /* Plain text and markdown-like responses are displayed as authored. */ }
+  return content.split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>);
+}
+
+function humanizeKey(key: string) {
+  return key.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function ApprovalSummary({ approval }: { approval: Approval }) {
+  const data = approval.after && typeof approval.after === 'object' ? approval.after : {};
+  const title = data.name ?? data.title ?? data.filename ?? data.task ?? data['이름'] ?? approval.kind.replace(/[_-]+/g, ' ');
+  const date = data.date_start ?? data.start ?? data.date ?? data['날짜']?.start;
+  const description = data.description ?? data.note ?? data.content ?? data['설명'];
+  const fields = Object.entries(data).filter(([key, value]) => !['name', 'title', 'filename', 'task', '이름', 'date_start', 'start', 'date', '날짜', 'description', 'note', 'content', '설명'].includes(key) && value != null && typeof value !== 'object');
+  return <div className="approval-summary"><h3>{String(title)}</h3>{date && <p className="approval-date">{String(date)}</p>}{description && <p>{String(description)}</p>}{fields.length > 0 && <dl className="message-data">{fields.map(([key, value]) => <div key={key}><dt>{humanizeKey(key)}</dt><dd>{String(value)}</dd></div>)}</dl>}<details className="approval-raw"><summary>세부 내용 보기</summary><pre>{JSON.stringify(data, null, 2)}</pre></details></div>;
 }
