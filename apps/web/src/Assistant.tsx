@@ -333,7 +333,7 @@ export function Assistant() {
                 <div key={m.id} className={`msg msg-${m.role}`}>
                   <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}<time>{new Date(m.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></div>
                   <div className="msg-body">{renderMessage(m.content)}</div>
-                  {!!m.citations?.length && <details className="message-citations"><summary>참고한 근거 {m.citations.length}건</summary>{m.citations.map((citation: any, index: number) => <div key={citation.id ?? index} className="citation-row"><strong>{citation.source ?? citation.title ?? '프로젝트 자료'}</strong><span>{citation.quote ?? citation.excerpt ?? citation.stable_key ?? citation.url ?? '근거 세부 정보'}</span>{citation.page && <small>페이지 {citation.page}{citation.block ? ' · ' + citation.block : ''}</small>}</div>)}</details>}
+                  {Array.isArray(m.citations) && m.citations.length > 0 && <details className="message-citations"><summary>참고한 근거 {m.citations.length}건</summary>{m.citations.map((citation: any, index: number) => <div key={citation.id ?? index} className="citation-row"><strong>{citation.source ?? citation.title ?? '프로젝트 자료'}</strong><span>{citation.quote ?? citation.excerpt ?? citation.stable_key ?? citation.url ?? '근거 세부 정보'}</span>{citation.page && <small>페이지 {citation.page}{citation.block ? ' · ' + citation.block : ''}</small>}</div>)}</details>}
                 </div>
               ))}
               {live && (
@@ -528,7 +528,8 @@ export function Assistant() {
   );
 }
 
-function renderMessage(content: string) {
+function renderMessage(rawContent: unknown) {
+  const content = typeof rawContent === 'string' ? rawContent : rawContent == null ? '' : JSON.stringify(rawContent);
   try {
     const parsed = JSON.parse(content);
     if (parsed && typeof parsed === 'object') {
