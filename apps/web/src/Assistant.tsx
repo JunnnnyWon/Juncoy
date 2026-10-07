@@ -525,15 +525,16 @@ function AssistantView() {
           </div>
         )}
         {(panelTab === 'schedule' || panelTab === 'tasks') &&
-          ((panelTab === 'schedule' ? schedule : tasks)?.map((row: any) => (
-            <div key={row.id} className="side-row">
-              <div className="side-row-title">{row['이름'] ?? row['작업명'] ?? row.id}</div>
+          (asArray<any>(panelTab === 'schedule' ? schedule : tasks).map((row: any, index: number) => (
+            <div key={String(row?.id ?? index)} className="side-row">
+              <div className="side-row-title">{safeText(row?.['이름'] ?? row?.['작업명'] ?? row?.id, '이름 없는 항목')}</div>
               <div className="dim">
-                {row['날짜']?.start ?? '날짜 없음'} · {row['상태'] ?? '-'} ·{' '}
-                {(row['담당자'] ?? []).join(', ') || '-'}
+                {safeText(row?.['날짜']?.start ?? row?.date ?? null, '날짜 없음')} · {safeText(row?.['상태'] ?? row?.status, '-')} ·{' '}
+                {Array.isArray(row?.['담당자']) ? row['담당자'].map((person: unknown) => safeText(person)).join(', ') || '-' : safeText(row?.['담당자'], '-')}
               </div>
             </div>
-          )) ?? <p className="dim">항목이 없습니다.</p>)}
+          )))}
+        {(panelTab === 'schedule' || panelTab === 'tasks') && asArray<any>(panelTab === 'schedule' ? schedule : tasks).length === 0 && <p className="dim">항목이 없습니다.</p>}
       </aside>
       {error && (
         <div className="toast" role="alert">
