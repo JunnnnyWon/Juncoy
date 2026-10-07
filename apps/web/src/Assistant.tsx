@@ -128,7 +128,7 @@ function AssistantView() {
     const es = new EventSource(`/api/assistant/runs/${runId}/stream`);
     esRef.current = es;
     const liveRun: LiveRun = { phase: 'idle', evidence: [] };
-    setLive({ ...liveRun });
+    setLive(null);
     es.onmessage = () => {};
     for (const kind of [
       'phase',
@@ -151,7 +151,7 @@ function AssistantView() {
           void api<{ pending_approvals: Approval[] }>(
             `/api/assistant/conversations/${convId}`,
           ).then((r) => setApprovals(asArray<Approval>(r.pending_approvals)));
-        setLive({ ...liveRun, evidence: [...liveRun.evidence] });
+        setLive(null);
         if (kind === 'done' || kind === 'result' || kind === 'error') {
           es.close();
           if (convId) void openConv(convId);
