@@ -1,0 +1,488 @@
+{
+  "config": {
+    "argv": [
+      "/usr/local/bin/node",
+      "/Users/junnnny/Desktop/Juncoy/node_modules/@playwright/test/cli.js",
+      "test",
+      "tests/browser/meeting.spec.ts",
+      "tests/browser/art-reference.spec.ts"
+    ],
+    "configFile": "/Users/junnnny/Desktop/Juncoy/playwright.config.ts",
+    "rootDir": "/Users/junnnny/Desktop/Juncoy/tests/browser",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/junnnny/Desktop/Juncoy/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "",
+        "name": "",
+        "testDir": "/Users/junnnny/Desktop/Juncoy/tests/browser",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 45000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "json",
+        {
+          "outputFile": "artifacts/browser-results.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.63.0",
+    "workers": 1,
+    "webServer": {
+      "command": "pnpm exec tsx scripts/serve-test.ts",
+      "url": "http://127.0.0.1:3100/healthz",
+      "reuseExistingServer": false,
+      "gracefulShutdown": {
+        "signal": "SIGTERM",
+        "timeout": 10000
+      },
+      "timeout": 60000
+    }
+  },
+  "suites": [
+    {
+      "title": "art-reference.spec.ts",
+      "file": "art-reference.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "art canvas supports selection, grouping, undo, and mobile inspector access",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 733,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:03:54.227Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "547e3760a6d531da9ecd-eff82cd5f039b59cb400",
+          "file": "art-reference.spec.ts",
+          "line": 28,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "title": "meeting.spec.ts",
+      "file": "meeting.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "login, live transcript, whole-history search, speaker filter, deep evidence and export",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 4180,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:03:55.309Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-5f341a8c69e7476556db",
+          "file": "meeting.spec.ts",
+          "line": 7,
+          "column": 1
+        },
+        {
+          "title": "partial updates keep the same row, final persists across offline reconnect and refresh",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1878,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:03:59.494Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-8061372dba68b05e9c4c",
+          "file": "meeting.spec.ts",
+          "line": 43,
+          "column": 1
+        },
+        {
+          "title": "360px mobile layout has no horizontal overflow",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1293,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:04:01.377Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-63efac3526912fd244ca",
+          "file": "meeting.spec.ts",
+          "line": 76,
+          "column": 1
+        },
+        {
+          "title": "a temporary snapshot 503 reconnects automatically without a login or reload",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 4315,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:04:02.674Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-feaf6e9a9859d880c051",
+          "file": "meeting.spec.ts",
+          "line": 87,
+          "column": 1
+        },
+        {
+          "title": "12 separate viewers receive the same commit without multiplying provider connections or jobs",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [
+                {
+                  "type": "commit_to_all_views_ms",
+                  "description": "835"
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1989,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:04:06.995Z",
+                  "annotations": [
+                    {
+                      "type": "commit_to_all_views_ms",
+                      "description": "835"
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-07d120bfa23c4b30ee3a",
+          "file": "meeting.spec.ts",
+          "line": 109,
+          "column": 1
+        },
+        {
+          "title": "permission removal closes SSE and clears transcript within 30 seconds",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1285,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:04:08.992Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-abadd7bca190fd4e5175",
+          "file": "meeting.spec.ts",
+          "line": 148,
+          "column": 1
+        },
+        {
+          "title": "speaker filtering retrieves a former participant outside the latest snapshot",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1821,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:04:10.282Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-48ebebc28636cd263a78",
+          "file": "meeting.spec.ts",
+          "line": 167,
+          "column": 1
+        },
+        {
+          "title": "shared workspace copy and membership loss clear all meeting content",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 10588,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:04:12.108Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-1a977cbc5fedbe091804",
+          "file": "meeting.spec.ts",
+          "line": 185,
+          "column": 1
+        },
+        {
+          "title": "text playback opens waveform, pauses, resumes, switches and collapses on end",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 6639,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:04:22.702Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-5fccfa63a552e272ce2c",
+          "file": "meeting.spec.ts",
+          "line": 209,
+          "column": 1
+        },
+        {
+          "title": "text selection does not play and rapid cancellation cannot revive audio",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2374,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-07T10:04:29.348Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "e3edbeebe5c900494fe7-3a319e3e81ae5a789e95",
+          "file": "meeting.spec.ts",
+          "line": 262,
+          "column": 1
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-07T10:03:51.140Z",
+    "duration": 40740.56,
+    "expected": 11,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

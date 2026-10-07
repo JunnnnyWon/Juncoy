@@ -24,7 +24,7 @@
 | Meeting + knowledge integration | PASS | 11 files / 68 tests, pgvector PostgreSQL 17 test DB |
 | Knowledge-specific DB | PASS | 17/17 tests, cache/fencing/parse/revision/art approval |
 | Art canvas mock browser | PASS | `tests/browser/art-reference.spec.ts`, grouping/undo/redo/mobile inspector |
-| Existing meeting browser | RE-RUN REQUIRED | one earlier run hit port 3100 reuse; prior functional scenarios passed except transient snapshot 503 retry case |
+| Existing meeting browser | PASS | 11 tests total including art canvas, meeting live transcript, mobile overflow, retry, 12 viewers and permission revocation; 0 unexpected, 0 flaky |
 | Graphify | UPDATED WITH LIMITATIONS | `graphify update .`; representative nodes verified |
 
 Local test database: temporary container `juncoy-knowledge-test`, pgvector/pg17, port 55440. It is a test-only container and is not production data.
@@ -52,6 +52,8 @@ Local test database: temporary container `juncoy-knowledge-test`, pgvector/pg17,
 - API and worker both use the host knowledge directory at `/home/junnnnyserver/services/discord-meeting-bot/.data/knowledge` mounted as `/data/knowledge`.
 - Worker logs after the final restart show meeting sync `meetings=13, synced=3, unshared=0` and Notion structure/incremental sync activity.
 - Production OpenRouter Flare direct smoke from the worker returned HTTP 200 with 2,181,341 output bytes and SHA-256 `6234ed25f735bef86ec10c2080336688617158b3eb783767384b273bb076a488`. The provider returned no request ID, so request ID/cost remain explicitly unknown; the result was not registered as canonical.
+- Final local browser JSON: `artifacts/browser-results.json`, expected 11, skipped 0, unexpected 0, flaky 0.
+- Final local integration: 11 files / 68 tests passed with meeting PostgreSQL and pgvector PostgreSQL 17 test DB.
 - Production model flags verified without printing secrets: image `openai/gpt-image-2.5-flare`, vision `google/gemini-3.7-flash`, Upstage Parse enabled with the configured document-digitization endpoint.
 
 ## Rollback
