@@ -220,6 +220,8 @@ function AssistantView() {
           created_at: new Date().toISOString(),
         },
       ]);
+      // The API generates the first-message title before returning; refresh the rail immediately.
+      await loadConvs();
       streamRun(r.run_id);
     } finally {
       setBusy(false);
