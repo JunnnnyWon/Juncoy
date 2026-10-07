@@ -210,6 +210,7 @@ function AssistantView() {
   };
 
   useEffect(() => {
+    return;
     const path =
       panelTab === 'schedule'
         ? '/api/assistant/schedule'
