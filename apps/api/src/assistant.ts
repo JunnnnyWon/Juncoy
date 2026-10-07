@@ -854,6 +854,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       project_id: projectId,
       document_id: upload.document_id,
       source_sha256: upload.sha256,
+      force: true,
     });
     await ctx.store.updateUpload(upload.id, { state: 'EXTRACTING', error: null });
     return { queued: true, upload_id: upload.id, source_sha256: upload.sha256 };

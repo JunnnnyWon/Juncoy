@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { reparseUpload, UploadStorage, UpstageDocumentParse, sha256, extractDocument, indexerTick, ensureProfile, UpstageEmbeddings } from '@meeting/knowledge';
+import { reparseUpload, UploadStorage, UpstageDocumentParse, sha256, extractDocument, indexerTick, ensureProfile, UpstageEmbeddings, cachedParse } from '@meeting/knowledge';
 import { randomUUID } from 'node:crypto';
 import { KnowledgeStore, sql, first, rows } from '@meeting/knowledge-db';
 
@@ -49,6 +49,24 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('deduplicates successful Parse cache results and does not store fallback output', async (ctx) => {
+    skipIf(ctx);
+    const projectId = randomUUID(), sourceHash = 'b'.repeat(64);
+    await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'parse cache')`.execute(store!.db);
+    const upload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'cache.pdf', mime: 'application/pdf', bytes: 1, sha256: sourceHash, storageKey: 'cache-pdf' });
+    const uploadId = upload.id;
+    const calls = { count: 0 };
+    const key = { projectId, uploadId, sourceHash, parserProfile: 'fixture', optionsHash: 'options' };
+    const firstResult = await cachedParse(store!, key, async () => { calls.count++; return { parseStatus: 'READY', text: 'cached' }; });
+    const secondResult = await cachedParse(store!, key, async () => { calls.count++; return { parseStatus: 'READY', text: 'wrong' }; });
+    expect(firstResult.text).toBe('cached');
+    expect(secondResult.text).toBe('cached');
+    expect(calls.count).toBe(1);
+    const fallbackUpload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'fallback.pdf', mime: 'application/pdf', bytes: 1, sha256: 'c'.repeat(64), storageKey: 'fallback-pdf' });
+    await expect(cachedParse(store!, { ...key, uploadId: fallbackUpload.id, sourceHash: 'c'.repeat(64) }, async () => { calls.count++; return { parseStatus: 'FALLBACK', text: 'local' }; })).resolves.toMatchObject({ parseStatus: 'FALLBACK' });
+    const stored = await first<any>(sql`SELECT result FROM document_parse_cache WHERE project_id=${projectId} AND upload_id=${uploadId}`, store!.db);
+    expect(stored.result.text).toBe('cached');
+  });
   it('updates parse job failure and upload state atomically with fencing', async (ctx) => {
     skipIf(ctx);
     const projectId = randomUUID();
@@ -208,9 +226,9 @@ describe('knowledge-db semantics', () => {
       await storage.put('fixture', original);
       for (const text of ['first parse', 'second parse']) {
         spy.mockResolvedValueOnce({ text, parserVersion: 'fixture', sourceSha256: hash, warnings: [], blocks: [], pages: [] });
-        expect(await reparseUpload(store!, upload.id)).toMatchObject({ reparsed: true });
+        expect(await reparseUpload(store!, upload.id, undefined, true)).toMatchObject({ reparsed: true });
       }
-      const current = await first<any>(sql`SELECT v.normalized FROM documents d JOIN document_versions v ON v.id=d.current_version_id WHERE d.id=${docId}`, store!.db);
+    const current = await first<any>(sql`SELECT v.normalized FROM documents d JOIN document_versions v ON v.id=d.current_version_id WHERE d.id=${docId}`, store!.db);
       expect(current.normalized.text).toBe('second parse');
       const jobs = await rows<any>(sql`SELECT payload FROM knowledge_jobs WHERE kind='extract' AND payload->>'document_id'=${docId}`, store!.db);
       expect(jobs).toHaveLength(2);

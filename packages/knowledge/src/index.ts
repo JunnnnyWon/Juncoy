@@ -18,4 +18,5 @@ export * from './tools/notion-mutate.ts';
 export * from './tools/image.ts';
 export * from './image-openrouter.ts';
 export * from './document-parse-upstage.ts';
+export * from './parse-cache.ts';
 export * from './vision-openrouter.ts';

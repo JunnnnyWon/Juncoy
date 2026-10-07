@@ -4,6 +4,7 @@ import { UpstageEmbeddings, activeProfile, indexMissingEmbeddings } from './embe
 import { UpstageDocumentParse } from './document-parse-upstage.ts';
 import { UploadStorage, extractUpload, sha256, ensureUploadSource, magicOk, type UploadMime } from './uploads.ts';
 import { OpenRouterVision } from './vision-openrouter.ts';
+import { cachedParse } from './parse-cache.ts';
 
 // 추출/인덱싱 워커 — publish된 current 버전을 청크로 만들고 비활성 set에 채운 뒤
 // swapChunkSet으로 원자 공개한다 (§8.1). 임베딩은 활성 profile 단위.
@@ -12,7 +13,7 @@ export const EXTRACTOR_VERSION = 1;
 
 const CONTENT_MAX = 256 * 1024;
 
-export async function reparseUpload(store: KnowledgeStore, uploadId: string, job?: KnowledgeJob) {
+export async function reparseUpload(store: KnowledgeStore, uploadId: string, job?: KnowledgeJob, force = false) {
   // A completed parse must not call a provider again after a worker restart.
   if (job) {
     const current = await first<{ status: string; generation: number; owner: string | null; leased: boolean }>(sql`
@@ -34,7 +35,12 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string, job
   const parser = process.env.UPSTAGE_DOCUMENT_PARSE_ENABLED === 'true' && process.env.UPSTAGE_API_KEY && process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT
     ? new UpstageDocumentParse({ apiKey: process.env.UPSTAGE_API_KEY, endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT, timeoutMs: Number(process.env.UPSTAGE_DOCUMENT_PARSE_TIMEOUT_MS ?? 60_000) })
     : undefined;
-  const extracted = await extractUpload(bytes, upload.mime, { documentParse: parser, expectedSha256: upload.sha256 });
+  const extract = () => extractUpload(bytes, upload.mime, { documentParse: parser, expectedSha256: upload.sha256 });
+  const extracted = upload.mime === 'application/pdf' && parser
+    ? await cachedParse(store, { projectId: upload.project_id, uploadId: upload.id, sourceHash: upload.sha256,
+        parserProfile: process.env.UPSTAGE_DOCUMENT_PARSE_PROFILE ?? 'document-parse-260930',
+        optionsHash: sha256(JSON.stringify({ endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT, output: 'html', coordinates: true })) }, extract, force || job?.payload.force === true)
+    : await extract();
   let vision: unknown;
   let text = extracted.text;
   if (upload.mime.startsWith('image/') && process.env.OPENROUTER_VISION_ENABLED === 'true') {
