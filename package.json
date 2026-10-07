@@ -82,7 +82,8 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "@discordjs/opus",
-      "esbuild"
+      "esbuild",
+      "sharp"
     ]
   },
   "optionalDependencies": {
