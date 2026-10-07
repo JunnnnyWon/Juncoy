@@ -38,11 +38,21 @@ Local test database: temporary container `juncoy-knowledge-test`, pgvector/pg17,
 ## Production gate status before this release
 
 - Server: `junnnnyserver:/home/junnnnyserver/services/discord-meeting-bot`.
-- Final release target: `juncoy-meeting:release-6966a14` after the `sharp` native build allow fix. Previous rollback image `release-211c6bd` remains available; backup directory observed under `.data/backups/art-release-Zk2QRWn8` and release backup under `.data/backups/art-release-70b978b-20261007`.
+- Final release target: `juncoy-meeting:release-59ee085`. Previous rollback images `release-211c6bd`, `release-70b978b`, and `release-6966a14` remain available; backup directory observed under `.data/backups/art-release-Zk2QRWn8` and release backup under `.data/backups/art-release-70b978b-20261007`.
 - API and knowledge worker now both mount `/home/junnnnyserver/services/discord-meeting-bot/.data/knowledge` at `/data/knowledge`; this was corrected after detecting the API mount gap during deployment verification.
 - Final server knowledge DB migrations observed through `013_art_brief_provenance.sql`.
 - Current server health/provider smoke from the preceding release included API health, Gemini Vision, Upstage Parse and OpenRouter Flare catalog checks.
 - Still requiring this release: migrations 011-013, updated source/image hash, authenticated production web E2E, one real GPT Image 2.5 Flare generation, and team-data PDF/scanned-PDF quality review. These are not marked PASS until directly verified.
+
+## Final deployment evidence
+
+- Local release commit: `59ee0850116bbb6eab53ba1362ce7400df10ed3f`.
+- Production API and knowledge worker: `juncoy-meeting:release-59ee085`; API Docker health `healthy`, worker state `running`.
+- Knowledge DB max migration: `013_art_brief_provenance.sql`.
+- API and worker both use the host knowledge directory at `/home/junnnnyserver/services/discord-meeting-bot/.data/knowledge` mounted as `/data/knowledge`.
+- Worker logs after the final restart show meeting sync `meetings=13, synced=3, unshared=0` and Notion structure/incremental sync activity.
+- Production OpenRouter Flare direct smoke from the worker returned HTTP 200 with 2,181,341 output bytes and SHA-256 `6234ed25f735bef86ec10c2080336688617158b3eb783767384b273bb076a488`. The provider returned no request ID, so request ID/cost remain explicitly unknown; the result was not registered as canonical.
+- Production model flags verified without printing secrets: image `openai/gpt-image-2.5-flare`, vision `google/gemini-3.7-flash`, Upstage Parse enabled with the configured document-digitization endpoint.
 
 ## Rollback
 
