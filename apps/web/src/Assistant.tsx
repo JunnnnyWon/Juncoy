@@ -544,17 +544,21 @@ function AssistantView() {
   );
 }
 
-function renderMessage(rawContent: unknown) {
-  const content = typeof rawContent === 'string' ? rawContent : rawContent == null ? '' : JSON.stringify(rawContent);
-  try {
-    const parsed = JSON.parse(content);
-    if (parsed && typeof parsed === 'object') {
-      const entries = Object.entries(parsed).filter(([, value]) => value !== null && value !== undefined && typeof value !== 'object');
-      const summary = parsed.summary ?? parsed.message ?? parsed.text ?? parsed.result?.summary;
-      if (summary || entries.length) return <><p>{String(summary ?? '요청 처리 결과')}</p>{entries.length > 0 && <dl className="message-data">{entries.map(([key, value]) => <div key={key}><dt>{humanizeKey(key)}</dt><dd>{String(value)}</dd></div>)}</dl>}</>;
+function safeText(value: unknown, fallback = '') {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const key of ['summary', 'message', 'text', 'title', 'name', 'description']) {
+      if (typeof record[key] === 'string') return record[key] as string;
     }
-  } catch { /* Plain text and markdown-like responses are displayed as authored. */ }
-  return content.split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>);
+    return '요청 처리 결과를 확인했습니다.';
+  }
+  return fallback;
+}
+
+function renderMessage(rawContent: unknown) {
+  return <p className="message-plain-text">{safeText(rawContent, '응답 내용이 없습니다.')}</p>;
 }
 
 function humanizeKey(key: string) {
@@ -562,10 +566,9 @@ function humanizeKey(key: string) {
 }
 
 function ApprovalSummary({ approval }: { approval: Approval }) {
-  const data = approval.after && typeof approval.after === 'object' ? approval.after : {};
-  const title = data.name ?? data.title ?? data.filename ?? data.task ?? data['이름'] ?? approval.kind.replace(/[_-]+/g, ' ');
-  const date = data.date_start ?? data.start ?? data.date ?? data['날짜']?.start;
+  const data = approval.after && typeof approval.after === 'object' ? approval.after as Record<string, unknown> : {};
+  const title = data.name ?? data.title ?? data.filename ?? data.task ?? data['이름'] ?? approval.kind;
+  const date = data.date_start ?? data.start ?? data.date;
   const description = data.description ?? data.note ?? data.content ?? data['설명'];
-  const fields = Object.entries(data).filter(([key, value]) => !['name', 'title', 'filename', 'task', '이름', 'date_start', 'start', 'date', '날짜', 'description', 'note', 'content', '설명'].includes(key) && value != null && typeof value !== 'object');
-  return <div className="approval-summary"><h3>{String(title)}</h3>{date && <p className="approval-date">{String(date)}</p>}{description && <p>{String(description)}</p>}{fields.length > 0 && <dl className="message-data">{fields.map(([key, value]) => <div key={key}><dt>{humanizeKey(key)}</dt><dd>{String(value)}</dd></div>)}</dl>}<details className="approval-raw"><summary>세부 내용 보기</summary><pre>{JSON.stringify(data, null, 2)}</pre></details></div>;
+  return <div className="approval-summary"><h3>{safeText(title, '승인 필요한 작업')}</h3>{date != null && <p className="approval-date">{safeText(date)}</p>}{description != null && <p>{safeText(description)}</p>}</div>;
 }
