@@ -49,6 +49,7 @@ services:
     volumes:
       - ../.data/logs:/data/logs
       - ../.data/audio:/data/audio:ro
+      - ../.data/knowledge:/data/knowledge
     healthcheck:
       test:
         [

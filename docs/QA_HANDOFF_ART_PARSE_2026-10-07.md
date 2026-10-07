@@ -38,9 +38,9 @@ Local test database: temporary container `juncoy-knowledge-test`, pgvector/pg17,
 ## Production gate status before this release
 
 - Server: `junnnnyserver:/home/junnnnyserver/services/discord-meeting-bot`.
-- Existing API/worker image: `juncoy-meeting:release-211c6bd`; existing backup directory observed under `.data/backups/art-release-Zk2QRWn8`.
-- API and worker source volumes are separate by service; knowledge worker mounts `/home/junnnnyserver/services/discord-meeting-bot/.data/knowledge` at `/data/knowledge`.
-- Existing knowledge DB migrations observed through `010_art_geometry.sql`.
+- Final release target: `juncoy-meeting:release-6966a14` after the `sharp` native build allow fix. Previous rollback image `release-211c6bd` remains available; backup directory observed under `.data/backups/art-release-Zk2QRWn8` and release backup under `.data/backups/art-release-70b978b-20261007`.
+- API and knowledge worker now both mount `/home/junnnnyserver/services/discord-meeting-bot/.data/knowledge` at `/data/knowledge`; this was corrected after detecting the API mount gap during deployment verification.
+- Final server knowledge DB migrations observed through `013_art_brief_provenance.sql`.
 - Current server health/provider smoke from the preceding release included API health, Gemini Vision, Upstage Parse and OpenRouter Flare catalog checks.
 - Still requiring this release: migrations 011-013, updated source/image hash, authenticated production web E2E, one real GPT Image 2.5 Flare generation, and team-data PDF/scanned-PDF quality review. These are not marked PASS until directly verified.
 
