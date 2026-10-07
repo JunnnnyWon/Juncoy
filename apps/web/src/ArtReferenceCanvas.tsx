@@ -73,6 +73,15 @@ const usageLabels: Record<Usage, string> = {
   PARTIAL_REFERENCE: '부분만 참고',
   REVIEW_REQUIRED: '검토 필요',
 };
+function inferRoleFromObservation(observation: any): Role {
+  const text = [observation?.description, ...(observation?.subjects ?? []), ...(observation?.materials ?? []), ...(observation?.textures ?? []), ...(observation?.palette ?? [])].join(' ').toLowerCase();
+  if (/face|portrait|얼굴|소녀|인물|피부/.test(text)) return 'face_shape';
+  if (/texture|pattern|surface|텍스처|표면|재질|나무|금속/.test(text)) return 'texture';
+  if (/light|lighting|shadow|조명|빛|그림자/.test(text)) return 'lighting';
+  if (/material|재질|rough|metal|wood|벽/.test(text)) return 'material_surface';
+  if (/camera|composition|view|구도|시점|카메라/.test(text)) return 'modeling_language';
+  return 'mood';
+}
 export function ArtReferenceCanvas() {
   const [refs, setRefs] = useState<RefCard[]>([]);
   const [nodes, setNodes] = useState<ArtCanvasNode[]>([]);
@@ -261,7 +270,7 @@ export function ArtReferenceCanvas() {
           await clearDraft(draftKey.current + ':blobs').catch(() => {});
           setHistoryItems(await api<any[]>('/api/assistant/art-boards/' + boardId + '/history'));
           setSyncState('자동 저장됨');
-        } catch { setSyncState('저장 충돌 - 최신 revision 확인 필요'); }
+        } catch { setSyncState('저장 충돌 - 최신 변경 확인 필요'); }
       });
     }, 1000);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
@@ -389,8 +398,19 @@ export function ArtReferenceCanvas() {
           };
         }),
     );
-    setRefs((current) => [...next, ...current]);
+    setRefs((current) => [...next.map((ref, index) => ({ ...ref, selected: true, x: 80 + (current.length + index) % 4 * 260, y: 120 + Math.floor((current.length + index) / 4) * 250 })), ...current]);
     if (next[0]) setSelectedId(next[0].id);
+    await Promise.all(next.filter((ref) => ref.art_asset_id).map(async (ref) => {
+      try {
+        const result = await api<any>('/api/assistant/art-assets/' + ref.art_asset_id + '/analyze', { method: 'POST' });
+        const observations = result.observations ?? {};
+        const role = inferRoleFromObservation(observations);
+        const note = '자동 분류: ' + roleLabels[role] + ' · ' + (observations.description ?? '이미지 분석 결과를 확인해 주세요.');
+        setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, selected: true, role, roles: [role], usage: 'STRONG_REFERENCE', roleUsage: { [role]: 'STRONG_REFERENCE' }, note } : item));
+      } catch {
+        setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, selected: true, note: '자동 분류를 완료하지 못했습니다. 이 이미지는 직접 확인해 주세요.' } : item));
+      }
+    }));
   };
   const update = (patch: Partial<RefCard>) =>
     setRefs((current) =>
@@ -466,8 +486,8 @@ export function ArtReferenceCanvas() {
     <div className="art-workspace">
       <header className="art-header">
         <div>
-          <span className="eyebrow">ART DIRECTION / BOARD 01</span>
-          <div className="art-board-title-row"><select aria-label="아트 보드" value={boardId ?? ''} onChange={async (event) => { const id = event.target.value; if (!id) return; const [detail, list] = await Promise.all([api<any>('/api/assistant/art-boards/' + id), api<any[]>('/api/assistant/art-boards/' + id + '/history')]); setBoardId(id); setBoardName(detail.board.name); setRevision(detail.board.current_revision); setHistoryItems(list); const snap = detail.revision?.snapshot ?? {}; setRefs((snap.references ?? []).map((ref: RefCard) => ({ ...ref, url: ref.upload_id ? '/api/assistant/files/' + ref.upload_id + '/content' : ref.url ?? '' }))); setNodes(snap.nodes ?? []); setEdges(snap.edges ?? []); setPan(snap.viewport ? { x: snap.viewport.x, y: snap.viewport.y } : { x: 0, y: 0 }); setZoom(snap.viewport?.zoom ?? 1); dirtyRef.current = false; }}><option value="">보드 선택</option>{boardList.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}</select><h1>{boardName}</h1><button className="icon-button" title="이름 변경" onClick={() => void renameBoard()}>✎</button><button className="icon-button" title="새 보드" onClick={() => void createBoard()}>＋</button></div>
+          <span className="eyebrow">PROJECT ART REFERENCES</span>
+          <div className="art-board-title-row"><h1>{boardName}</h1><button className="icon-button" title="이름 변경" onClick={() => void renameBoard()}>✎</button></div>
           <p>반실사 얼굴 · 오래된 PC 호러 게임의 모델링 언어 · 실사 기반 재질</p>
         </div>
         <div className="art-header-actions">
@@ -476,10 +496,10 @@ export function ArtReferenceCanvas() {
           </span>
           <div className="art-header-buttons">
             <button className="secondary-button" onClick={() => void analyzeBoard()} disabled={analysisBusy}>
-              {analysisBusy ? '분석 중…' : '보드 분석'}
+              {analysisBusy ? '자동 정리 중…' : '전체 레퍼런스 자동 정리'}
             </button>
             <button className="primary-button" onClick={() => void previewBrief()}>
-              ImageBrief 미리보기 ↗
+              이미지 생성 준비 ↗
             </button>
           </div>
         </div>
@@ -497,7 +517,7 @@ export function ArtReferenceCanvas() {
         <select aria-label="연결 관계" value={edgeType} onChange={(event) => setEdgeType(event.target.value as ArtCanvasEdge['edge_type'])}>
           <option value="supports">뒷받침</option><option value="contradicts">충돌</option><option value="variant_of">변형</option><option value="uses_only">부분 채택</option><option value="derived_from">파생</option>
         </select>
-        <button className="art-tool" disabled={!boardId} onClick={() => void saveRevision()}>저장</button>
+        <button className="art-tool" disabled={!boardId} onClick={() => void saveRevision()}>변경 저장</button>
         <span className="toolbar-rule" />
         <button className="art-tool" onClick={() => inputRef.current?.click()}>
           ＋ 이미지 추가
@@ -507,7 +527,7 @@ export function ArtReferenceCanvas() {
         <span className="zoom-readout">{Math.round(zoom * 100)}%</span>
         <button className="art-tool viewport-button" onClick={() => setZoom((value) => Math.min(1.8, value + 0.1))}>＋</button>
         <button className="art-tool" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>맞춤 보기</button>
-        <select aria-label="보드 이력" value="" onChange={(event) => { if (event.target.value) void restoreRevision(Number(event.target.value)); }}><option value="">이력 v{revision}</option>{historyItems.map((item) => <option key={item.revision} value={item.revision}>v{item.revision} · {new Date(item.created_at).toLocaleString('ko-KR')}</option>)}</select>
+        <span className="save-history-label">{syncState === '서버에 저장됨' ? '최근 변경 저장됨' : '변경 내용 자동 저장'}</span>
         <input
           ref={inputRef}
           type="file"
@@ -550,7 +570,7 @@ export function ArtReferenceCanvas() {
           <div className="board-grid" />
           <div className="board-label">
             <span>CHARACTER / ENVIRONMENT</span>
-            <strong>{boardId ? '보드 revision ' + revision : '서버 연결 중'}</strong>
+            <strong>{boardId ? '프로젝트 아트보드' : '서버 연결 중'}</strong>
           </div>
           <div className="board-stage" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
           <svg className="canvas-edges">
@@ -579,7 +599,7 @@ export function ArtReferenceCanvas() {
             <div className="art-empty-state">
               <span className="eyebrow">REFERENCE BOARD</span>
               <h2>팀의 시각 언어를 이곳에 모아보세요</h2>
-              <p>PNG, JPEG, WEBP 원본은 그대로 보존되고, 검토한 레퍼런스만 ImageBrief에 포함됩니다.</p>
+              <p>PNG, JPEG, WEBP 원본은 그대로 보존됩니다. 업로드한 이미지는 자동으로 분석하고 생성 참고 자료로 정리합니다.</p>
               <button className="primary-button" onClick={() => inputRef.current?.click()}>첫 레퍼런스 추가</button>
             </div>
           )}
@@ -602,12 +622,12 @@ export function ArtReferenceCanvas() {
         <aside className={'art-inspector ' + (mobilePanel === 'canvas' ? 'mobile-hidden' : '')}>
           {brief && (
             <div className="brief-card">
-              <span className="eyebrow">IMAGEBRIEF / DRAFT</span>
+              <span className="eyebrow">이미지 생성 준비</span>
               <strong>{brief.request}</strong>
-              <p>{brief.instructions || '선택된 레퍼런스가 없습니다.'}</p>
+              <p>{brief.instructions || '자동으로 정리된 레퍼런스가 없습니다.'}</p>
               <small className="brief-meta">
-                {brief.style_approved ? 'Art Bible v' + brief.style_version + ' 적용' : '승인된 Art Bible 없음'}
-                {' · '}레퍼런스 {brief.reference_upload_ids?.length ?? 0}개
+                {brief.style_approved ? '승인된 아트 규칙 적용' : '승인된 아트 규칙 없음'}
+                {' · '}참고 이미지 {brief.reference_upload_ids?.length ?? 0}개
               </small>
               {brief.approval_id ? (
                 <button
@@ -625,7 +645,7 @@ export function ArtReferenceCanvas() {
                     }
                   }}
                 >
-                  {brief.generated ? '생성 작업 완료' : '승인하고 생성'}
+                  {brief.generated ? '이미지 생성 완료' : '확인하고 이미지 생성'}
                 </button>
               ) : (
                 <small>
@@ -644,8 +664,8 @@ export function ArtReferenceCanvas() {
             <div className="analysis-card">
               <div className="analysis-card-head">
                 <div>
-                  <span className="eyebrow">ART BIBLE / {analysis.status}</span>
-                  <h3>보드 분석 초안</h3>
+                  <span className="eyebrow">아트 방향 / {analysis.status}</span>
+                  <h3>자동 정리 결과</h3>
                 </div>
                 <span>{analysis.status}</span>
               </div>
@@ -682,7 +702,7 @@ export function ArtReferenceCanvas() {
           )}
           <div className="inspector-title">
             <div>
-              <span className="eyebrow">REFERENCE INSPECTOR</span>
+              <span className="eyebrow">이미지 정보</span>
               <h2>{selected?.name ?? '선택 없음'}</h2>
             </div>
             <span className="review-badge">{selected?.selected ? '선택됨' : '보류'}</span>
@@ -727,7 +747,7 @@ export function ArtReferenceCanvas() {
                 disabled={!selected.art_asset_id || assetAnalysisBusy}
                 onClick={() => void analyzeSelectedAsset()}
               >
-                {assetAnalysisBusy ? 'Gemini 분석 중…' : selected.art_asset_id ? 'Gemini로 이미지 분석' : '서버 업로드 후 분석 가능'}
+                {assetAnalysisBusy ? '이미지 자동 분류 중…' : selected.art_asset_id ? '이미지 다시 자동 분류' : '서버 업로드 후 자동 분류 가능'}
               </button>
               {selected.art_asset_id && (
                 <>
@@ -762,7 +782,7 @@ export function ArtReferenceCanvas() {
                     {(assetAnalysis.observations?.materials ?? []).slice(0, 4).map((item: string) => <span key={item}>{item}</span>)}
                     {(assetAnalysis.observations?.palette ?? []).slice(0, 4).map((item: string) => <span key={item}>{item}</span>)}
                   </div>
-                  <small>AI 관찰은 초안이며 Art Bible 규칙이나 canonical 자산이 아닙니다.</small>
+                  <small>자동 분류 결과입니다. 필요하면 아래에서 직접 수정할 수 있습니다.</small>
                   <label>사람 수정값(JSON)
                     <textarea rows={5} value={assetCorrections} onChange={(event) => setAssetCorrections(event.target.value)} />
                   </label>
@@ -775,7 +795,7 @@ export function ArtReferenceCanvas() {
                 <strong>{selected.upload_id ? '원본 hash 검증 대상' : '로컬 초안'}</strong>
                 <span>권리 상태</span>
                 <strong>{selected.rights_note?.trim() ? '권리 메모 있음' : '권리 메모 없음'}</strong>
-                <span>ImageBrief 포함</span>
+                <span>이미지 생성 참고</span>
                 <strong>{selectedCount}개 선택</strong>
               </div>
             </>
@@ -812,7 +832,7 @@ export function ArtReferenceCanvas() {
                 ))}
               </div>
             ) : (
-              <p className="output-empty">아직 생성된 결과가 없습니다. ImageBrief를 승인하면 이곳에 표시됩니다.</p>
+              <p className="output-empty">아직 생성된 결과가 없습니다. 이미지 생성 준비를 확인하면 결과가 표시됩니다.</p>
             )}
           </div>
         </aside>
