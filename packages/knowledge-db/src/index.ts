@@ -577,7 +577,8 @@ export class KnowledgeStore {
       const board = await first<{ current_revision: number }>(
         sql`SELECT current_revision FROM art_boards
         WHERE id=${input.boardId} AND project_id=${input.projectId} AND archived_at IS NULL
-          AND (owner_id=${input.ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=art_boards.id AND s.user_id=${input.ownerId} AND s.role='editor'))
+          AND (owner_id=${input.ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=art_boards.id AND s.user_id=${input.ownerId} AND s.role='editor')
+            OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=art_boards.project_id AND m.user_id=${input.ownerId} AND m.role='admin'))
           FOR UPDATE`,
         tx,
       );
@@ -694,7 +695,8 @@ export class KnowledgeStore {
     const result = await sql`UPDATE art_board_analyses a SET status='REJECTED'
       FROM art_boards b WHERE a.id=${analysisId} AND a.board_id=${boardId} AND a.revision=${revision}
         AND b.id=a.board_id AND b.project_id=${projectId}
-        AND (b.owner_id=${ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=b.id AND s.user_id=${ownerId} AND s.role='editor'))
+        AND (b.owner_id=${ownerId} OR EXISTS (SELECT 1 FROM art_board_shares s WHERE s.board_id=b.id AND s.user_id=${ownerId} AND s.role='editor')
+          OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=b.project_id AND m.user_id=${ownerId} AND m.role='admin'))
         AND a.status='DRAFT' RETURNING a.id`.execute(this.db);
     return Boolean(result.rows[0]);
   }
