@@ -130,6 +130,18 @@ function AssistantView() {
     await loadConvs();
   };
 
+  const deleteConv = async (conversation: Conv) => {
+    if (!window.confirm('이 대화와 모든 메시지·실행 기록을 삭제할까요?')) return;
+    await api('/api/assistant/conversations/' + conversation.id, { method: 'DELETE' });
+    if (conversation.id === convId) {
+      esRef.current?.close();
+      setConvId(null);
+      setMessages([]);
+      setApprovals([]);
+    }
+    await loadConvs();
+  };
+
   const streamRun = (runId: string) => {
     esRef.current?.close();
     const es = new EventSource(`/api/assistant/runs/${runId}/stream`);
@@ -300,6 +312,7 @@ function AssistantView() {
           <div key={c.id} className={`conv-item-wrap ${c.id === convId ? 'active' : ''}`}>
             <button className="conv-item" onClick={() => void openConv(c.id)}>{c.title}</button>
             <button className="conv-rename" aria-label={c.title + ' 이름 수정'} title="대화 이름 수정" onClick={() => void renameConv(c)}>✎</button>
+            <button className="conv-delete" aria-label={c.title + ' 삭제'} title="대화 삭제" onClick={() => void deleteConv(c)}>×</button>
           </div>
         ))}
         {!convs.length && <p className="dim">대화가 없습니다.</p>}
