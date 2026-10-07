@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { api } from './api.ts';
 
 // 웹 어시스턴트 — spec §7: 대화/메시지/SSE 스트림 + 승인 카드 + 우측 일정·작업 패널.
@@ -55,6 +55,20 @@ const PHASE_KO: Record<string, string> = {
 };
 
 export function Assistant() {
+  return <AssistantBoundary><AssistantView /></AssistantBoundary>;
+}
+
+class AssistantBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { console.error('assistant-render-error', error, info); }
+  render() {
+    if (this.state.failed) return <section className="assistant-render-error"><strong>답변을 표시하지 못했습니다.</strong><p>서버 응답 형식을 확인하는 동안 화면을 보호했습니다. 대화를 새로고침해 다시 시도해 주세요.</p><button className="primary-button" onClick={() => this.setState({ failed: false })}>다시 표시</button></section>;
+    return this.props.children;
+  }
+}
+
+function AssistantView() {
   const [convs, setConvs] = useState<Conv[]>([]);
   const [convId, setConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
