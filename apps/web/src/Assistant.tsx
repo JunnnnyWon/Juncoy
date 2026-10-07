@@ -142,6 +142,17 @@ function AssistantView() {
     await loadConvs();
   };
 
+  const deleteAllConvs = async () => {
+    if (!window.confirm('현재 계정의 대화와 모든 메시지·승인·실행 기록을 전부 영구 삭제할까요? 이 작업은 복구할 수 없습니다.')) return;
+    await api<{ deleted: number }>('/api/assistant/conversations', { method: 'DELETE' });
+    esRef.current?.close();
+    setConvId(null);
+    setMessages([]);
+    setApprovals([]);
+    setLive(null);
+    await loadConvs();
+  };
+
   const streamRun = (runId: string) => {
     esRef.current?.close();
     const es = new EventSource(`/api/assistant/runs/${runId}/stream`);
@@ -307,6 +318,7 @@ function AssistantView() {
         <button className="primary-button assistant-new" onClick={() => void newConv()}>
           <span>+</span> 새 대화
         </button>
+        {!!convs.length && <button className="assistant-delete-all" onClick={() => void deleteAllConvs()}>대화 기록 전체 삭제</button>}
         <div className="assistant-nav-label">대화 기록</div>
         {asArray<Conv>(convs).filter((c) => c && typeof c === 'object').map((c) => (
           <div key={c.id} className={`conv-item-wrap ${c.id === convId ? 'active' : ''}`}>
