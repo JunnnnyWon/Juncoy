@@ -42,7 +42,7 @@ Local test database: temporary container `juncoy-knowledge-test`, pgvector/pg17,
 - API and knowledge worker now both mount `/home/junnnnyserver/services/discord-meeting-bot/.data/knowledge` at `/data/knowledge`; this was corrected after detecting the API mount gap during deployment verification.
 - Final server knowledge DB migrations observed through `013_art_brief_provenance.sql`.
 - Current server health/provider smoke from the preceding release included API health, Gemini Vision, Upstage Parse and OpenRouter Flare catalog checks.
-- Still requiring this release: migrations 011-013, updated source/image hash, authenticated production web E2E, one real GPT Image 2.5 Flare generation, and team-data PDF/scanned-PDF quality review. These are not marked PASS until directly verified.
+- Remaining external gates: authenticated production web E2E and team-data PDF/scanned-PDF quality review. The migration, source/image release, and one real GPT Image 2.5 Flare provider smoke are verified below.
 
 ## Final deployment evidence
 
@@ -55,6 +55,7 @@ Local test database: temporary container `juncoy-knowledge-test`, pgvector/pg17,
 - Final local browser JSON: `artifacts/browser-results.json`, expected 11, skipped 0, unexpected 0, flaky 0.
 - Final local integration: 11 files / 68 tests passed with meeting PostgreSQL and pgvector PostgreSQL 17 test DB.
 - Production model flags verified without printing secrets: image `openai/gpt-image-2.5-flare`, vision `google/gemini-3.7-flash`, Upstage Parse enabled with the configured document-digitization endpoint.
+- Production API health endpoint returned HTTP 200 with `ok=true, mode=real` and final containers use `release-59ee085`.
 
 ## Rollback
 
