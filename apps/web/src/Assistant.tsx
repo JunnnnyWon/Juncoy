@@ -32,6 +32,8 @@ interface LiveRun {
   evidence: any[];
 }
 
+const asArray = <T,>(value: unknown): T[] => Array.isArray(value) ? value as T[] : [];
+
 const STATUS_KO: Record<string, string> = {
   COMPLETE: '전체 확인 완료',
   PARTIAL: '부분 확인',
@@ -75,7 +77,7 @@ export function Assistant() {
 
   const loadConvs = async () => {
     try {
-      setConvs(await api<Conv[]>('/api/assistant/conversations'));
+      setConvs(asArray<Conv>(await api<Conv[]>('/api/assistant/conversations')));
     } catch (e: any) {
       setError(
         e?.status === 503
@@ -93,8 +95,8 @@ export function Assistant() {
     const r = await api<{ conversation: Conv; messages: Msg[]; pending_approvals: Approval[] }>(
       `/api/assistant/conversations/${id}`,
     );
-    setMessages(r.messages);
-    setApprovals(r.pending_approvals ?? []);
+    setMessages(asArray<Msg>(r.messages));
+    setApprovals(asArray<Approval>(r.pending_approvals));
   };
 
   const newConv = async () => {
@@ -128,13 +130,13 @@ export function Assistant() {
         const data = JSON.parse((ev as MessageEvent).data || '{}');
         if (kind === 'phase') liveRun.phase = data.phase;
         else if (kind === 'evidence') liveRun.evidence.push(data);
-        else if (kind === 'coverage') liveRun.coverage = data.source_coverage;
+        else if (kind === 'coverage') liveRun.coverage = asArray(data.source_coverage);
         else if (kind === 'result') liveRun.status = data.status;
         else if (kind === 'error') liveRun.status = 'FAILED';
         else if (kind === 'approval' && convId)
           void api<{ pending_approvals: Approval[] }>(
             `/api/assistant/conversations/${convId}`,
-          ).then((r) => setApprovals(r.pending_approvals ?? []));
+          ).then((r) => setApprovals(asArray<Approval>(r.pending_approvals)));
         setLive({ ...liveRun, evidence: [...liveRun.evidence] });
         if (kind === 'done' || kind === 'result' || kind === 'error') {
           es.close();
@@ -209,7 +211,7 @@ export function Assistant() {
             ? setFiles
             : setImages;
     api<any[]>(path)
-      .then(set)
+      .then((value) => set(asArray(value)))
       .catch(() => set([]));
   }, [panelTab]);
 
@@ -242,12 +244,12 @@ export function Assistant() {
     const r = await api<{ pending_approvals: Approval[] }>(
       `/api/assistant/conversations/${convId}`,
     );
-    setApprovals(r.pending_approvals ?? []);
+    setApprovals(asArray<Approval>(r.pending_approvals));
   };
   const reparseFile = async (id: string) => {
     await api('/api/assistant/files/' + id + '/reparse', { method: 'POST' });
     const r = await api<any[]>('/api/assistant/files');
-    setFiles(r);
+    setFiles(asArray(r));
   };
   useEffect(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), [messages, live]);
   useEffect(() => () => esRef.current?.close(), []);
@@ -329,7 +331,7 @@ export function Assistant() {
         ) : (
           <>
             <div className="assistant-msgs">
-              {messages.map((m) => (
+              {asArray<Msg>(messages).map((m) => (
                 <div key={m.id} className={`msg msg-${m.role}`}>
                   <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}<time>{new Date(m.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></div>
                   <div className="msg-body">{renderMessage(m.content)}</div>
