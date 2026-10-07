@@ -97,8 +97,8 @@ describe('document and image provider adapters', () => {
 
   it('normalizes nested HTML into blocks and pages', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      content: { html: '<p>cell</p>' },
-      elements: [{ id: 'nested', page: 2, content: { html: '<h2>title</h2><p>cell</p>' } }],
+      content: { html: '<p>cell</p>', text: '', markdown: '' },
+      elements: [{ id: 'nested', page: 2, content: { html: '<h2>title</h2><p>cell</p>', text: '', markdown: '' } }],
     }), { status: 200 }));
     const result = await new UpstageDocumentParse({ apiKey: 'secret', endpoint: 'https://parse.test' }).parsePdf(Buffer.from('%PDF-test'));
     expect(result.blocks[0].text).toContain('title');

@@ -81,9 +81,9 @@ async function readResponseWithinLimit(response: Response, maxBytes: number) {
 }
 
 function elementText(element: any): string {
-  if (typeof element.text === 'string') return element.text;
+  if (typeof element.text === 'string' && element.text.trim()) return element.text;
   if (typeof element.content === 'string') return textFromHtml(element.content);
-  if (typeof element.content?.text === 'string') return element.content.text;
+  if (typeof element.content?.text === 'string' && element.content.text.trim()) return element.content.text;
   if (typeof element.content?.html === 'string') return textFromHtml(element.content.html);
   if (typeof element.content?.markdown === 'string') return element.content.markdown;
   if (typeof element.html === 'string') return textFromHtml(element.html);
@@ -122,7 +122,7 @@ export class UpstageDocumentParse {
     const html = typeof body.html === 'string' ? body.html : typeof contentObject?.html === 'string' ? contentObject.html : undefined;
     const markdown = typeof body.markdown === 'string' ? body.markdown : typeof contentObject?.markdown === 'string' ? contentObject.markdown : undefined;
     const rawText = typeof body.text === 'string' ? body.text : typeof contentObject?.text === 'string' ? contentObject.text : typeof content === 'string' ? content : undefined;
-    const text = rawText ?? markdown ?? (html ? textFromHtml(html) : '');
+    const text = rawText?.trim() ? rawText : markdown?.trim() ? markdown : html ? textFromHtml(html) : '';
     if (!text.trim()) throw new Error('upstage_document_parse_empty_result');
     return {
       text,
