@@ -784,6 +784,17 @@ export class KnowledgeStore {
     return Number(res.numAffectedRows ?? 0) > 0;
   }
 
+  async updateConversationTitle(projectId: string, conversationId: string, ownerId: string, title: string) {
+    const res = await sql`UPDATE assistant_conversations SET title=${title}, updated_at=now()
+      WHERE id=${conversationId} AND project_id=${projectId} AND owner_id=${ownerId} AND archived=false`.execute(this.db);
+    return Number(res.numAffectedRows ?? 0) > 0;
+  }
+
+  async deleteAllConversations(projectId: string, ownerId: string) {
+    const res = await sql`DELETE FROM assistant_conversations WHERE project_id=${projectId} AND owner_id=${ownerId}`.execute(this.db);
+    return Number(res.numAffectedRows ?? 0);
+  }
+
   async createMessage(
     conversationId: string,
     role: string,

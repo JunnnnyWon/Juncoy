@@ -47,6 +47,19 @@ interface Deps {
 const APPROVAL_TTL_MS = () => Number(process.env.ASSISTANT_APPROVAL_TTL_MS ?? 600_000);
 const SSE_HEARTBEAT_MS = () => Number(process.env.ASSISTANT_SSE_HEARTBEAT_MS ?? 15_000);
 
+async function summarizeConversationTitle(ctx: KnowledgeCtx, firstMessage: string) {
+  try {
+    const result = await ctx.model.structured(
+      z.object({ title: z.string().min(2).max(36) }),
+      { first_message: firstMessage },
+      '첫 사용자 메시지를 보고 대화 제목을 만든다. 한국어 2~8단어, 36자 이내로 작성한다. 질문의 핵심 주제만 남기고 날짜, 이모지, 따옴표, 마침표, 대화라는 단어는 쓰지 않는다. JSON으로 title만 반환한다.',
+    );
+    return result.result.title.trim().replace(/["'“”‘’.,!?]/g, '').slice(0, 36) || '새 대화';
+  } catch {
+    return firstMessage.replace(/\s+/g, ' ').trim().slice(0, 32) || '새 대화';
+  }
+}
+
 /** 질문을 실행 모드로 분류 — Solar structured. 실패 시 answer로 안전하게 떨어진다. */
 async function classifyMode(
   ctx: KnowledgeCtx,
@@ -429,6 +442,19 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return { ok: true };
   });
 
+  app.patch('/api/assistant/conversations/:id', async (req, reply) => {
+    const { session, ctx, projectId } = await requireSession(req);
+    const body = z.object({ title: z.string().trim().min(1).max(120) }).parse(req.body ?? {});
+    const ok = await ctx.store.updateConversationTitle(projectId, (req.params as any).id, session.user_id, body.title);
+    if (!ok) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return { ok: true, title: body.title };
+  });
+
+  app.delete('/api/assistant/conversations', async (req) => {
+    const { session, ctx, projectId } = await requireSession(req);
+    return { ok: true, deleted: await ctx.store.deleteAllConversations(projectId, session.user_id) };
+  });
+
   // ── 메시지 → run ──────────────────────────────────────────────────
   app.post('/api/assistant/conversations/:id/messages', async (req, reply) => {
     const { session, ctx, projectId, role } = await requireSession(req);
@@ -444,11 +470,16 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         attachments: z.array(z.string()).max(10).default([]),
       })
       .parse(req.body ?? {});
+    const existingMessages = await ctx.store.listMessages(conv.id, 1);
     const runId = await ctx.store.createRun(conv.id, 'answer');
     const messageId = await ctx.store.createMessage(conv.id, 'user', body.content, {
       runId,
       attachments: body.attachments,
     });
+    if (!existingMessages.length && conv.title === '새 대화') {
+      const title = await summarizeConversationTitle(ctx, body.content);
+      await ctx.store.updateConversationTitle(projectId, conv.id, session.user_id, title);
+    }
     // 비동기 실행 — 응답은 run_id만, 결과는 SSE로.
     void executeRun(
       ctx,

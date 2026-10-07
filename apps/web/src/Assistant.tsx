@@ -123,6 +123,13 @@ function AssistantView() {
     setConvId(id);
   };
 
+  const renameConv = async (conversation: Conv) => {
+    const title = window.prompt('대화 이름', conversation.title);
+    if (!title?.trim() || title.trim() === conversation.title) return;
+    await api('/api/assistant/conversations/' + conversation.id, { method: 'PATCH', body: JSON.stringify({ title: title.trim() }) });
+    await loadConvs();
+  };
+
   const streamRun = (runId: string) => {
     esRef.current?.close();
     const es = new EventSource(`/api/assistant/runs/${runId}/stream`);
@@ -290,13 +297,10 @@ function AssistantView() {
         </button>
         <div className="assistant-nav-label">대화 기록</div>
         {asArray<Conv>(convs).filter((c) => c && typeof c === 'object').map((c) => (
-          <button
-            key={c.id}
-            className={`conv-item ${c.id === convId ? 'active' : ''}`}
-            onClick={() => void openConv(c.id)}
-          >
-            {c.title}
-          </button>
+          <div key={c.id} className={`conv-item-wrap ${c.id === convId ? 'active' : ''}`}>
+            <button className="conv-item" onClick={() => void openConv(c.id)}>{c.title}</button>
+            <button className="conv-rename" aria-label={c.title + ' 이름 수정'} title="대화 이름 수정" onClick={() => void renameConv(c)}>✎</button>
+          </div>
         ))}
         {!convs.length && <p className="dim">대화가 없습니다.</p>}
       </aside>
