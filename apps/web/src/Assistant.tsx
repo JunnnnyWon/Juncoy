@@ -185,10 +185,12 @@ function AssistantView() {
             `/api/assistant/conversations/${convId}`,
           ).then((r) => setApprovals(asArray<Approval>(r.pending_approvals)));
         setLive({ ...liveRun, evidence: [...liveRun.evidence] });
-        if (kind === 'done' || kind === 'result' || kind === 'error') {
+        if (kind === 'result') {
           es.close();
-          // Do not replace the active React tree with an untrusted server payload during SSE completion.
-          // The next explicit conversation open will fetch and normalize the persisted messages.
+          setLive(null);
+          if (convId) void openConv(convId);
+        } else if (kind === 'error') {
+          es.close();
           setLive({ ...liveRun, evidence: [...liveRun.evidence] });
         }
       });
@@ -203,7 +205,7 @@ function AssistantView() {
     setBusy(true);
     try {
       const content = input.trim();
-      const r = await api<{ run_id: string; message_id: string }>(
+      const r = await api<{ run_id: string; message_id: string; title?: string }>(
         `/api/assistant/conversations/${convId}/messages`,
         { method: 'POST', body: JSON.stringify({ content }) },
       );
@@ -221,7 +223,8 @@ function AssistantView() {
         },
       ]);
       // The API generates the first-message title before returning; refresh the rail immediately.
-      await loadConvs();
+      if (r.title) setConvs((current) => current.map((conversation) => conversation.id === convId ? { ...conversation, title: r.title! } : conversation));
+      else await loadConvs();
       streamRun(r.run_id);
     } finally {
       setBusy(false);
@@ -391,7 +394,6 @@ function AssistantView() {
                   <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}</div>
                   <div className="msg-body">{renderMarkdown(m.content)}</div>
                   <CitationList citations={m.citations} />
-                  {Array.isArray(m.citations) && m.citations.filter((citation: any) => citation && typeof citation === 'object').length > 0 && <details className="message-citations"><summary>참고한 근거 {m.citations.filter((citation: any) => citation && typeof citation === 'object').length}건</summary>{m.citations.filter((citation: any) => citation && typeof citation === 'object').map((citation: any, index: number) => <div key={citation?.id ?? index} className="citation-row"><strong>{safeText(citation?.source ?? citation?.title, '프로젝트 자료')}</strong><span>{safeText(citation?.quote ?? citation?.excerpt ?? citation?.stable_key ?? citation?.url, '근거 세부 정보')}</span>{citation?.page && <small>페이지 {safeText(citation.page)}{citation.block ? ' · ' + safeText(citation.block) : ''}</small>}</div>)}</details>}
                 </div>
               ))}
               {live && (

@@ -481,9 +481,11 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       runId,
       attachments: body.attachments,
     });
+    let generatedTitle: string | undefined;
     if (!existingMessages.length && conv.title === '새 대화') {
       const title = await summarizeConversationTitle(ctx, body.content);
       await ctx.store.updateConversationTitle(projectId, conv.id, session.user_id, title);
+      generatedTitle = title;
     }
     // 비동기 실행 — 응답은 run_id만, 결과는 SSE로.
     void executeRun(
@@ -497,7 +499,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       runId,
       body.content,
     );
-    return reply.code(202).send({ run_id: runId, message_id: messageId });
+    return reply.code(202).send({ run_id: runId, message_id: messageId, title: generatedTitle });
   });
 
   app.get('/api/assistant/runs/:id', async (req, reply) => {
