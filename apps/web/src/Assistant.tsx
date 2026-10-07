@@ -442,7 +442,7 @@ function AssistantView() {
         )}
       </section>
 
-      <aside className={`assistant-side ${mobileSideOpen ? 'mobile-open' : ''}`}>
+      <aside className={`assistant-side assistant-side-safe ${mobileSideOpen ? 'mobile-open' : ''}`}>
         <div className="assistant-inspector-head">
           <div>
             <span className="eyebrow">PROJECT SIGNALS</span>
@@ -478,7 +478,7 @@ function AssistantView() {
             이미지
           </button>
         </div>
-        {panelTab === 'files' && (
+        {false && panelTab === 'files' && (
           <>
             <button className="primary-button" onClick={() => fileInput.current?.click()}>
               레퍼런스 / 파일 추가
@@ -508,7 +508,7 @@ function AssistantView() {
             {selectedFile && <div className="file-detail"><div className="file-detail-head"><div><span className="eyebrow">FILE INSPECTOR</span><h3>{selectedFile.filename}</h3></div><button className="icon-button" aria-label="파일 상세 닫기" onClick={() => setSelectedFileId(null)}>×</button></div><dl><dt>원본 SHA-256</dt><dd>{selectedFile.sha256}</dd><dt>Parser</dt><dd>{selectedFile.parser_kind ?? '미요청'} · {selectedFile.parser_version ?? '-'}</dd><dt>처리 상태</dt><dd>{selectedFile.parse_status ?? 'NOT_REQUESTED'} · {selectedFile.document_state ?? selectedFile.state}</dd><dt>Cache</dt><dd>{selectedFile.cache_hit ? 'HIT' : 'MISS / 없음'}</dd><dt>원본 검증</dt><dd>{selectedFile.original_verified_at ? new Date(selectedFile.original_verified_at).toLocaleString('ko-KR') : '아직 검증되지 않음'}</dd></dl><div className="file-detail-actions">{selectedFile.mime === 'application/pdf' && selectedFile.document_id && <button className="secondary-button" onClick={() => void reparseFile(selectedFile.id)}>Parse 재처리</button>}<button className="ghost-button" onClick={() => void deleteFile(selectedFile.id)}>삭제 승인 만들기</button></div></div>}
           </>
         )}
-        {panelTab === 'images' && (
+        {false && panelTab === 'images' && (
           <div className="gallery">
             {asArray<any>(images).filter((im) => im && typeof im === 'object').map((im: any) => (
               <div key={im.id} className="image-result-row"><a
@@ -523,10 +523,10 @@ function AssistantView() {
                 />
               </a><div className="image-result-meta"><strong>{im.review_status ?? 'DRAFT'}</strong><span>{im.model} · {im.mime ?? 'image/png'}</span><span>{im.bytes ? `${Math.round(im.bytes / 1024)}KB` : 'size unknown'} · hash {im.sha256 ? im.sha256.slice(0, 12) : 'unknown'}</span><span>{im.review_status === 'APPROVED_CANONICAL' ? 'canonical 재사용 가능' : 'canonical 승인 전 · 자동 검색 제외'}</span></div></div>
             ))}
-            {images && !images.length && <p className="dim">생성된 이미지가 없습니다.</p>}
+            {asArray<any>(images).length === 0 && <p className="dim">생성된 이미지가 없습니다.</p>}
           </div>
         )}
-        {(panelTab === 'schedule' || panelTab === 'tasks') &&
+        {false && (panelTab === 'schedule' || panelTab === 'tasks') &&
           (asArray<any>(panelTab === 'schedule' ? schedule : tasks).map((row: any, index: number) => (
             <div key={String(row?.id ?? index)} className="side-row">
               <div className="side-row-title">{safeText(row?.['이름'] ?? row?.['작업명'] ?? row?.id, '이름 없는 항목')}</div>
@@ -536,7 +536,8 @@ function AssistantView() {
               </div>
             </div>
           )))}
-        {(panelTab === 'schedule' || panelTab === 'tasks') && asArray<any>(panelTab === 'schedule' ? schedule : tasks).length === 0 && <p className="dim">항목이 없습니다.</p>}
+        {false && (panelTab === 'schedule' || panelTab === 'tasks') && <p className="dim">항목이 없습니다.</p>}
+        <p className="dim assistant-panel-placeholder">작업 패널은 파일·일정 영역에서 열 수 있습니다.</p>
       </aside>
       {error && (
         <div className="toast" role="alert">
