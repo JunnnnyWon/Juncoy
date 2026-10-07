@@ -49,6 +49,29 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('ingests a new original in the durable worker without a precreated document', async (ctx) => {
+    skipIf(ctx);
+    const dir = await mkdtemp(join(tmpdir(), 'juncoy-first-ingest-'));
+    const previous = process.env.KNOWLEDGE_UPLOAD_DIR;
+    try {
+      process.env.KNOWLEDGE_UPLOAD_DIR = dir;
+      const projectId = randomUUID();
+      await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'first ingest')`.execute(store!.db);
+      const bytes = Buffer.from('worker content');
+      const upload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'first.txt', mime: 'text/plain', bytes: bytes.length, sha256: sha256(bytes), storageKey: 'first' });
+      await new UploadStorage(dir).put('first', bytes);
+      await store!.updateUpload(upload.id, { state: 'EXTRACTING' });
+      expect(await reparseUpload(store!, upload.id)).toMatchObject({ reparsed: true });
+      const ready = await store!.getUpload(projectId, upload.id);
+      expect(ready.state).toBe('INDEXING');
+      expect(ready.document_id).toBeTruthy();
+      const doc = await first<any>(sql`SELECT normalized FROM document_versions WHERE document_id=${ready.document_id}`, store!.db);
+      expect(doc.normalized.text).toBe('worker content');
+    } finally {
+      if (previous === undefined) delete process.env.KNOWLEDGE_UPLOAD_DIR; else process.env.KNOWLEDGE_UPLOAD_DIR = previous;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
   it('persists revision geometry atomically and preserves previous revisions', async (ctx) => {
     skipIf(ctx);
     const projectId = randomUUID();

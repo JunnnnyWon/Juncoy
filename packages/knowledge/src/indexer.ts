@@ -2,7 +2,8 @@ import { KnowledgeStore, sql, first } from '@meeting/knowledge-db';
 import { chunkDocument } from './chunk.ts';
 import { UpstageEmbeddings, activeProfile, indexMissingEmbeddings } from './embeddings.ts';
 import { UpstageDocumentParse } from './document-parse-upstage.ts';
-import { UploadStorage, extractUpload, sha256 } from './uploads.ts';
+import { UploadStorage, extractUpload, sha256, ensureUploadSource, magicOk, type UploadMime } from './uploads.ts';
+import { OpenRouterVision } from './vision-openrouter.ts';
 
 // 추출/인덱싱 워커 — publish된 current 버전을 청크로 만들고 비활성 set에 채운 뒤
 // swapChunkSet으로 원자 공개한다 (§8.1). 임베딩은 활성 profile 단위.
@@ -15,16 +16,33 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string) {
   const upload = await first<any>(sql`
     SELECT id, project_id, document_id, filename, mime, sha256, storage_key
     FROM knowledge_uploads WHERE id=${uploadId} AND state != 'DELETED'`, store.db);
-  if (!upload || upload.mime !== 'application/pdf' || !upload.document_id)
+  if (!upload)
     return { skipped: 'not_parseable' } as const;
   const storage = new UploadStorage(process.env.KNOWLEDGE_UPLOAD_DIR ?? '/data/knowledge/uploads');
   const bytes = await storage.read(upload.storage_key);
   if (sha256(bytes) !== upload.sha256) throw new Error('upload_source_hash_mismatch');
+  if (!magicOk(bytes, upload.mime as UploadMime)) throw new Error('upload_magic_mismatch');
   const parser = process.env.UPSTAGE_DOCUMENT_PARSE_ENABLED === 'true' && process.env.UPSTAGE_API_KEY && process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT
     ? new UpstageDocumentParse({ apiKey: process.env.UPSTAGE_API_KEY, endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT, timeoutMs: Number(process.env.UPSTAGE_DOCUMENT_PARSE_TIMEOUT_MS ?? 60_000) })
     : undefined;
   const extracted = await extractUpload(bytes, upload.mime, { documentParse: parser, expectedSha256: upload.sha256 });
-  const normalized = { ...extracted.normalized, upload_id: upload.id, filename: upload.filename, mime: upload.mime };
+  let vision: unknown;
+  let text = extracted.text;
+  if (upload.mime.startsWith('image/') && process.env.OPENROUTER_VISION_ENABLED === 'true') {
+    if (!process.env.OPENROUTER_API_KEY) throw new Error('vision_not_configured');
+    const observation = await new OpenRouterVision(process.env.OPENROUTER_API_KEY, process.env.OPENROUTER_VISION_MODEL ?? 'google/gemini-3.7-flash').analyzeImage(bytes, upload.mime);
+    vision = observation;
+    text = [observation.description, ...observation.visible_text, ...observation.subjects, ...observation.materials, ...observation.lighting, ...observation.palette].join('\n');
+  }
+  if (!upload.document_id) {
+    const sourceId = await ensureUploadSource(store, upload.project_id);
+    const stableKey = 'upload:' + upload.id;
+    const marked = await store.markDocumentDirty(sourceId, stableKey, { filename: upload.filename, mime: upload.mime });
+    if (marked === 'tombstoned') return { skipped: 'deleted' } as const;
+    const document = await first<{ id: string }>(sql`SELECT id FROM documents WHERE source_id=${sourceId} AND stable_key=${stableKey}`, store.db);
+    upload.document_id = document!.id;
+  }
+  const normalized = { ...extracted.normalized, text, vision, upload_id: upload.id, filename: upload.filename, mime: upload.mime };
   const normalizedHash = sha256(JSON.stringify(normalized));
   const versionId = await store.createUploadVersion({
     uploadId: upload.id,
@@ -48,7 +66,8 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string) {
   });
   if (!published) return { skipped: 'publish_rejected' } as const;
   await store.enqueueJob('extract:' + upload.document_id + ':' + normalizedHash + ':' + versionId, 'extract', { document_id: upload.document_id, content_hash: normalizedHash });
-  await store.updateUpload(upload.id, { state: 'INDEXING' });
+  await sql`UPDATE knowledge_uploads SET state='INDEXING', document_id=${upload.document_id}
+    WHERE id=${upload.id} AND state != 'DELETED'`.execute(store.db);
   return { reparsed: true, parser: extracted.parserKind } as const;
 }
 
@@ -125,7 +144,14 @@ export async function indexerTick(
   const done = { extracted: 0, embedded: 0, failed: 0 };
   const jobs = await store.claimJobs(owner, ['parse', 'extract', 'index'], opts?.extractLimit ?? 8, 60_000);
   for (const job of jobs) {
+    let leaseLost = false;
+    const lease = setInterval(() => {
+      void store.renewJobLease(job, 60_000).then((renewed) => {
+        if (!renewed) leaseLost = true;
+      }).catch(() => { leaseLost = true; });
+    }, 15_000);
     try {
+      if (!(await store.renewJobLease(job, 60_000))) continue;
       if (job.kind === 'parse') {
         await reparseUpload(store, job.payload.upload_id);
         await store.finishJob(job, 'DONE');
@@ -173,11 +199,14 @@ export async function indexerTick(
         await store.finishJob(job, 'DONE');
       }
     } catch (err) {
+      if (leaseLost) continue;
       done.failed++;
       const retryable = job.attempts < 5;
       const backoff = new Date(Date.now() + Math.min(2 ** job.attempts, 64) * 1000);
       if (retryable) await store.retryJob(job, backoff, (err as Error).message.slice(0, 200));
       else await store.finishJob(job, 'DEAD_LETTER', (err as Error).message.slice(0, 200));
+    } finally {
+      clearInterval(lease);
     }
   }
   return done;

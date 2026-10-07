@@ -60,6 +60,8 @@ services:
 
   knowledge-worker:
     <<: *kapp
+    volumes:
+      - ../.data/knowledge:/data/knowledge
     container_name: discord-knowledge-worker
     command: [node, --import, tsx, apps/knowledge-worker/src/main.ts]
     depends_on:

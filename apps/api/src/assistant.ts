@@ -727,96 +727,11 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
           .send({ error: { code: 'MAGIC_MISMATCH', message: '파일 내용이 형식과 다릅니다.' } });
 
       await storage.put(u.storage_key, buf);
+      await ctx.store.enqueueJob('ingest:' + u.id + ':' + u.sha256, 'parse', {
+        upload_id: u.id, project_id: projectId, source_sha256: u.sha256,
+      });
       await ctx.store.updateUpload(u.id, { state: 'EXTRACTING', error: null });
-      try {
-        const documentParse =
-          u.mime === 'application/pdf' &&
-          process.env.UPSTAGE_DOCUMENT_PARSE_ENABLED === 'true' &&
-          process.env.UPSTAGE_API_KEY &&
-          process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT
-            ? new UpstageDocumentParse({
-                apiKey: process.env.UPSTAGE_API_KEY,
-                endpoint: process.env.UPSTAGE_DOCUMENT_PARSE_ENDPOINT,
-                timeoutMs: Number(process.env.UPSTAGE_DOCUMENT_PARSE_TIMEOUT_MS ?? 60_000),
-              })
-            : undefined;
-        const extracted = await extractUpload(buf, u.mime as UploadMime, {
-          documentParse,
-          expectedSha256: u.sha256,
-        });
-        let text = extracted.text;
-        let vision: unknown;
-        if (
-          u.mime.startsWith('image/') &&
-          process.env.OPENROUTER_VISION_ENABLED === 'true' &&
-          process.env.OPENROUTER_API_KEY
-        ) {
-          const observation = await new OpenRouterVision(
-            process.env.OPENROUTER_API_KEY,
-            process.env.OPENROUTER_VISION_MODEL ?? 'google/gemini-3.7-flash',
-          ).analyzeImage(buf, u.mime);
-          vision = observation;
-          text = [
-            observation.description,
-            observation.subjects.length ? 'Subjects: ' + observation.subjects.join(', ') : '',
-            observation.materials.length ? 'Materials: ' + observation.materials.join(', ') : '',
-            observation.lighting.length ? 'Lighting: ' + observation.lighting.join(', ') : '',
-            observation.palette.length ? 'Palette: ' + observation.palette.join(', ') : '',
-            observation.visible_text.length
-              ? 'Visible text: ' + observation.visible_text.join(' | ')
-              : '',
-          ]
-            .filter(Boolean)
-            .join('\n');
-        }
-        const sourceId = await ensureUploadSource(ctx.store, projectId);
-        const stableKey = `upload:${u.id}`;
-        await ctx.store.markDocumentDirty(sourceId, stableKey, {
-          filename: u.filename,
-          mime: u.mime,
-          uploader: session.user_id,
-        });
-        const doc = await first<{ id: string }>(
-          sql`SELECT id FROM documents WHERE source_id=${sourceId} AND stable_key=${stableKey}`,
-          ctx.store.db,
-        );
-        await ctx.store.publishVersion(doc!.id, {
-          contentHash: u.sha256,
-          sourceRevision: u.sha256,
-          normalized: {
-            ...extracted.normalized,
-            text,
-            filename: u.filename,
-            mime: u.mime,
-            upload_id: u.id,
-            vision,
-          },
-        });
-        const uploadVersionId = await ctx.store.createUploadVersion({
-          uploadId: u.id,
-          extractorVersion: '2',
-          sourceRevision: u.sha256,
-          parserKind: extracted.parserKind,
-          parserVersion: extracted.normalized.parser?.version,
-          parseStatus: extracted.parseStatus,
-          parseLatencyMs: extracted.parseLatencyMs,
-          parseRequestId: extracted.normalized.parser?.request_id,
-          parseErrorCode: extracted.parseError,
-          sourceSha256: u.sha256,
-          normalizedHash: createHash('sha256')
-            .update(JSON.stringify(extracted.normalized))
-            .digest('hex'),
-        });
-        await ctx.store.saveDocumentParseStructure(uploadVersionId, extracted.normalized);
-        await queueExtract(ctx.store, doc!.id, u.sha256);
-        await ctx.store.updateUpload(u.id, { state: 'INDEXING', documentId: doc!.id });
-      } catch (err: any) {
-        await ctx.store.updateUpload(u.id, { state: 'FAILED', error: String(err?.message ?? err) });
-        return reply
-          .code(422)
-          .send({ error: { code: 'EXTRACT_FAILED', message: '텍스트 추출에 실패했습니다.' } });
-      }
-      return { id: u.id, state: 'INDEXING' };
+      return reply.code(202).send({ id: u.id, state: 'EXTRACTING' });
     },
   );
 

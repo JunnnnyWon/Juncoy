@@ -177,6 +177,12 @@ export class KnowledgeStore {
         AND owner=${job.owner} AND status='RUNNING'`.execute(this.db);
     return Number(res.numAffectedRows ?? 0) > 0;
   }
+  async renewJobLease(job: KnowledgeJob, leaseMs: number) {
+    const result = await sql`UPDATE knowledge_jobs SET lease_until=now() + ${leaseMs} * interval '1 millisecond'
+      WHERE id=${job.id} AND generation=${job.generation} AND owner=${job.owner}
+        AND status='RUNNING' AND lease_until > now()`.execute(this.db);
+    return Number(result.numAffectedRows ?? 0) > 0;
+  }
 
   // ── 문서/버전: dirty 표시와 current 전환 분리 (§8.1) ──────────────
   /**
