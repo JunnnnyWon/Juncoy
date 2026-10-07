@@ -184,6 +184,22 @@ export class KnowledgeStore {
     return Number(result.numAffectedRows ?? 0) > 0;
   }
 
+  async failUploadJob(job: KnowledgeJob, errorCode: string, retryAt?: Date) {
+    return this.db.transaction().execute(async (tx) => {
+      const owned = await first(sql`SELECT id FROM knowledge_jobs
+        WHERE id=${job.id} AND generation=${job.generation} AND owner=${job.owner}
+          AND status='RUNNING' AND lease_until > now() FOR UPDATE`, tx);
+      if (!owned) return false;
+      await sql`UPDATE knowledge_jobs SET status=${retryAt ? 'RETRYABLE' : 'DEAD_LETTER'},
+        owner=null, lease_until=null, error_code=${errorCode}, due_at=${retryAt ?? sql`now()`}
+        WHERE id=${job.id}`.execute(tx);
+      await sql`UPDATE knowledge_uploads SET state=${retryAt ? 'EXTRACTING' : 'FAILED'}, error=${errorCode}
+        WHERE id=${job.payload.upload_id} AND state != 'DELETED'
+          AND sha256=${job.payload.source_sha256 ?? sql`sha256`}`.execute(tx);
+      return true;
+    });
+  }
+
   // ── 문서/버전: dirty 표시와 current 전환 분리 (§8.1) ──────────────
   /**
    * 원본 변경을 알게 되는 즉시 호출. tombstone이 있으면 새 문서로 부활시키지 않고
@@ -318,6 +334,8 @@ export class KnowledgeStore {
       const result = await persist(scoped, tx);
       if (result && typeof result === 'object' && 'skipped' in result)
         throw new Error('ingestion_publish_rejected');
+      if (job && !(await scoped.finishJob(job, 'DONE')))
+        throw new Error('ingestion_job_fenced');
       return result;
     });
   }

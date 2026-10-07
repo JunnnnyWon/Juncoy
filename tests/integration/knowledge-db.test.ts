@@ -49,6 +49,22 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('updates parse job failure and upload state atomically with fencing', async (ctx) => {
+    skipIf(ctx);
+    const projectId = randomUUID();
+    await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'failure recovery')`.execute(store!.db);
+    const hash = 'c'.repeat(64);
+    const upload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'failed.txt', mime: 'text/plain', bytes: 1, sha256: hash, storageKey: 'failure' });
+    await store!.enqueueJob('failure-job', 'parse', { upload_id: upload.id, source_sha256: hash });
+    const [job] = await store!.claimJobs('failure-owner', ['parse'], 1, 30000);
+    expect(await store!.failUploadJob({ ...job, generation: job.generation - 1 }, 'stale')).toBe(false);
+    expect(await store!.failUploadJob(job, 'temporary', new Date(0))).toBe(true);
+    expect((await store!.getUpload(projectId, upload.id)).state).toBe('EXTRACTING');
+    const [retry] = await store!.claimJobs('failure-retry', ['parse'], 1, 30000);
+    expect(await store!.failUploadJob(retry, 'upload_source_hash_mismatch')).toBe(true);
+    expect((await store!.getUpload(projectId, upload.id)).state).toBe('FAILED');
+    expect((await first<any>(sql`SELECT status FROM knowledge_jobs WHERE id=${job.id}`, store!.db)).status).toBe('DEAD_LETTER');
+  });
   it('fences stale upload commits and rolls back partial ingestion writes', async (ctx) => {
     skipIf(ctx);
     const projectId = randomUUID();
@@ -69,6 +85,10 @@ describe('knowledge-db semantics', () => {
     expect(await store!.commitUploadIngestion(upload.id, hash, job, async (scoped) => {
       await scoped.updateUpload(upload.id, { state: 'INDEXING' }); return 'saved';
     })).toBe('saved');
+    const finished = await first<any>(sql`SELECT status FROM knowledge_jobs WHERE id=${job.id}`, store!.db);
+    expect(finished.status).toBe('DONE');
+    expect(await reparseUpload(store!, upload.id, job)).toEqual({ skipped: 'already_completed' });
+    expect(await store!.commitUploadIngestion(upload.id, hash, job, callback)).toBeNull();
     await store!.updateUpload(upload.id, { state: 'DELETED' });
     expect(await store!.commitUploadIngestion(upload.id, hash, job, callback)).toBeNull();
     await store!.finishJob(job, 'DONE');

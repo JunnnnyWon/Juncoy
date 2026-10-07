@@ -13,6 +13,15 @@ export const EXTRACTOR_VERSION = 1;
 const CONTENT_MAX = 256 * 1024;
 
 export async function reparseUpload(store: KnowledgeStore, uploadId: string, job?: KnowledgeJob) {
+  // A completed parse must not call a provider again after a worker restart.
+  if (job) {
+    const current = await first<{ status: string; generation: number; owner: string | null; leased: boolean }>(sql`
+      SELECT status, generation, owner, lease_until > now() AS leased
+      FROM knowledge_jobs WHERE id=${job.id}`, store.db);
+    if (current?.status === 'DONE') return { skipped: 'already_completed' } as const;
+    if (!current || current.status !== 'RUNNING' || current.generation !== job.generation || current.owner !== job.owner || !current.leased)
+      return { skipped: 'fenced' } as const;
+  }
   const upload = await first<any>(sql`
     SELECT id, project_id, document_id, filename, mime, sha256, storage_key
     FROM knowledge_uploads WHERE id=${uploadId} AND state != 'DELETED'`, store.db);
@@ -205,8 +214,12 @@ export async function indexerTick(
       done.failed++;
       const retryable = job.attempts < 5;
       const backoff = new Date(Date.now() + Math.min(2 ** job.attempts, 64) * 1000);
-      if (retryable) await store.retryJob(job, backoff, (err as Error).message.slice(0, 200));
-      else await store.finishJob(job, 'DEAD_LETTER', (err as Error).message.slice(0, 200));
+      const errorCode = (err as Error).message.slice(0, 200);
+      if (job.kind === 'parse') {
+        const permanent = ['upload_source_hash_mismatch', 'upload_magic_mismatch'].includes(errorCode);
+        await store.failUploadJob(job, errorCode, retryable && !permanent ? backoff : undefined);
+      } else if (retryable) await store.retryJob(job, backoff, errorCode);
+      else await store.finishJob(job, 'DEAD_LETTER', errorCode);
     } finally {
       clearInterval(lease);
     }
