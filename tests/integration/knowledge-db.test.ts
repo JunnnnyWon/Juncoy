@@ -49,6 +49,30 @@ const skipIf = (ctx: any) => {
 };
 
 describe('knowledge-db semantics', () => {
+  it('fences stale upload commits and rolls back partial ingestion writes', async (ctx) => {
+    skipIf(ctx);
+    const projectId = randomUUID();
+    await sql`INSERT INTO knowledge_projects(id,name) VALUES(${projectId},'fencing')`.execute(store!.db);
+    const hash = 'f'.repeat(64);
+    const upload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'f.txt', mime: 'text/plain', bytes: 1, sha256: hash, storageKey: 'fence' });
+    await store!.enqueueJob('fenced-upload', 'parse', { upload_id: upload.id });
+    const [job] = await store!.claimJobs('fence-owner', ['parse'], 1, 30000);
+    const stale = { ...job, generation: job.generation - 1 };
+    const callback = vi.fn(async () => 'saved');
+    expect(await store!.commitUploadIngestion(upload.id, hash, stale, callback)).toBeNull();
+    expect(callback).not.toHaveBeenCalled();
+    await expect(store!.commitUploadIngestion(upload.id, hash, job, async (scoped) => {
+      await scoped.updateUpload(upload.id, { state: 'INDEXING' });
+      throw new Error('simulated failure');
+    })).rejects.toThrow('simulated failure');
+    expect((await store!.getUpload(projectId, upload.id)).state).toBe('UPLOADED');
+    expect(await store!.commitUploadIngestion(upload.id, hash, job, async (scoped) => {
+      await scoped.updateUpload(upload.id, { state: 'INDEXING' }); return 'saved';
+    })).toBe('saved');
+    await store!.updateUpload(upload.id, { state: 'DELETED' });
+    expect(await store!.commitUploadIngestion(upload.id, hash, job, callback)).toBeNull();
+    await store!.finishJob(job, 'DONE');
+  });
   it('ingests a new original in the durable worker without a precreated document', async (ctx) => {
     skipIf(ctx);
     const dir = await mkdtemp(join(tmpdir(), 'juncoy-first-ingest-'));

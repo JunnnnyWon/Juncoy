@@ -1,4 +1,4 @@
-import { KnowledgeStore, sql, first } from '@meeting/knowledge-db';
+import { KnowledgeStore, sql, first, type KnowledgeJob } from '@meeting/knowledge-db';
 import { chunkDocument } from './chunk.ts';
 import { UpstageEmbeddings, activeProfile, indexMissingEmbeddings } from './embeddings.ts';
 import { UpstageDocumentParse } from './document-parse-upstage.ts';
@@ -12,7 +12,7 @@ export const EXTRACTOR_VERSION = 1;
 
 const CONTENT_MAX = 256 * 1024;
 
-export async function reparseUpload(store: KnowledgeStore, uploadId: string) {
+export async function reparseUpload(store: KnowledgeStore, uploadId: string, job?: KnowledgeJob) {
   const upload = await first<any>(sql`
     SELECT id, project_id, document_id, filename, mime, sha256, storage_key
     FROM knowledge_uploads WHERE id=${uploadId} AND state != 'DELETED'`, store.db);
@@ -34,17 +34,18 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string) {
     vision = observation;
     text = [observation.description, ...observation.visible_text, ...observation.subjects, ...observation.materials, ...observation.lighting, ...observation.palette].join('\n');
   }
+  return (await store.commitUploadIngestion(upload.id, upload.sha256, job, async (scoped, connection) => {
   if (!upload.document_id) {
-    const sourceId = await ensureUploadSource(store, upload.project_id);
+    const sourceId = await ensureUploadSource(scoped, upload.project_id);
     const stableKey = 'upload:' + upload.id;
-    const marked = await store.markDocumentDirty(sourceId, stableKey, { filename: upload.filename, mime: upload.mime });
+    const marked = await scoped.markDocumentDirty(sourceId, stableKey, { filename: upload.filename, mime: upload.mime });
     if (marked === 'tombstoned') return { skipped: 'deleted' } as const;
-    const document = await first<{ id: string }>(sql`SELECT id FROM documents WHERE source_id=${sourceId} AND stable_key=${stableKey}`, store.db);
+    const document = await first<{ id: string }>(sql`SELECT id FROM documents WHERE source_id=${sourceId} AND stable_key=${stableKey}`, scoped.db);
     upload.document_id = document!.id;
   }
   const normalized = { ...extracted.normalized, text, vision, upload_id: upload.id, filename: upload.filename, mime: upload.mime };
   const normalizedHash = sha256(JSON.stringify(normalized));
-  const versionId = await store.createUploadVersion({
+  const versionId = await scoped.createUploadVersion({
     uploadId: upload.id,
     extractorVersion: String(EXTRACTOR_VERSION + 1),
     sourceRevision: upload.sha256,
@@ -57,18 +58,19 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string) {
     sourceSha256: upload.sha256,
     normalizedHash,
   });
-  await store.saveDocumentParseStructure(versionId, extracted.normalized);
-  const published = await store.publishVersion(upload.document_id, {
+  await scoped.saveDocumentParseStructure(versionId, extracted.normalized);
+  const published = await scoped.publishVersion(upload.document_id, {
     contentHash: normalizedHash,
     sourceRevision: upload.sha256,
     extractorVersion: EXTRACTOR_VERSION + 1,
     normalized,
-  });
+  }, undefined, connection);
   if (!published) return { skipped: 'publish_rejected' } as const;
-  await store.enqueueJob('extract:' + upload.document_id + ':' + normalizedHash + ':' + versionId, 'extract', { document_id: upload.document_id, content_hash: normalizedHash });
+  await scoped.enqueueJob('extract:' + upload.document_id + ':' + normalizedHash + ':' + versionId, 'extract', { document_id: upload.document_id, content_hash: normalizedHash });
   await sql`UPDATE knowledge_uploads SET state='INDEXING', document_id=${upload.document_id}
-    WHERE id=${upload.id} AND state != 'DELETED'`.execute(store.db);
+    WHERE id=${upload.id} AND state != 'DELETED'`.execute(scoped.db);
   return { reparsed: true, parser: extracted.parserKind } as const;
+  })) ?? { skipped: 'fenced_or_deleted' } as const;
 }
 
 /** publish 성공 직후 호출 — 같은 content_hash의 재추출은 job key로 dedupe된다. */
@@ -153,7 +155,7 @@ export async function indexerTick(
     try {
       if (!(await store.renewJobLease(job, 60_000))) continue;
       if (job.kind === 'parse') {
-        await reparseUpload(store, job.payload.upload_id);
+        await reparseUpload(store, job.payload.upload_id, job);
         await store.finishJob(job, 'DONE');
       } else if (job.kind === 'extract') {
         const r = await extractDocument(

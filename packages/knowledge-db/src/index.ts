@@ -246,8 +246,9 @@ export class KnowledgeStore {
       normalized: Record<string, any>;
     },
     expectedRevision?: string,
+    connection?: Transaction<Database>,
   ): Promise<boolean> {
-    return this.db.transaction().execute(async (tx) => {
+    const publish = async (tx: Transaction<Database>) => {
       const doc = await first<{
         id: string;
         deleted: boolean;
@@ -293,6 +294,31 @@ export class KnowledgeStore {
           updated_at=now()
         WHERE id=${docId}`.execute(tx);
       return true;
+    };
+    return connection ? publish(connection) : this.db.transaction().execute(publish);
+  }
+
+  /** Fence and lock the source before persisting any ingestion result. */
+  async commitUploadIngestion<T>(
+    uploadId: string, sourceHash: string, job: KnowledgeJob | undefined,
+    persist: (store: KnowledgeStore, connection: Transaction<Database>) => Promise<T>,
+  ): Promise<T | null> {
+    return this.db.transaction().execute(async (tx) => {
+      if (job) {
+        const lease = await first(sql`SELECT id FROM knowledge_jobs
+          WHERE id=${job.id} AND owner=${job.owner} AND generation=${job.generation}
+            AND status='RUNNING' AND lease_until > now() FOR UPDATE`, tx);
+        if (!lease) return null;
+      }
+      const upload = await first(sql`SELECT id FROM knowledge_uploads
+        WHERE id=${uploadId} AND sha256=${sourceHash} AND state != 'DELETED' FOR UPDATE`, tx);
+      if (!upload) return null;
+      const scoped = Object.create(this) as KnowledgeStore;
+      Object.defineProperty(scoped, 'db', { value: tx });
+      const result = await persist(scoped, tx);
+      if (result && typeof result === 'object' && 'skipped' in result)
+        throw new Error('ingestion_publish_rejected');
+      return result;
     });
   }
 
