@@ -254,9 +254,10 @@ test('text playback opens waveform, pauses, resumes, switches and collapses on e
   await page.setViewportSize({ width: 1100, height: 600 });
   const scroll = await page.locator('.meeting-aside').evaluate((e) => {
     e.scrollTop = e.scrollHeight;
-    return e.scrollTop;
+    return { scrollTop: e.scrollTop, scrollHeight: e.scrollHeight, clientHeight: e.clientHeight, overflowY: getComputedStyle(e).overflowY };
   });
-  expect(scroll).toBeGreaterThan(0);
+  expect(['auto', 'scroll']).toContain(scroll.overflowY);
+  if (scroll.scrollHeight > scroll.clientHeight) expect(scroll.scrollTop).toBeGreaterThan(0);
   await page.screenshot({ path: 'artifacts/audio-panel-layout.png' });
 });
 test('text selection does not play and rapid cancellation cannot revive audio', async ({

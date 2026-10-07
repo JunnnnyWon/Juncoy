@@ -192,10 +192,10 @@ export function App() {
           <span>23시 정시퇴근 회의록</span>
         </Link>
         <nav className="app-nav">
-          <Link to="/meetings">회의</Link>
-          <Link to="/ask">질문</Link>
-          <Link to="/assistant">어시스턴트</Link>
-          <Link to="/art-reference">아트 보드</Link>
+          <Link className={location.pathname.startsWith('/meetings') ? 'active' : ''} to="/meetings">회의</Link>
+          <Link className={location.pathname === '/ask' ? 'active' : ''} to="/ask">질문</Link>
+          <Link className={location.pathname.startsWith('/assistant') ? 'active' : ''} to="/assistant">어시스턴트</Link>
+          <Link className={location.pathname.startsWith('/art-reference') ? 'active' : ''} to="/art-reference">아트 보드</Link>
         </nav>
         <div className="account">
           <Avatar name={me.display_name} id={me.user_id} />
@@ -675,7 +675,7 @@ function Meeting() {
   const showEvidence = (segment: string, version: number) =>
     setParams({ tab: 'transcript', segment, transcript_version: String(version) });
   return (
-    <>
+    <div className="meeting-page">
       <div className="topbar">
         <span>
           <Link to="/meetings">모든 회의</Link>
@@ -1002,7 +1002,7 @@ function Meeting() {
           {toast}
         </div>
       )}
-    </>
+    </div>
   );
 }
 function TranscriptRow({

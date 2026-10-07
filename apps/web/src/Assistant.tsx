@@ -65,6 +65,9 @@ export function Assistant() {
   const [panelTab, setPanelTab] = useState<'schedule' | 'tasks' | 'files' | 'images'>('schedule');
   const [files, setFiles] = useState<any[] | null>(null);
   const [images, setImages] = useState<any[] | null>(null);
+  const [mobileSideOpen, setMobileSideOpen] = useState(false);
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+  const selectedFile = (files ?? []).find((file: any) => file.id === selectedFileId) ?? null;
   const fileInput = useRef<HTMLInputElement>(null);
   const [error, setError] = useState('');
   const esRef = useRef<EventSource | null>(null);
@@ -277,8 +280,9 @@ export function Assistant() {
             </h2>
           </div>
           <div className="source-health">
-            <span className="health-dot" /> 5개 소스 연결됨
+            <span className="health-dot" /> 최신 소스 상태는 질문 결과에서 확인
           </div>
+          <button className="assistant-mobile-panel-button" onClick={() => setMobileSideOpen((open) => !open)} aria-expanded={mobileSideOpen}>작업 패널</button>
         </div>
         {!convId ? (
           <div className="assistant-empty assistant-empty-rich">
@@ -412,7 +416,7 @@ export function Assistant() {
         )}
       </section>
 
-      <aside className="assistant-side">
+      <aside className={`assistant-side ${mobileSideOpen ? 'mobile-open' : ''}`}>
         <div className="assistant-inspector-head">
           <div>
             <span className="eyebrow">PROJECT SIGNALS</span>
@@ -469,42 +473,19 @@ export function Assistant() {
               <span>PDF · DOCX · PNG · JPG · WEBP</span>
             </div>
             {(files ?? []).map((f: any) => (
-              <div key={f.id} className="side-row">
-                <div className="side-row-title">{f.filename}</div>
-                <div className="dim">
-                  {(f.bytes / 1024).toFixed(0)}KB ·{' '}
-                  {f.document_state === 'READY' ? '색인 완료' : f.state} · {f.mime}
-                  {f.mime === 'application/pdf' && f.parse_status ?
-                    ` · Parse ${f.parse_status === 'READY' ? '완료' : f.parse_status === 'FALLBACK' ? '로컬 대체' : f.parse_status}` +
-                    (f.cache_hit ? ' · cache hit' : '') +
-                    (f.parser_version ? ` · ${f.parser_version}` : '') +
-                    (f.original_verified_at ? ' · 원본 hash 검증됨' : '') : ''}
-                </div>
-                <button
-                  className="ghost-button"
-                  style={{ fontSize: 11 }}
-                  onClick={() => void deleteFile(f.id)}
-                >
-                  삭제
-                </button>
-                {f.mime === 'application/pdf' && f.document_id && (
-                  <button
-                    className="ghost-button"
-                    style={{ fontSize: 11 }}
-                    onClick={() => void reparseFile(f.id)}
-                  >
-                    Parse 재처리
-                  </button>
-                )}
-              </div>
+            <div key={f.id} className={`file-row ${selectedFileId === f.id ? 'active' : ''}`} onClick={() => setSelectedFileId(f.id)}>
+              <div className="file-row-main"><strong>{f.filename}</strong><span>{(f.bytes / 1024).toFixed(0)}KB · {f.mime}</span></div>
+              <div className="file-state-stack"><span className={`state-badge state-${String(f.state ?? '').toLowerCase()}`}>업로드 {f.state}</span><span className={`state-badge state-${String(f.parse_status ?? 'NOT_REQUESTED').toLowerCase()}`}>Parse {f.parse_status ?? '미요청'}</span><span className={`state-badge state-${String(f.document_state ?? '').toLowerCase()}`}>색인 {f.document_state ?? f.state}</span></div>
+              <span className="file-chevron">›</span>
+            </div>
             ))}
+            {selectedFile && <div className="file-detail"><div className="file-detail-head"><div><span className="eyebrow">FILE INSPECTOR</span><h3>{selectedFile.filename}</h3></div><button className="icon-button" aria-label="파일 상세 닫기" onClick={() => setSelectedFileId(null)}>×</button></div><dl><dt>원본 SHA-256</dt><dd>{selectedFile.sha256}</dd><dt>Parser</dt><dd>{selectedFile.parser_kind ?? '미요청'} · {selectedFile.parser_version ?? '-'}</dd><dt>처리 상태</dt><dd>{selectedFile.parse_status ?? 'NOT_REQUESTED'} · {selectedFile.document_state ?? selectedFile.state}</dd><dt>Cache</dt><dd>{selectedFile.cache_hit ? 'HIT' : 'MISS / 없음'}</dd><dt>원본 검증</dt><dd>{selectedFile.original_verified_at ? new Date(selectedFile.original_verified_at).toLocaleString('ko-KR') : '아직 검증되지 않음'}</dd></dl><div className="file-detail-actions">{selectedFile.mime === 'application/pdf' && selectedFile.document_id && <button className="secondary-button" onClick={() => void reparseFile(selectedFile.id)}>Parse 재처리</button>}<button className="ghost-button" onClick={() => void deleteFile(selectedFile.id)}>삭제 승인 만들기</button></div></div>}
           </>
         )}
         {panelTab === 'images' && (
           <div className="gallery">
             {(images ?? []).map((im: any) => (
-              <a
-                key={im.id}
+              <div key={im.id} className="image-result-row"><a
                 href={`/api/assistant/images/${im.id}`}
                 target="_blank"
                 rel="noreferrer"
@@ -514,7 +495,7 @@ export function Assistant() {
                   alt={im.prompt?.slice(0, 80)}
                   loading="lazy"
                 />
-              </a>
+              </a><div className="image-result-meta"><strong>{im.review_status ?? 'DRAFT'}</strong><span>{im.model} · {im.mime ?? 'image/png'}</span><span>{im.bytes ? `${Math.round(im.bytes / 1024)}KB` : 'size unknown'} · hash {im.sha256 ? im.sha256.slice(0, 12) : 'unknown'}</span><span>{im.review_status === 'APPROVED_CANONICAL' ? 'canonical 재사용 가능' : 'canonical 승인 전 · 자동 검색 제외'}</span></div></div>
             ))}
             {images && !images.length && <p className="dim">생성된 이미지가 없습니다.</p>}
           </div>

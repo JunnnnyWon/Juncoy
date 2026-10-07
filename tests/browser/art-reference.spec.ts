@@ -6,8 +6,7 @@ const uploadId = '00000000-0000-4000-8000-000000000002';
 const assetId = '00000000-0000-4000-8000-000000000003';
 
 test.beforeEach(async ({ page }) => {
-  await page.route('**/api/assistant/art-boards*', async (route) => {
-    if (route.request().url().includes(`/art-boards/${boardId}`)) return route.continue();
+  await page.route('**/api/assistant/art-boards', async (route) => {
     if (route.request().method() === 'GET') return route.fulfill({ json: [{ id: boardId, name: '테스트 아트 보드', current_revision: 1 }] });
     return route.fulfill({ json: { id: boardId } });
   });
