@@ -77,7 +77,7 @@ export function Assistant() {
 
   const loadConvs = async () => {
     try {
-      setConvs(asArray<Conv>(await api<Conv[]>('/api/assistant/conversations')));
+      setConvs(asArray<Conv>(await api<Conv[]>('/api/assistant/conversations')).filter((item): item is Conv => Boolean(item && typeof item === 'object')));
     } catch (e: any) {
       setError(
         e?.status === 503
@@ -95,8 +95,8 @@ export function Assistant() {
     const r = await api<{ conversation: Conv; messages: Msg[]; pending_approvals: Approval[] }>(
       `/api/assistant/conversations/${id}`,
     );
-    setMessages(asArray<Msg>(r.messages));
-    setApprovals(asArray<Approval>(r.pending_approvals));
+    setMessages(asArray<Msg>(r.messages).filter((item): item is Msg => Boolean(item && typeof item === 'object')));
+    setApprovals(asArray<Approval>(r.pending_approvals).filter((item): item is Approval => Boolean(item && typeof item === 'object')));
   };
 
   const newConv = async () => {
@@ -244,7 +244,7 @@ export function Assistant() {
     const r = await api<{ pending_approvals: Approval[] }>(
       `/api/assistant/conversations/${convId}`,
     );
-    setApprovals(asArray<Approval>(r.pending_approvals));
+    setApprovals(asArray<Approval>(r.pending_approvals).filter((item): item is Approval => Boolean(item && typeof item === 'object')));
   };
   const reparseFile = async (id: string) => {
     await api('/api/assistant/files/' + id + '/reparse', { method: 'POST' });
@@ -346,9 +346,9 @@ export function Assistant() {
                   </div>
                   {!!live.coverage?.length && (
                     <div className="coverage">
-                      {live.coverage.map((c: any) => (
+                      {asArray<any>(live.coverage).filter((c) => c && typeof c === 'object').map((c: any, index: number) => (
                         <span
-                          key={c.source}
+                          key={c.source ?? index}
                           className={`chip ${c.read_status === 'LIVE_READ' ? 'ok' : 'warn'}`}
                         >
                           {c.source}{' '}
@@ -364,9 +364,9 @@ export function Assistant() {
                   {!!live.evidence.length && (
                     <details className="evidence">
                       <summary>근거 {live.evidence.length}건</summary>
-                      {live.evidence.map((e: any, i: number) => (
-                        <a key={i} href={e.url} target="_blank" rel="noreferrer">
-                          [{e.id}] {e.source} — {e.stable_key}
+                      {asArray<any>(live.evidence).filter((e) => e && typeof e === 'object').map((e: any, i: number) => (
+                        <a key={i} href={typeof e.url === 'string' ? e.url : '#'} target="_blank" rel="noreferrer">
+                          [{String(e.id ?? i)}] {String(e.source ?? '프로젝트 자료')} — {String(e.stable_key ?? e.title ?? '근거')}
                         </a>
                       ))}
                     </details>
@@ -377,7 +377,7 @@ export function Assistant() {
             </div>
             {!!approvals.length && (
               <div className="approvals">
-                {approvals.map((a) => (
+                {asArray<Approval>(approvals).filter((a) => a && typeof a === 'object').map((a) => (
                   <div key={a.id} className="approval-card">
                     <div className="approval-head">
                       {a.kind} · 만료 {new Date(a.expires_at).toLocaleTimeString('ko-KR')}
