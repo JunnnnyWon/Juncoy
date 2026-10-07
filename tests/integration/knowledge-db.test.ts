@@ -97,6 +97,9 @@ describe('knowledge-db semantics', () => {
     const upload = await store!.createUpload({ projectId, uploaderId: 'owner', filename: 'ref.png', mime: 'image/png', bytes: 10, sha256: hash, storageKey: 'revoked-ref' });
     await store!.updateUpload(upload.id, { state: 'READY' });
     const assetId = (await store!.createArtReferenceAsset({ projectId, uploadId: upload.id, createdBy: 'owner' }))!;
+    expect(await store!.reviewArtReferenceAsset(projectId, assetId, 'owner', 'APPROVED_CANONICAL')).toBe(false);
+    expect(await store!.reviewArtReferenceAsset(projectId, assetId, 'owner', 'APPROVED_CANONICAL', '팀 직접 제작 자료')).toBe(true);
+    expect((await store!.getArtReferenceAsset(projectId, assetId)).rights_note).toBe('팀 직접 제작 자료');
     const extraction = { assetId, revision: hash, model: 'vision-test', observations: { description: 'wall' } };
     expect(await store!.saveArtExtraction(extraction)).not.toBeNull();
     const saved = await store!.getLatestArtExtraction(projectId, assetId);

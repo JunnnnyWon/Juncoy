@@ -12,6 +12,7 @@ interface RefCard {
   upload_id?: string;
   art_asset_id?: string;
   canonical_state?: string;
+  rights_note?: string;
   name: string;
   url: string;
   role: Role;
@@ -572,15 +573,20 @@ export function ArtReferenceCanvas() {
                 {assetAnalysisBusy ? 'Gemini 분석 중…' : selected.art_asset_id ? 'Gemini로 이미지 분석' : '서버 업로드 후 분석 가능'}
               </button>
               {selected.art_asset_id && (
+                <>
+                <label>사용 권리 메모
+                  <textarea rows={2} value={selected.rights_note ?? ''} onChange={(event) => update({ rights_note: event.target.value })} />
+                </label>
                 <div className="asset-review-row">
                   <span>자산 상태: {selected.canonical_state ?? 'NONE'}</span>
                   {selected.canonical_state !== 'APPROVED_CANONICAL' && (
                     <button
                       className="asset-review-button"
+                      disabled={!selected.rights_note?.trim()}
                       onClick={async () => {
                         const result = await api<any>('/api/assistant/art-assets/' + selected.art_asset_id + '/canonical-review', {
                           method: 'POST',
-                          body: JSON.stringify({ state: 'APPROVED_CANONICAL' }),
+                          body: JSON.stringify({ state: 'APPROVED_CANONICAL', rights_note: selected.rights_note }),
                         });
                         if (result.reviewed) update({ canonical_state: result.canonical_state });
                       }}
@@ -589,6 +595,7 @@ export function ArtReferenceCanvas() {
                     </button>
                   )}
                 </div>
+                </>
               )}
               {assetAnalysis?.asset_id === selected.art_asset_id && selected.art_asset_id && (
                 <div className="asset-observation-card">

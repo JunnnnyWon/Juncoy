@@ -906,6 +906,10 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const { session, ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
     const body = z.object({ state: z.enum(['NONE', 'REVIEW', 'APPROVED_CANONICAL', 'REJECTED', 'ARCHIVED']), rights_note: z.string().max(1000).optional() }).parse(req.body ?? {});
+    if (body.state === 'APPROVED_CANONICAL' && !body.rights_note?.trim()) {
+      const asset = await ctx.store.getArtReferenceAsset(projectId, (req.params as any).id);
+      if (asset && !asset.rights_note?.trim()) return reply.code(409).send({ error: { code: 'REFERENCE_RIGHTS_REQUIRED' } });
+    }
     const ok = await ctx.store.reviewArtReferenceAsset(projectId, (req.params as any).id, session.user_id, body.state, body.rights_note);
     if (!ok) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
     return { reviewed: true, canonical_state: body.state };

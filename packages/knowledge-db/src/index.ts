@@ -959,6 +959,7 @@ export class KnowledgeStore {
   async reviewArtReferenceAsset(projectId: string, assetId: string, userId: string, state: string, rightsNote?: string) {
     const result = await sql`UPDATE art_reference_assets SET canonical_state=${state}, rights_note=coalesce(${rightsNote ?? null}, rights_note), updated_at=now()
       WHERE id=${assetId} AND project_id=${projectId} AND state != 'DELETED'
+        AND (${state !== 'APPROVED_CANONICAL'} OR length(trim(coalesce(${rightsNote ?? null}, rights_note))) > 0)
         AND EXISTS (SELECT 1 FROM knowledge_uploads u WHERE u.id=art_reference_assets.upload_id AND u.state != 'DELETED')`.execute(this.db);
     return Number(result.numAffectedRows ?? 0) > 0;
   }
