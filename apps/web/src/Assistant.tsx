@@ -282,7 +282,7 @@ function AssistantView() {
           <span>+</span> 새 대화
         </button>
         <div className="assistant-nav-label">대화 기록</div>
-        {convs.map((c) => (
+        {asArray<Conv>(convs).filter((c) => c && typeof c === 'object').map((c) => (
           <button
             key={c.id}
             className={`conv-item ${c.id === convId ? 'active' : ''}`}
@@ -349,7 +349,7 @@ function AssistantView() {
                 <div key={m.id} className={`msg msg-${m.role}`}>
                   <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}<time>{new Date(m.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></div>
                   <div className="msg-body">{renderMessage(m.content)}</div>
-                  {Array.isArray(m.citations) && m.citations.length > 0 && <details className="message-citations"><summary>참고한 근거 {m.citations.length}건</summary>{m.citations.map((citation: any, index: number) => <div key={citation.id ?? index} className="citation-row"><strong>{citation.source ?? citation.title ?? '프로젝트 자료'}</strong><span>{citation.quote ?? citation.excerpt ?? citation.stable_key ?? citation.url ?? '근거 세부 정보'}</span>{citation.page && <small>페이지 {citation.page}{citation.block ? ' · ' + citation.block : ''}</small>}</div>)}</details>}
+                  {Array.isArray(m.citations) && m.citations.filter((citation: any) => citation && typeof citation === 'object').length > 0 && <details className="message-citations"><summary>참고한 근거 {m.citations.filter((citation: any) => citation && typeof citation === 'object').length}건</summary>{m.citations.filter((citation: any) => citation && typeof citation === 'object').map((citation: any, index: number) => <div key={citation?.id ?? index} className="citation-row"><strong>{safeText(citation?.source ?? citation?.title, '프로젝트 자료')}</strong><span>{safeText(citation?.quote ?? citation?.excerpt ?? citation?.stable_key ?? citation?.url, '근거 세부 정보')}</span>{citation?.page && <small>페이지 {safeText(citation.page)}{citation.block ? ' · ' + safeText(citation.block) : ''}</small>}</div>)}</details>}
                 </div>
               ))}
               {live && (
@@ -496,7 +496,7 @@ function AssistantView() {
               <strong>파일을 놓거나 클릭해서 추가</strong>
               <span>PDF · DOCX · PNG · JPG · WEBP</span>
             </div>
-            {(files ?? []).map((f: any) => (
+            {asArray<any>(files).filter((f) => f && typeof f === 'object').map((f: any) => (
             <div key={f.id} className={`file-row ${selectedFileId === f.id ? 'active' : ''}`} onClick={() => setSelectedFileId(f.id)}>
               <div className="file-row-main"><strong>{f.filename}</strong><span>{(f.bytes / 1024).toFixed(0)}KB · {f.mime}</span></div>
               <div className="file-state-stack"><span className={`state-badge state-${String(f.state ?? '').toLowerCase()}`}>업로드 {f.state}</span><span className={`state-badge state-${String(f.parse_status ?? 'NOT_REQUESTED').toLowerCase()}`}>Parse {f.parse_status ?? '미요청'}</span><span className={`state-badge state-${String(f.document_state ?? '').toLowerCase()}`}>색인 {f.document_state ?? f.state}</span></div>
@@ -508,7 +508,7 @@ function AssistantView() {
         )}
         {panelTab === 'images' && (
           <div className="gallery">
-            {(images ?? []).map((im: any) => (
+            {asArray<any>(images).filter((im) => im && typeof im === 'object').map((im: any) => (
               <div key={im.id} className="image-result-row"><a
                 href={`/api/assistant/images/${im.id}`}
                 target="_blank"
