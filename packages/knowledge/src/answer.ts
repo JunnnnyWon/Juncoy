@@ -60,7 +60,7 @@ const ANSWER_SYSTEM = `너는 프로젝트 지식 어시스턴트다. 아래 evi
 
 function cleanAnswerText(text: string) {
   return text
-    .replace(/\(?\s*e\d+(?:\s*,\s*e\d+)+\s*\)?/gi, '')
+    .replace(/\(?\s*e\d+(?:\s*,\s*e\d+)*\s*\)?/gi, '')
     .replace(/\[e\d+\]/gi, '')
     .replace(/ {2,}/g, ' ')
     .trim();

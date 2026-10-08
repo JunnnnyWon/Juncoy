@@ -595,7 +595,7 @@ function safeText(value: unknown, fallback = '') {
 
 function renderMarkdown(value: unknown) {
   const text = safeText(value, '응답 내용이 없습니다.')
-    .replace(/\(?\s*e\d+(?:\s*,\s*e\d+)+\s*\)?/gi, '')
+    .replace(/\(?\s*e\d+(?:\s*,\s*e\d+)*\s*\)?/gi, '')
     .replace(/\[e\d+\]/gi, '')
     .replaceAll('\\n', '\n')
     .replace(/ {2,}/g, ' ')
