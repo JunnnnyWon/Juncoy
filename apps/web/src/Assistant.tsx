@@ -594,15 +594,16 @@ function safeText(value: unknown, fallback = '') {
 }
 
 function renderMarkdown(value: unknown) {
-  const text = safeText(value, '응답 내용이 없습니다.');
+  const text = safeText(value, '응답 내용이 없습니다.').replaceAll('\\n', '\n');
   return text.split(/\n/).map((line, index) => {
     const trimmed = line.trim();
     if (!trimmed) return <div key={index} className="md-spacer" />;
     const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
     const bullet = trimmed.match(/^[-*]\s+(.+)$/);
-    const content = formatInline(heading?.[2] ?? bullet?.[1] ?? trimmed);
+    const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    const content = formatInline(heading?.[2] ?? bullet?.[1] ?? numbered?.[1] ?? trimmed);
     if (heading) return <h3 key={index} className="md-heading">{content}</h3>;
-    if (bullet) return <div key={index} className="md-bullet"><span>•</span>{content}</div>;
+    if (bullet || numbered) return <div key={index} className="md-bullet"><span>{numbered ? numbered[0].split(/[.)]/)[0] + '.' : '•'}</span>{content}</div>;
     return <p key={index}>{content}</p>;
   });
 }
@@ -618,7 +619,7 @@ function formatInline(text: string) {
 function CitationList({ citations }: { citations: unknown }) {
   const items = asArray<any>(citations).filter((item) => item && typeof item === 'object' && (item.url || item.quote || item.stable_key));
   if (!items.length) return null;
-  return <details className="message-citations"><summary>참고한 근거 {items.length}건</summary>{items.map((citation: any, index: number) => <div key={citation.id ?? index} className="citation-row"><strong>{safeText(citation.source ?? citation.title, '프로젝트 자료')}</strong><span>{safeText(citation.quote ?? citation.excerpt ?? citation.stable_key, '근거 세부 정보')}</span><small>{citation.page_start ? '페이지 ' + citation.page_start : ''}{citation.parser_version ? ' · ' + citation.parser_version : ''}</small>{typeof citation.url === 'string' && citation.url && <a href={citation.url} target="_blank" rel="noreferrer">원문과 근거 위치 열기 ↗</a>}</div>)}</details>;
+  return <details className="message-citations"><summary>참고 자료 {items.length}건</summary>{items.map((citation: any, index: number) => { const quote = safeText(citation.quote ?? citation.excerpt ?? citation.stable_key, '근거 세부 정보').replace(/\s+/g, ' ').trim(); const shortQuote = quote.length > 150 ? quote.slice(0, 150) + '…' : quote; return <div key={citation.id ?? index} className="citation-row"><strong>{safeText(citation.source ?? citation.title, '프로젝트 자료')}</strong><span>{shortQuote}</span><small>{citation.page_start ? '페이지 ' + citation.page_start : ''}{citation.parser_version ? ' · ' + citation.parser_version : ''}</small>{typeof citation.url === 'string' && citation.url && <a href={citation.url} target="_blank" rel="noreferrer">원문 열기 ↗</a>}</div>; })}</details>;
 }
 
 function renderMessage(rawContent: unknown) {
