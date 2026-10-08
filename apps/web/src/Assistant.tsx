@@ -594,7 +594,12 @@ function safeText(value: unknown, fallback = '') {
 }
 
 function renderMarkdown(value: unknown) {
-  const text = safeText(value, '응답 내용이 없습니다.').replaceAll('\\n', '\n');
+  const text = safeText(value, '응답 내용이 없습니다.')
+    .replace(/\(?\s*e\d+(?:\s*,\s*e\d+)+\s*\)?/gi, '')
+    .replace(/\[e\d+\]/gi, '')
+    .replaceAll('\\n', '\n')
+    .replace(/ {2,}/g, ' ')
+    .trim();
   return text.split(/\n/).map((line, index) => {
     const trimmed = line.trim();
     if (!trimmed) return <div key={index} className="md-spacer" />;
@@ -623,7 +628,7 @@ function CitationList({ citations }: { citations: unknown }) {
 }
 
 function renderMessage(rawContent: unknown) {
-  return <p className="message-plain-text">{safeText(rawContent, '응답 내용이 없습니다.')}</p>;
+  return <>{renderMarkdown(rawContent)}</>;
 }
 
 function humanizeKey(key: string) {

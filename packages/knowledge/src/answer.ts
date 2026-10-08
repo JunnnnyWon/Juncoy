@@ -58,6 +58,14 @@ const ANSWER_SYSTEM = `너는 프로젝트 지식 어시스턴트다. 아래 evi
 - 최신 정보가 없거나 요청 시점과 evidence가 다르면 warnings에 명시한다.
 - answer는 간결한 한국어 문장들로 쓴다.`;
 
+function cleanAnswerText(text: string) {
+  return text
+    .replace(/\(?\s*e\d+(?:\s*,\s*e\d+)+\s*\)?/gi, '')
+    .replace(/\[e\d+\]/gi, '')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
 interface CoverageInput {
   source: (typeof SOURCES)[number];
   read_status: SourceCoverage['read_status'];
@@ -389,7 +397,7 @@ export async function answerQuestion(
       answer_id: runId,
       status,
       answer:
-        modelOut?.answer ??
+        cleanAnswerText(modelOut?.answer ?? '') ||
         (status === 'NEEDS_CLARIFICATION'
           ? '프로젝트 자료에서 해당 질문의 근거를 찾지 못했습니다.'
           : ''),
