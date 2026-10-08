@@ -420,16 +420,6 @@ function AssistantView() {
                       ))}
                     </div>
                   )}
-                  {!!live.evidence.length && (
-                    <details className="evidence">
-                      <summary>근거 {live.evidence.length}건</summary>
-                      {asArray<any>(live.evidence).filter((e) => e && typeof e === 'object').map((e: any, i: number) => (
-                        <a key={i} href={typeof e.url === 'string' ? e.url : '#'} target="_blank" rel="noreferrer">
-                          [{String(e.id ?? i)}] {String(e.source ?? '프로젝트 자료')} — {String(e.stable_key ?? e.title ?? '근거')}
-                        </a>
-                      ))}
-                    </details>
-                  )}
                 </div>
               )}
               <div ref={bottomRef} />

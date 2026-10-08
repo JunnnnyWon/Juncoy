@@ -236,7 +236,9 @@ export async function answerQuestion(
       projectId,
       query: req.question,
       embeddings: deps.embeddings,
-      limit: 24,
+      // Keep the evidence list focused. The answer model still receives all selected
+      // evidence, but the UI should not present a fixed, noisy list for every question.
+      limit: 8,
       acl: deps.acl,
     });
     markStage('search');
