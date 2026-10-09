@@ -73,6 +73,13 @@ const usageLabels: Record<Usage, string> = {
   PARTIAL_REFERENCE: '부분만 참고',
   REVIEW_REQUIRED: '검토 필요',
 };
+const edgeLabels: Record<ArtCanvasEdge['edge_type'], string> = {
+  supports: '뒷받침',
+  contradicts: '충돌',
+  variant_of: '변형',
+  uses_only: '부분 채택',
+  derived_from: '파생',
+};
 function artActionError(error: unknown) {
   const code = (error as { code?: string })?.code;
   if (code === 'REVISION_CONFLICT') return '분석 후 보드가 변경되었습니다. 전체 레퍼런스를 다시 정리한 뒤 승인해 주세요.';
@@ -570,7 +577,7 @@ export function ArtReferenceCanvas() {
       <main className="art-layout">
         <nav className="art-mobile-tabs"><button className={mobilePanel === 'canvas' ? 'active' : ''} onClick={() => setMobilePanel('canvas')}>캔버스</button><button className={mobilePanel === 'inspector' ? 'active' : ''} onClick={() => setMobilePanel('inspector')}>검토 패널</button></nav>
         <section
-          className={'art-board ' + (mobilePanel === 'inspector' ? 'mobile-hidden' : '')}
+          className={'art-board ' + (dragging ? 'dragging ' : '') + (mobilePanel === 'inspector' ? 'mobile-hidden' : '')}
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => {
             event.preventDefault();
@@ -607,7 +614,7 @@ export function ArtReferenceCanvas() {
               if (!source || !target) return null;
               const x1 = source.x + source.width / 2, y1 = source.y + source.height / 2;
               const x2 = target.x + target.width / 2, y2 = target.y + target.height / 2;
-              return <g key={edge.id}><line x1={x1} y1={y1} x2={x2} y2={y2} /><text x={(x1 + x2) / 2} y={(y1 + y2) / 2}>{edge.edge_type}</text></g>;
+              return <g key={edge.id}><line x1={x1} y1={y1} x2={x2} y2={y2} /><text x={(x1 + x2) / 2} y={(y1 + y2) / 2}>{edgeLabels[edge.edge_type] ?? edge.edge_type}</text></g>;
             })}
           </svg>
           {nodes.map((node) => <div key={node.id} className={'canvas-node ' + node.node_type + (activeNodeId === node.id ? ' active' : '')} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={() => chooseNode(node.id)}>

@@ -3122,6 +3122,9 @@ small {
   transform-origin: top left;
   transition: transform 120ms ease-out;
 }
+.art-board.dragging .board-stage {
+  transition: none;
+}
 .canvas-edges {
   position: absolute;
   z-index: 2;
