@@ -374,13 +374,13 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
   app.setErrorHandler((error, _req, reply) => {
     const e = error as any;
     const status =
-      e.statusCode ??
+      (e instanceof z.ZodError ? 502 : undefined) ?? e.statusCode ??
       e.status ??
       (e.code === 'KNOWLEDGE_DISABLED' ? 503 : e.code === 'PROJECT_SCOPE_DENIED' ? 403 : 503);
     return reply.code(status).send({
       error: {
-        code: e.code ?? 'TEMPORARY_FAILURE',
-        message: e.code ? e.message : '어시스턴트가 일시적으로 불안정합니다.',
+        code: e instanceof z.ZodError ? 'MODEL_OUTPUT_INVALID' : e.code ?? 'TEMPORARY_FAILURE',
+        message: e instanceof z.ZodError ? '자동 분석 결과의 형식이 올바르지 않습니다. 다시 시도해 주세요.' : e.code ? e.message : '어시스턴트가 일시적으로 불안정합니다.',
       },
     });
   });
@@ -1072,7 +1072,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     });
     const result = await ctx.model.structured(schema, { revision: revision.revision, references: refs, extractions, nodes: (revision.snapshot as any)?.nodes ?? [], edges: (revision.snapshot as any)?.edges ?? [] },
       '현재 보드 revision의 레퍼런스, Gemini 시각 관찰, 사람 수정값, 메모, 그룹, 연결만 분석한다. 사람 수정값과 역할별 지시는 AI 관찰보다 우선한다. 관찰을 승인 규칙으로 취급하지 않는다. 이미지에 없는 사실, 권리, 스타일을 추정하지 않는다. 공통 규칙과 충돌을 분리하고 근거 asset id만 evidence_ids에 연결한다.');
-    const knownEvidence = new Set(refs.map((ref: any) => ref.id));
+    const knownEvidence = new Set(refs.flatMap((ref: any) => [ref.id, ref.art_asset_id]).filter(Boolean));
     const invalidEvidence = [...(result.result.common_rules ?? []), ...(result.result.conflicts ?? [])].flatMap((item: any) => (item.evidence_ids ?? []).filter((id: string) => !knownEvidence.has(id)));
     if (invalidEvidence.length) return reply.code(502).send({ error: { code: 'MODEL_EVIDENCE_OUT_OF_SCOPE' } });
     const resultHash = createHash('sha256').update(JSON.stringify(result.result)).digest('hex');

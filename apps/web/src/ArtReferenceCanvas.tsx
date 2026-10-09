@@ -73,6 +73,12 @@ const usageLabels: Record<Usage, string> = {
   PARTIAL_REFERENCE: '부분만 참고',
   REVIEW_REQUIRED: '검토 필요',
 };
+function artActionError(error: unknown) {
+  const code = (error as { code?: string })?.code;
+  if (code === 'REVISION_CONFLICT') return '분석 후 보드가 변경되었습니다. 전체 레퍼런스를 다시 정리한 뒤 승인해 주세요.';
+  if (code === 'MODEL_EVIDENCE_OUT_OF_SCOPE') return '분석 결과가 현재 이미지와 연결되지 않았습니다. 다시 분석해 주세요.';
+  return (error instanceof Error ? error.message : '요청을 처리하지 못했습니다.') + (code ? ' (' + code + ')' : '');
+}
 function inferRoleFromObservation(observation: any): Role {
   const text = [observation?.description, ...(observation?.subjects ?? []), ...(observation?.materials ?? []), ...(observation?.textures ?? []), ...(observation?.palette ?? [])].join(' ').toLowerCase();
   if (/face|portrait|얼굴|소녀|인물|피부/.test(text)) return 'face_shape';
@@ -140,6 +146,8 @@ export function ArtReferenceCanvas() {
   const [analysis, setAnalysis] = useState<any>(null);
   const [analysisEdit, setAnalysisEdit] = useState('');
   const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [briefBusy, setBriefBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
   const [assetAnalysis, setAssetAnalysis] = useState<any>(null);
   const [assetCorrections, setAssetCorrections] = useState('');
   const [canonicalNote, setCanonicalNote] = useState('');
@@ -231,6 +239,25 @@ export function ArtReferenceCanvas() {
       }
     })();
   }, []);
+  const flushBoard = async () => {
+    if (!boardId) throw new Error('보드 연결을 확인해 주세요.');
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    const snapshot = serverSnapshot();
+    let savedRevision = revisionRef.current;
+    const task = saveQueue.current.then(async () => {
+      const result = await api<{ revision: number }>('/api/assistant/art-boards/' + boardId + '/revisions', {
+        method: 'POST', body: JSON.stringify({ base_revision: revisionRef.current, snapshot }),
+      });
+      savedRevision = Number(result.revision);
+      revisionRef.current = savedRevision;
+      setRevision(savedRevision);
+      dirtyRef.current = false;
+      setSyncState('변경 내용 저장됨');
+    });
+    saveQueue.current = task.catch(() => {});
+    await task;
+    return savedRevision;
+  };
   const saveRevision = async () => {
     if (!boardId) return;
     setSyncState('저장 중');
@@ -288,20 +315,19 @@ export function ArtReferenceCanvas() {
     }
   };
   const previewBrief = async () => {
-    if (!boardId) return;
+    if (!boardId || briefBusy || analysisBusy) return;
+    setBriefBusy(true);
+    setActionError('');
     setSyncState('저장 중');
     let savedRevision = revision;
     try {
-      const saved = await api<{ revision: number }>(
-        '/api/assistant/art-boards/' + boardId + '/revisions',
-        { method: 'POST', body: JSON.stringify({ base_revision: revision, snapshot: serverSnapshot() }) },
-      );
-      savedRevision = Number(saved.revision);
+      savedRevision = await flushBoard();
       setRevision(savedRevision);
       setSyncState('서버에 저장됨');
-    } catch {
+    } catch (error) {
       setSyncState('저장 충돌');
-      window.alert('보드가 저장되지 않았습니다. 최신 revision을 다시 불러온 뒤 시도해 주세요.');
+      setActionError(artActionError(error));
+      setBriefBusy(false);
       return;
     }
     try {
@@ -316,19 +342,18 @@ export function ArtReferenceCanvas() {
         },
       );
       setBrief(brief);
-    } catch {
-      window.alert('ImageBrief 미리보기를 만들 수 없습니다.');
-    }
+    } catch (error) { setActionError(artActionError(error)); }
+    finally { setBriefBusy(false); }
   };
   const analyzeBoard = async () => {
-    if (!boardId || !revision || analysisBusy) return;
+    if (!boardId || analysisBusy || briefBusy) return;
     setAnalysisBusy(true);
+    setActionError('');
     try {
+      await flushBoard();
       const draft = await api<any>('/api/assistant/art-boards/' + boardId + '/analyze', { method: 'POST' });
       setAnalysis(draft); setAnalysisEdit(JSON.stringify(draft.result, null, 2));
-    } catch {
-      window.alert('보드 분석을 시작할 수 없습니다.');
-    } finally {
+    } catch (error) { setActionError(artActionError(error)); } finally {
       setAnalysisBusy(false);
     }
   };
@@ -495,15 +520,16 @@ export function ArtReferenceCanvas() {
             <i /> {syncState}
           </span>
           <div className="art-header-buttons">
-            <button className="secondary-button" onClick={() => void analyzeBoard()} disabled={analysisBusy}>
+            <button className="secondary-button" onClick={() => void analyzeBoard()} disabled={analysisBusy || briefBusy}>
               {analysisBusy ? '자동 정리 중…' : '전체 레퍼런스 자동 정리'}
             </button>
-            <button className="primary-button" onClick={() => void previewBrief()}>
-              이미지 생성 준비 ↗
+            <button className="primary-button" disabled={briefBusy || analysisBusy} onClick={() => void previewBrief()}>
+              {briefBusy ? '생성 준비 중…' : '이미지 생성 준비 ↗'}
             </button>
           </div>
         </div>
       </header>
+      {actionError && <p role="alert" className="brief-error">{actionError}</p>}
       <div className="art-toolbar">
         <button className="art-tool" aria-label="실행 취소" title="실행 취소" disabled={!history.current?.past.length} onClick={() => travel('undo')}>↶</button>
         <button className="art-tool" aria-label="다시 실행" title="다시 실행" disabled={!history.current?.future.length} onClick={() => travel('redo')}>↷</button>
@@ -670,10 +696,12 @@ export function ArtReferenceCanvas() {
                 <span>{analysis.status}</span>
               </div>
               <p>{analysis.result?.summary}</p>
+              {Number(analysis.revision) !== revision && <p role="status">보드가 변경되어 이 분석은 이전 결과입니다. 전체 레퍼런스를 다시 정리해 주세요.</p>}
               {analysis.status === 'DRAFT' && <><label>Art Bible 초안 수정(JSON)<textarea rows={8} value={analysisEdit} onChange={(event) => setAnalysisEdit(event.target.value)} /></label><button className="secondary-button" onClick={async () => { try { const result = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision, { method: 'PATCH', body: JSON.stringify({ analysis_id: analysis.id, result: JSON.parse(analysisEdit) }) }); setAnalysis(result); setAnalysisEdit(JSON.stringify(result.result, null, 2)); } catch { window.alert('수정된 JSON이 올바르지 않습니다.'); } }}>수정 초안 저장</button><button className="asset-review-button" onClick={async () => { await api('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision + '/reject', { method: 'POST', body: JSON.stringify({ analysis_id: analysis.id }) }); setAnalysis({ ...analysis, status: 'REJECTED' }); }}>초안 거부</button></>}
               {analysis.status === 'DRAFT' && (
                 <button
                   className="secondary-button"
+                  disabled={Number(analysis.revision) !== revision || dirtyRef.current}
                   onClick={async () => {
                     try {
                       const approved = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision + '/approve', {
@@ -681,12 +709,12 @@ export function ArtReferenceCanvas() {
                         body: JSON.stringify({ analysis_id: analysis.id, expected_hash: analysis.result_hash }),
                       });
                       setAnalysis({ ...analysis, status: 'APPROVED', style_version: approved.version });
-                    } catch {
-                      window.alert('Art Bible 승인에 실패했습니다.');
+                    } catch (error) {
+                      setActionError(artActionError(error));
                     }
                   }}
                 >
-                  이 분석을 Art Bible로 승인
+                  이 결과를 아트 방향으로 승인
                 </button>
               )}
               {analysis.status === 'APPROVED' && (

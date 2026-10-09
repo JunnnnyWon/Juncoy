@@ -585,6 +585,11 @@ export class KnowledgeStore {
       if (!board) return { kind: 'NOT_FOUND' as const };
       if (Number(board.current_revision) !== input.baseRevision)
         return { kind: 'CONFLICT' as const, current_revision: Number(board.current_revision) };
+      const previous = await first<{ snapshot: unknown }>(sql`SELECT snapshot FROM art_board_revisions
+        WHERE board_id=${input.boardId} AND revision=${input.baseRevision}`, tx);
+      const identical = previous ? await first<{ same: boolean }>(sql`SELECT ${json(ArtBoardSnapshot.parse(previous.snapshot))} = ${json(snapshot)} AS same`, tx) : null;
+      if (identical?.same)
+        return { kind: 'SAVED' as const, revision: input.baseRevision, unchanged: true };
       const revision = input.baseRevision + 1;
       await sql`INSERT INTO art_board_revisions(id, board_id, revision, created_by, snapshot, snapshot_hash)
         VALUES (${randomUUID()}, ${input.boardId}, ${revision}, ${input.ownerId}, ${json(input.snapshot)}, ${input.snapshotHash})`.execute(

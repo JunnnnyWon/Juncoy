@@ -42,10 +42,12 @@ export interface KnowledgeCtx {
 }
 
 /** Solar 래퍼 — provider usage를 살려 계측에 기록한다 (RAG-019). */
-function solarModel(config: AppConfig) {
+export function solarModel(config: AppConfig) {
   const key = config.UPSTAGE_API_KEY;
   return {
     async structured<T>(s: z.ZodType<T>, input: unknown, system: string) {
+      let correction = '';
+      for (let attempt = 0; attempt < 2; attempt++) {
       const res = await fetch('https://api.upstage.ai/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
@@ -54,7 +56,7 @@ function solarModel(config: AppConfig) {
           stream: false,
           temperature: 0,
           messages: [
-            { role: 'system', content: system },
+            { role: 'system', content: system + correction },
             { role: 'user', content: JSON.stringify(input) },
           ],
           response_format: {
@@ -71,14 +73,26 @@ function solarModel(config: AppConfig) {
       });
       if (!res.ok) throw new Error(`solar ${res.status}`);
       const data = (await res.json()) as any;
+      let parsed: T;
+      try {
+        parsed = s.parse(JSON.parse(data.choices[0].message.content));
+      } catch (error) {
+        if (attempt === 1) throw error;
+        correction = '\n이전 출력이 JSON 계약 검증에 실패했다. 아래 제한을 반드시 지키고 짧게 작성한다: ' + (error instanceof z.ZodError
+          ? JSON.stringify(error.issues.map(({ path, code, message }) => ({ path, code, message })))
+          : '유효한 JSON 객체만 반환한다.');
+        continue;
+      }
       return {
-        result: s.parse(JSON.parse(data.choices[0].message.content)) as T,
+        result: parsed,
         model: (data.model ?? config.UPSTAGE_MODEL) as string,
         usage: {
           input_tokens: data.usage?.prompt_tokens ?? 0,
           output_tokens: data.usage?.completion_tokens ?? 0,
         },
       };
+      }
+      throw new Error('model_output_invalid');
     },
   };
 }

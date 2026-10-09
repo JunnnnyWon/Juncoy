@@ -289,10 +289,12 @@ describe('knowledge-db semantics', () => {
     expect(await store!.getApprovedStyleRules(randomUUID(), 1)).toHaveLength(0);
     expect(versions[0].body.provenance.analysis_id).toBe(firstId);
     const nextId = await store!.saveArtBoardAnalysis({ boardId, revision: 1, userId: 'owner', model: 'test', result: draft, resultHash: 'c'.repeat(64) });
+    const unchanged = await store!.saveArtBoardRevision({ projectId, ownerId: 'owner', boardId, baseRevision: 1, snapshot: { references: [] }, snapshotHash: 'same' });
+    expect(unchanged).toMatchObject({ kind: 'SAVED', revision: 1, unchanged: true });
     expect(nextId).not.toBe(firstId);
     const old = await first<any>(sql`SELECT status FROM art_board_analyses WHERE id=${firstId}`, store!.db);
     expect(old.status).toBe('APPROVED');
-    await store!.saveArtBoardRevision({ projectId, ownerId: 'owner', boardId, baseRevision: 1, snapshot: { references: [] }, snapshotHash: 'new' });
+    await store!.saveArtBoardRevision({ projectId, ownerId: 'owner', boardId, baseRevision: 1, snapshot: { references: [{ id: 'new-image' }] }, snapshotHash: 'new' });
     expect((await store!.approveArtBoardAnalysis({ ...input, analysisId: nextId, expectedHash: 'c'.repeat(64) })).kind).toBe('REVISION_CONFLICT');
   });
   it('dedupes source events by (source_id, event_key)', async (ctx) => {
