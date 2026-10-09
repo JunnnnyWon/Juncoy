@@ -208,6 +208,7 @@ async function executeRun(
     }
     const msgId = await store.createMessage(conversationId, 'assistant', final.text, {
       runId,
+      attachments: final.extra?.images ?? [],
       citations: final.extra?.evidence ?? (final.extra?.answer_id ? [{ answer_id: final.extra.answer_id }] : []),
     });
     // Provider responses are structured rather than token-streamed. Emit safe deltas so the UI
@@ -313,11 +314,13 @@ async function handleActionMode(
     const approval = await ctx.store.getApproval(res.approval_id, projectId);
     const generated = approval && await executeApproval(ctx, { DISCORD_GUILD_ID: tctx.acl?.guilds[0] } as AppConfig, registry, projectId, userId, tctx.role, approval);
     if (!generated) throw new Error('이미지 생성이 완료되지 않았습니다.');
+    const image = await first<any>(sql`SELECT r.id, r.bytes, r.created_at, j.prompt, j.model FROM image_results r JOIN image_jobs j ON j.id=r.job_id WHERE j.approval_id=${res.approval_id} AND j.project_id=${projectId}`, ctx.store.db);
+    if (!image) throw new Error('생성 이미지 결과를 찾지 못했습니다.');
     return {
       status: 'COMPLETE',
       phase: 'completed',
-      text: `${res.summary}을 참고해 이미지를 만들었습니다. 오른쪽 이미지 목록에서 결과를 확인해 주세요.`,
-      extra: { image_generated: true },
+      text: `${res.summary}을 참고해 이미지를 만들었습니다. 이미지를 누르면 크게 볼 수 있습니다.`,
+      extra: { image_generated: true, images: [{ ...image, type: 'generated_image' }] },
     };
   }
 

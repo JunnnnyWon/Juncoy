@@ -344,7 +344,6 @@ function AssistantView() {
           <div className="source-health">
             <span className="health-dot" /> 최신 소스 상태는 질문 결과에서 확인
           </div>
-          <button className="assistant-mobile-panel-button" onClick={() => setMobileSideOpen((open) => !open)} aria-expanded={mobileSideOpen}>작업 패널</button>
         </div>
         {!convId ? (
           <div className="assistant-empty assistant-empty-rich">
@@ -354,7 +353,7 @@ function AssistantView() {
               프로젝트의 맥락을
               <br />한 곳에서 탐색하세요.
             </h2>
-            <p>회의록, Discord, GitHub, Notion, 업로드 파일을 근거와 함께 확인합니다.</p>
+            <p>회의록, Discord, GitHub, Notion을 참고해 답하고 이미지를 만듭니다. 참고 문서는 Notion에 올려 주세요.</p>
             <div className="prompt-starters">
               <button
                 onClick={() => {
@@ -386,6 +385,7 @@ function AssistantView() {
                 <div key={m.id} className={`msg msg-${m.role}`}>
                   <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}</div>
                   <div className="msg-body">{renderMarkdown(m.content)}</div>
+                  {asArray<any>(m.attachments).filter(item => item?.type === 'generated_image').map(image => <button key={image.id} className="chat-generated-image" aria-label="생성 이미지 크게 보기" onClick={() => setSelectedImage(image)}><img src={'/api/assistant/images/' + image.id} alt="채팅에서 생성한 이미지" loading="lazy" /></button>)}
                   <CitationList citations={m.citations} />
                 </div>
               ))}
@@ -438,17 +438,6 @@ function AssistantView() {
               </div>
             )}
             <div className="assistant-input">
-              <button
-                className="input-tool"
-                onClick={() => {
-                  setPanelTab('files');
-                  fileInput.current?.click();
-                }}
-                aria-label="파일 추가"
-                title="파일 추가"
-              >
-                +
-              </button>
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -468,76 +457,6 @@ function AssistantView() {
         )}
       </section>
 
-      <aside className={`assistant-side assistant-side-safe ${mobileSideOpen ? 'mobile-open' : ''}`}>
-        <div className="assistant-inspector-head">
-          <div>
-            <span className="eyebrow">PROJECT SIGNALS</span>
-            <h2>프로젝트 자료</h2>
-          </div>
-          <button className="inspector-more" aria-label="패널 설정">
-            •••
-          </button>
-        </div>
-        <div className="side-tabs">
-          <button
-            className={panelTab === 'files' ? 'active' : ''}
-            onClick={() => setPanelTab('files')}
-          >
-            파일
-          </button>
-          <button
-            className={panelTab === 'images' ? 'active' : ''}
-            onClick={() => setPanelTab('images')}
-          >
-            이미지
-          </button>
-        </div>
-        <p className="panel-source-note">{panelTab === 'files' ? '직접 올린 파일입니다. 파일을 누르면 자세히 볼 수 있습니다.' : '만든 이미지입니다. 누르면 크게 보고 생성 내용을 확인합니다.'}</p>
-        {panelTab === 'files' && (
-          <>
-            <button className="primary-button" onClick={() => fileInput.current?.click()}>
-              레퍼런스 / 파일 추가
-            </button>
-            <input
-              ref={fileInput}
-              type="file"
-              hidden
-              accept=".pdf,.docx,.csv,.md,.txt,.png,.jpg,.jpeg,.webp"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void uploadFile(f);
-                e.target.value = '';
-              }}
-            />
-            <div className="drop-zone" onClick={() => fileInput.current?.click()}>
-              <strong>파일을 놓거나 클릭해서 추가</strong>
-              <span>PDF · DOCX · PNG · JPG · WEBP</span>
-            </div>
-            {asArray<any>(files).filter((f) => f && typeof f === 'object').map((f: any) => (
-            <div key={f.id} className={`file-row ${selectedFileId === f.id ? 'active' : ''}`} onClick={() => setSelectedFileId(f.id)}>
-              <div className="file-row-main"><strong>{f.filename}</strong><span>{(f.bytes / 1024).toFixed(0)}KB · {f.filename?.split('.').pop()?.toUpperCase() ?? '파일'}</span></div>
-              <div className="file-state-stack"><span className="state-badge">{f.state === 'FAILED' || f.document_state === 'FAILED' ? '처리 실패' : f.document_state === 'READY' ? '검색 가능' : f.state === 'READY' ? '업로드 완료' : '처리 중'}</span></div>
-              <span className="file-chevron">›</span>
-            </div>
-            ))}
-            {selectedFile && <div className="file-detail"><div className="file-detail-head"><h3>{selectedFile.filename}</h3><button className="icon-button" aria-label="파일 상세 닫기" onClick={() => setSelectedFileId(null)}>×</button></div><p>{Math.round(Number(selectedFile.bytes) / 1024)}KB · {selectedFile.filename?.split(".").pop()?.toUpperCase()}</p><p>{selectedFile.document_state === "READY" ? "어시스턴트가 이 파일을 검색해 답변에 사용할 수 있습니다." : "업로드한 자료를 읽고 검색할 수 있도록 준비하고 있습니다."}</p><div className="file-detail-actions"><a href={"/api/assistant/files/" + selectedFile.id + "/content"} target="_blank" rel="noreferrer">원본 파일 열기 ↗</a>{selectedFile.mime === "application/pdf" && selectedFile.document_id && <button onClick={() => void reparseFile(selectedFile.id)}>파일 다시 읽기</button>}<button onClick={() => void deleteFile(selectedFile.id)}>파일 삭제 요청</button></div></div>}
-          </>
-        )}
-        {panelTab === 'images' && (
-          <div className="gallery assistant-image-gallery">
-            {asArray<any>(images).filter((im) => im && typeof im === 'object').map((im: any) => (
-              <button key={im.id} className="image-thumbnail" aria-label="이미지 상세 보기" onClick={() => setSelectedImage(im)}>
-                <img
-                  src={`/api/assistant/images/${im.id}`}
-                  alt={im.prompt?.slice(0, 80)}
-                  loading="lazy"
-                />
-              </button>
-            ))}
-            {asArray<any>(images).length === 0 && <p className="dim">생성된 이미지가 없습니다.</p>}
-          </div>
-        )}
-      </aside>
       {selectedImage && <div className="image-modal-backdrop" onClick={() => setSelectedImage(null)}><section className="image-modal" role="dialog" aria-modal="true" aria-label="생성 이미지 상세" onClick={event => event.stopPropagation()}><button autoFocus className="image-modal-close" aria-label="이미지 상세 닫기" onClick={() => setSelectedImage(null)}>×</button><img src={'/api/assistant/images/' + selectedImage.id} alt="생성 이미지" /><div><h2>생성 이미지</h2><p>{selectedImage.prompt}</p><dl><dt>생성 모델</dt><dd>{selectedImage.model}</dd><dt>만든 시간</dt><dd>{new Date(selectedImage.created_at).toLocaleString('ko-KR')}</dd><dt>파일 크기</dt><dd>{Math.round(Number(selectedImage.bytes) / 1024)}KB</dd></dl><a href={'/api/assistant/images/' + selectedImage.id} target="_blank" rel="noreferrer">원본 이미지 열기 ↗</a></div></section></div>}
       {error && (
         <div className="toast" role="alert">

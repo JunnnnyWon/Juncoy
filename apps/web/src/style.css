@@ -3887,6 +3887,9 @@ body:has(.art-workspace) { overflow:hidden; }
 .app-shell:has(.art-workspace) .main-shell { flex:1; min-height:0; overflow:hidden; }
 .art-workspace { height:100%; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 .art-workspace .art-header, .art-workspace .art-toolbar { flex:0 0 auto; }
+.workspace-assistant { grid-template-columns:248px minmax(0,1fr); }
+.chat-generated-image { display:block; max-width:min(100%,560px); padding:0; margin-top:16px; border:1px solid #617065; border-radius:8px; background:#202627; overflow:hidden; cursor:zoom-in; }
+.chat-generated-image img { display:block; width:100%; max-height:640px; object-fit:contain; }
 .panel-source-note { margin:12px 0 18px; color:#c4cdc7; font-size:14px; line-height:1.6; }
 .assistant-image-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .assistant-image-gallery .image-thumbnail { display:block; width:100%; padding:0; overflow:hidden; background:#22292b; border:1px solid #4f5c56; border-radius:6px; cursor:pointer; }
