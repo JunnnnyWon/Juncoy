@@ -305,15 +305,19 @@ async function handleActionMode(
         text: `이미지 미리보기 실패: ${r.error}`,
       };
     const res = r.result as any;
-    await ctx.store.emitRunEvent(runId, 'approval', {
-      approval_id: res.approval_id,
-      summary: res.summary,
-    });
+    if (!res.approval_id) throw new Error('이미지 생성 기능을 사용할 수 없습니다.');
+    await ctx.store.updateRun(runId, { phase: 'generating_image' });
+    await ctx.store.emitRunEvent(runId, 'phase', { phase: 'generating_image' });
+    const outcome = await ctx.store.resolveApproval(res.approval_id, userId, true);
+    if (outcome !== 'approved') throw new Error('이미지 생성 요청이 만료되었습니다. 다시 요청해 주세요.');
+    const approval = await ctx.store.getApproval(res.approval_id, projectId);
+    const generated = approval && await executeApproval(ctx, { DISCORD_GUILD_ID: tctx.acl?.guilds[0] } as AppConfig, registry, projectId, userId, tctx.role, approval);
+    if (!generated) throw new Error('이미지 생성이 완료되지 않았습니다.');
     return {
-      status: 'PARTIAL',
-      phase: 'awaiting_approval',
-      text: `${res.summary}\n승인하면 이미지를 생성합니다. (10분 내 승인 필요)`,
-      extra: { approval_id: res.approval_id },
+      status: 'COMPLETE',
+      phase: 'completed',
+      text: `${res.summary}을 참고해 이미지를 만들었습니다. 오른쪽 이미지 목록에서 결과를 확인해 주세요.`,
+      extra: { image_generated: true },
     };
   }
 

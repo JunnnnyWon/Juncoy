@@ -82,6 +82,13 @@ function AssistantView() {
   const [panelTab, setPanelTab] = useState<'schedule' | 'tasks' | 'files' | 'images'>('schedule');
   const [files, setFiles] = useState<any[] | null>(null);
   const [images, setImages] = useState<any[] | null>(null);
+  const [selectedImage, setSelectedImage] = useState<any | null>(null);
+  useEffect(() => {
+    if (!selectedImage) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setSelectedImage(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedImage]);
   const [mobileSideOpen, setMobileSideOpen] = useState(false);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const selectedFile = (files ?? []).find((file: any) => file.id === selectedFileId) ?? null;
@@ -186,6 +193,7 @@ function AssistantView() {
           ).then((r) => setApprovals(asArray<Approval>(r.pending_approvals)));
         setLive({ ...liveRun, evidence: [...liveRun.evidence] });
         if (kind === 'result') {
+          if (data.image_generated) { setPanelTab('images'); void api<any[]>('/api/assistant/images').then(setImages); }
           es.close();
           setLive(null);
           if (convId) void openConv(convId);
@@ -480,7 +488,7 @@ function AssistantView() {
         <div className="assistant-inspector-head">
           <div>
             <span className="eyebrow">PROJECT SIGNALS</span>
-            <h2>작업 패널</h2>
+            <h2>프로젝트 자료</h2>
           </div>
           <button className="inspector-more" aria-label="패널 설정">
             •••
@@ -497,7 +505,7 @@ function AssistantView() {
             className={panelTab === 'tasks' ? 'active' : ''}
             onClick={() => setPanelTab('tasks')}
           >
-            작업
+            할 일
           </button>
           <button
             className={panelTab === 'files' ? 'active' : ''}
@@ -512,6 +520,7 @@ function AssistantView() {
             이미지
           </button>
         </div>
+        <p className="panel-source-note">{panelTab === 'schedule' ? 'Notion 일정표에서 가져온 일정입니다.' : panelTab === 'tasks' ? 'Notion 작업 현황판의 담당자와 진행 상태를 확인합니다.' : panelTab === 'files' ? '직접 올린 파일입니다. 파일을 누르면 자세히 볼 수 있습니다.' : '만든 이미지입니다. 누르면 크게 보고 생성 내용을 확인합니다.'}</p>
         {panelTab === 'files' && (
           <>
             <button className="primary-button" onClick={() => fileInput.current?.click()}>
@@ -534,28 +543,24 @@ function AssistantView() {
             </div>
             {asArray<any>(files).filter((f) => f && typeof f === 'object').map((f: any) => (
             <div key={f.id} className={`file-row ${selectedFileId === f.id ? 'active' : ''}`} onClick={() => setSelectedFileId(f.id)}>
-              <div className="file-row-main"><strong>{f.filename}</strong><span>{(f.bytes / 1024).toFixed(0)}KB · {f.mime}</span></div>
-              <div className="file-state-stack"><span className={`state-badge state-${String(f.state ?? '').toLowerCase()}`}>업로드 {f.state}</span><span className={`state-badge state-${String(f.parse_status ?? 'NOT_REQUESTED').toLowerCase()}`}>Parse {f.parse_status ?? '미요청'}</span><span className={`state-badge state-${String(f.document_state ?? '').toLowerCase()}`}>색인 {f.document_state ?? f.state}</span></div>
+              <div className="file-row-main"><strong>{f.filename}</strong><span>{(f.bytes / 1024).toFixed(0)}KB · {f.filename?.split('.').pop()?.toUpperCase() ?? '파일'}</span></div>
+              <div className="file-state-stack"><span className="state-badge">{f.state === 'FAILED' || f.document_state === 'FAILED' ? '처리 실패' : f.document_state === 'READY' ? '검색 가능' : f.state === 'READY' ? '업로드 완료' : '처리 중'}</span></div>
               <span className="file-chevron">›</span>
             </div>
             ))}
-            {selectedFile && <div className="file-detail"><div className="file-detail-head"><div><span className="eyebrow">FILE INSPECTOR</span><h3>{selectedFile.filename}</h3></div><button className="icon-button" aria-label="파일 상세 닫기" onClick={() => setSelectedFileId(null)}>×</button></div><dl><dt>원본 SHA-256</dt><dd>{selectedFile.sha256}</dd><dt>Parser</dt><dd>{selectedFile.parser_kind ?? '미요청'} · {selectedFile.parser_version ?? '-'}</dd><dt>처리 상태</dt><dd>{selectedFile.parse_status ?? 'NOT_REQUESTED'} · {selectedFile.document_state ?? selectedFile.state}</dd><dt>Cache</dt><dd>{selectedFile.cache_hit ? 'HIT' : 'MISS / 없음'}</dd><dt>원본 검증</dt><dd>{selectedFile.original_verified_at ? new Date(selectedFile.original_verified_at).toLocaleString('ko-KR') : '아직 검증되지 않음'}</dd></dl><div className="file-detail-actions">{selectedFile.mime === 'application/pdf' && selectedFile.document_id && <button className="secondary-button" onClick={() => void reparseFile(selectedFile.id)}>Parse 재처리</button>}<button className="ghost-button" onClick={() => void deleteFile(selectedFile.id)}>삭제 승인 만들기</button></div></div>}
+            {selectedFile && <div className="file-detail"><div className="file-detail-head"><h3>{selectedFile.filename}</h3><button className="icon-button" aria-label="파일 상세 닫기" onClick={() => setSelectedFileId(null)}>×</button></div><p>{Math.round(Number(selectedFile.bytes) / 1024)}KB · {selectedFile.filename?.split(".").pop()?.toUpperCase()}</p><p>{selectedFile.document_state === "READY" ? "어시스턴트가 이 파일을 검색해 답변에 사용할 수 있습니다." : "업로드한 자료를 읽고 검색할 수 있도록 준비하고 있습니다."}</p><div className="file-detail-actions"><a href={"/api/assistant/files/" + selectedFile.id + "/content"} target="_blank" rel="noreferrer">원본 파일 열기 ↗</a>{selectedFile.mime === "application/pdf" && selectedFile.document_id && <button onClick={() => void reparseFile(selectedFile.id)}>파일 다시 읽기</button>}<button onClick={() => void deleteFile(selectedFile.id)}>파일 삭제 요청</button></div></div>}
           </>
         )}
         {panelTab === 'images' && (
-          <div className="gallery">
+          <div className="gallery assistant-image-gallery">
             {asArray<any>(images).filter((im) => im && typeof im === 'object').map((im: any) => (
-              <div key={im.id} className="image-result-row"><a
-                href={`/api/assistant/images/${im.id}`}
-                target="_blank"
-                rel="noreferrer"
-              >
+              <button key={im.id} className="image-thumbnail" aria-label="이미지 상세 보기" onClick={() => setSelectedImage(im)}>
                 <img
                   src={`/api/assistant/images/${im.id}`}
                   alt={im.prompt?.slice(0, 80)}
                   loading="lazy"
                 />
-              </a><div className="image-result-meta"><strong>{im.review_status ?? 'DRAFT'}</strong><span>{im.model} · {im.mime ?? 'image/png'}</span><span>{im.bytes ? `${Math.round(im.bytes / 1024)}KB` : 'size unknown'} · hash {im.sha256 ? im.sha256.slice(0, 12) : 'unknown'}</span><span>{im.review_status === 'APPROVED_CANONICAL' ? 'canonical 재사용 가능' : 'canonical 승인 전 · 자동 검색 제외'}</span></div></div>
+              </button>
             ))}
             {asArray<any>(images).length === 0 && <p className="dim">생성된 이미지가 없습니다.</p>}
           </div>
@@ -572,6 +577,7 @@ function AssistantView() {
           )))}
         {(panelTab === 'schedule' || panelTab === 'tasks') && asArray<any>(panelTab === 'schedule' ? schedule : tasks).length === 0 && <p className="dim">항목이 없습니다.</p>}
       </aside>
+      {selectedImage && <div className="image-modal-backdrop" onClick={() => setSelectedImage(null)}><section className="image-modal" role="dialog" aria-modal="true" aria-label="생성 이미지 상세" onClick={event => event.stopPropagation()}><button autoFocus className="image-modal-close" aria-label="이미지 상세 닫기" onClick={() => setSelectedImage(null)}>×</button><img src={'/api/assistant/images/' + selectedImage.id} alt="생성 이미지" /><div><h2>생성 이미지</h2><p>{selectedImage.prompt}</p><dl><dt>생성 모델</dt><dd>{selectedImage.model}</dd><dt>만든 시간</dt><dd>{new Date(selectedImage.created_at).toLocaleString('ko-KR')}</dd><dt>파일 크기</dt><dd>{Math.round(Number(selectedImage.bytes) / 1024)}KB</dd></dl><a href={'/api/assistant/images/' + selectedImage.id} target="_blank" rel="noreferrer">원본 이미지 열기 ↗</a></div></section></div>}
       {error && (
         <div className="toast" role="alert">
           {error}

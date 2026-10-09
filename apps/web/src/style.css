@@ -3887,6 +3887,22 @@ body:has(.art-workspace) { overflow:hidden; }
 .app-shell:has(.art-workspace) .main-shell { flex:1; min-height:0; overflow:hidden; }
 .art-workspace { height:100%; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 .art-workspace .art-header, .art-workspace .art-toolbar { flex:0 0 auto; }
+.panel-source-note { margin:12px 0 18px; color:#c4cdc7; font-size:14px; line-height:1.6; }
+.assistant-image-gallery { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.assistant-image-gallery .image-thumbnail { display:block; width:100%; padding:0; overflow:hidden; background:#22292b; border:1px solid #4f5c56; border-radius:6px; cursor:pointer; }
+.assistant-image-gallery .image-thumbnail img { display:block; width:100%; height:auto; aspect-ratio:1; object-fit:cover; }
+.assistant-image-gallery .image-thumbnail:focus-visible { outline:2px solid #d5b35d; outline-offset:3px; }
+.image-modal-backdrop { position:fixed; inset:0; z-index:60; background:#000b; display:grid; place-items:center; padding:24px; }
+.image-modal { position:relative; display:grid; grid-template-columns:minmax(0,1.3fr) minmax(260px,1fr); gap:24px; max-width:1100px; width:100%; max-height:90dvh; overflow:auto; padding:28px; background:#202627; border:1px solid #66746c; border-radius:10px; color:#e9efea; }
+.image-modal > img { width:100%; max-height:80dvh; object-fit:contain; }
+.image-modal p { line-height:1.7; font-size:15px; white-space:pre-wrap; }
+.image-modal-close { position:absolute; right:10px; top:8px; width:36px; height:36px; font-size:28px; color:white; background:#344039; border:0; border-radius:5px; cursor:pointer; }
+.image-modal dl { display:grid; grid-template-columns:100px 1fr; gap:12px; font-size:14px; }
+.image-modal dd { margin:0; overflow-wrap:anywhere; }
+.workspace-assistant .file-row-main strong { font-size:15px; white-space:normal; line-height:1.5; overflow-wrap:anywhere; }
+.workspace-assistant .file-row-main span, .workspace-assistant .state-badge, .workspace-assistant .side-row .dim { font-size:13px; }
+.workspace-assistant .side-row-title, .workspace-assistant .file-detail { font-size:15px; line-height:1.6; }
+@media(max-width:680px) { .image-modal { grid-template-columns:1fr; } .image-modal-backdrop { padding:12px; } }
 .art-workspace .art-header-buttons .art-bible-button { order:1; background:#d5b35d; border-color:#e8ca82; color:#251d0b; width:140px; }
 .art-workspace .art-header-buttons > a { order:2; }
 .art-bible-open .art-toolbar > :not(:first-child), .art-bible-open .art-board, .art-bible-open .art-mobile-tabs { display:none; }
