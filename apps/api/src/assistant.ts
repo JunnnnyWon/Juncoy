@@ -1083,12 +1083,13 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const extractions = await ctx.store.getArtExtractionsForUploads(projectId, uploadIds);
     const schema = z.object({
       summary: z.string(),
+      appearance: z.object({ character: z.string(), materials: z.string(), overall: z.string() }),
       common_rules: z.array(z.object({ category: z.string(), statement: z.string(), evidence_ids: z.array(z.string()) })),
       conflicts: z.array(z.object({ statement: z.string(), evidence_ids: z.array(z.string()) })),
       suggestions: z.array(z.object({ asset_id: z.string(), role: z.string(), usage: z.string(), observation: z.string() })),
     });
     const result = await ctx.model.structured(schema, { revision: revision.revision, references: refs, extractions, nodes: (revision.snapshot as any)?.nodes ?? [], edges: (revision.snapshot as any)?.edges ?? [] },
-      '현재 보드 revision의 레퍼런스, Gemini 시각 관찰, 사람 수정값, 메모, 그룹, 연결만 분석한다. 사람 수정값과 역할별 지시는 AI 관찰보다 우선한다. 관찰을 승인 규칙으로 취급하지 않는다. 이미지에 없는 사실, 권리, 스타일을 추정하지 않는다. 공통 규칙과 충돌을 분리하고 근거 asset id만 evidence_ids에 연결한다.');
+      '현재 보드의 참고 이미지, AI 이미지 설명, 사람 수정값, 팀 메모, 프레임만 분석한다. 사람 수정값과 역할별 지시를 우선한다. 기획자와 아트 담당자가 바로 이해할 쉬운 한국어로 원하는 모습과 작업 기준을 설명한다. appearance.character는 캐릭터의 형태와 그림체, materials는 옷과 소품의 재질, overall은 최종 느낌이다. 각 항목은 2~3개의 짧은 문장으로 무엇을 따라야 하는지 구체적으로 쓴다. summary는 이 세 항목을 요약한다. 사용자에게 보이는 문장에 revision, MUST_FOLLOW, STRONG_REFERENCE, mood_only, asset id, 파생 근거, canonical 같은 내부 용어를 넣지 않는다. common_rules는 근거가 있는 공통 기준 3~6개, conflicts는 실제 충돌만 적는다. suggestions는 이미지 카드별 한 번만 작성하고 이유는 2문장 이내다. 없는 사실을 추정하지 않는다. evidence_ids와 asset_id는 제공된 카드 id를 사용한다.');
     const knownEvidence = new Set(refs.flatMap((ref: any) => [ref.id, ref.art_asset_id]).filter(Boolean));
     const invalidEvidence = [...(result.result.common_rules ?? []), ...(result.result.conflicts ?? [])].flatMap((item: any) => (item.evidence_ids ?? []).filter((id: string) => !knownEvidence.has(id)));
     if (invalidEvidence.length) return reply.code(502).send({ error: { code: 'MODEL_EVIDENCE_OUT_OF_SCOPE' } });

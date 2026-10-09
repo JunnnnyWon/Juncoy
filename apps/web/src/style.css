@@ -3901,6 +3901,9 @@ body:has(.art-workspace) { overflow:hidden; }
 .art-bible-open .draft-section:last-of-type > h4, .art-bible-open .draft-section:last-of-type > p { grid-column:1 / -1; }
 .art-bible-open .draft-actions { flex-direction:row; position:sticky; bottom:0; padding:16px; background:#202522; border-top:1px solid #566057; }
 .art-bible-empty { max-width:900px; margin:60px auto; text-align:center; font-size:17px; color:#dce5de; }
+.bible-appearance { grid-column:1 / -1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; }
+.bible-appearance > h4, .bible-appearance > p { grid-column:1 / -1; }
+@media(max-width:900px) { .bible-appearance { grid-template-columns:1fr; } }
 @media(max-width:900px) { .art-bible-open .board-draft-editor { display:block; } .art-bible-open .board-draft-editor .draft-section:last-of-type { grid-template-columns:1fr; } .art-bible-open .draft-actions { flex-wrap:wrap; } .art-workspace .art-header-buttons { flex-wrap:wrap; } }
 .art-inspector .board-draft-editor { padding:20px; margin-bottom:24px; color:#e4e9e5; }
 .board-draft-editor h3 { font-size:20px; }
