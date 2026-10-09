@@ -2764,23 +2764,20 @@ small {
 .canvas-reference-card {
   position: absolute;
   z-index: 4;
-  min-width: 180px;
-  min-height: 160px;
   border: 1px solid var(--border-strong);
   background: var(--surface-raised);
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.22);
   border-radius: 6px;
   transition: all 0.15s ease;
 }
-.canvas-reference-card.active,
-.canvas-reference-card.multi-selected {
+.canvas-reference-card.active {
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 2px var(--accent-primary), 0 16px 36px rgba(0, 0, 0, 0.28);
 }
 .canvas-reference-card img {
-  height: calc(100% - 64px);
-  min-height: 100px;
-  object-fit: cover;
+  display: block;
+  max-width: none;
+  object-fit: contain;
   filter: none;
 }
 .canvas-reference-card .reference-card-foot {
@@ -2804,26 +2801,23 @@ small {
   cursor: grab;
   border-radius: 4px;
 }
-.reference-select,
 .reference-resize {
   position: absolute;
   z-index: 5;
+  width: 14px;
+  height: 14px;
+  padding: 0;
   color: var(--text-secondary);
   background: var(--surface-raised);
   border: 1px solid var(--border-strong);
+  border-radius: 3px;
   font-size: var(--text-xs);
   transition: all 0.15s ease;
 }
-.reference-select {
-  left: 8px;
-  top: 8px;
-}
-.reference-resize {
-  right: 6px;
-  bottom: 6px;
-  cursor: nwse-resize;
-}
-.reference-select:hover,
+.reference-resize.resize-nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.reference-resize.resize-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.reference-resize.resize-ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.reference-resize.resize-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
 .reference-resize:hover {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
@@ -2973,15 +2967,17 @@ small {
 .board-label { color:#7d8580; left:18px; top:16px; }
 .board-label strong { color:#c7cdc5; }
 .art-inspector { background:#151719; border-left:1px solid #303438; padding:18px 16px; }
-.canvas-reference-card { position:absolute; z-index:4; min-width:160px; min-height:140px; border:1px solid #3e4548; background:#25292c; box-shadow:0 14px 30px rgba(0,0,0,.22); }
-.canvas-reference-card.active,.canvas-reference-card.multi-selected { border-color:#b33d3b; box-shadow:0 0 0 1px #b33d3b, 0 16px 36px rgba(0,0,0,.28); }
-.canvas-reference-card img { height:calc(100% - 58px); min-height:90px; object-fit:cover; filter:none; }
+.canvas-reference-card { position:absolute; z-index:4; border:1px solid #3e4548; background:#25292c; box-shadow:0 14px 30px rgba(0,0,0,.22); }
+.canvas-reference-card.active { border-color:#b33d3b; box-shadow:0 0 0 1px #b33d3b, 0 16px 36px rgba(0,0,0,.28); }
+.canvas-reference-card img { display:block; max-width:none; object-fit:contain; filter:none; }
 .canvas-reference-card .reference-card-foot { color:#d5d8d1; padding:7px 8px; background:#25292c; }
 .canvas-reference-card .reference-card-foot span { color:#9fa69f; }
 .reference-drag-handle { position:absolute; z-index:3; top:5px; right:6px; padding:2px 5px; color:#c3c8c1; background:rgba(21,23,25,.78); border:1px solid #4c5255; font:9px monospace; cursor:grab; }
-.reference-select,.reference-resize { position:absolute; z-index:5; color:#aeb5ae; background:#202326; border:1px solid #4b5154; font-size:11px; }
-.reference-select { left:6px; top:6px; }
-.reference-resize { right:5px; bottom:5px; cursor:nwse-resize; }
+.reference-resize { position:absolute; z-index:5; width:14px; height:14px; padding:0; color:#aeb5ae; background:#202326; border:1px solid #4b5154; border-radius:3px; font-size:11px; }
+.reference-resize.resize-nw { left:-6px; top:-6px; cursor:nwse-resize; }
+.reference-resize.resize-se { right:-6px; bottom:-6px; cursor:nwse-resize; }
+.reference-resize.resize-ne { right:-6px; top:-6px; cursor:nesw-resize; }
+.reference-resize.resize-sw { left:-6px; bottom:-6px; cursor:nesw-resize; }
 .role-usage-list { margin-top:14px; padding:10px; border:1px solid #303438; color:#adb4ad; font-size:10px; }
 .role-usage-list legend { padding:0 5px; color:#d5a79e; font-size:10px; }
 .role-usage-list div { display:grid; grid-template-columns:1fr 1fr; gap:6px; align-items:center; margin:7px 0; }
@@ -3124,27 +3120,6 @@ small {
 }
 .art-board.dragging .board-stage {
   transition: none;
-}
-.canvas-edges {
-  position: absolute;
-  z-index: 2;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  pointer-events: none;
-}
-.canvas-edges line {
-  stroke: #9d3735;
-  stroke-width: 2;
-  stroke-dasharray: 5 4;
-}
-.canvas-edges text {
-  fill: #8a3c39;
-  font: 9px monospace;
-  paint-order: stroke;
-  stroke: #d9d5cb;
-  stroke-width: 4px;
 }
 .canvas-node {
   position: absolute;
@@ -3446,8 +3421,8 @@ small {
 }
 .inspector-image {
   width: 100%;
-  height: 152px;
-  object-fit: cover;
+  height: auto;
+  object-fit: contain;
   display: block;
   margin-bottom: 20px;
   filter: saturate(0.72);
