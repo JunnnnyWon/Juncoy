@@ -229,6 +229,15 @@ export function ArtReferenceCanvas() {
   const [brief, setBrief] = useState<any>(null);
   const [generated, setGenerated] = useState<any[]>([]);
   const [analysis, setAnalysis] = useState<any>(null);
+  const [bibleOpen, setBibleOpen] = useState(false);
+  const [bibleLoading, setBibleLoading] = useState(false);
+  const openBible = async () => {
+    setBibleOpen(true);
+    if (analysis || !boardId) return;
+    setBibleLoading(true);
+    try { setAnalysis(await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + revisionRef.current)); } catch { /* No saved draft yet. */ }
+    finally { setBibleLoading(false); }
+  };
   const [analysisEdit, setAnalysisEdit] = useState('');
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [briefBusy, setBriefBusy] = useState(false);
@@ -436,6 +445,7 @@ export function ArtReferenceCanvas() {
       await flushBoard();
       const draft = await api<any>('/api/assistant/art-boards/' + boardId + '/analyze', { method: 'POST' });
       setAnalysis(draft); setAnalysisEdit(JSON.stringify(draft.result, null, 2));
+      setBibleOpen(true);
     } catch (error) { setActionError(artActionError(error)); } finally {
       setAnalysisBusy(false);
     }
@@ -570,7 +580,7 @@ export function ArtReferenceCanvas() {
     return () => window.removeEventListener('keydown', onKey);
   }, [activeNodeId]);
   return (
-    <div className="art-workspace">
+    <div className={'art-workspace' + (bibleOpen ? ' art-bible-open' : '')}>
       <header className="art-header">
         <div>
           <span className="eyebrow">PROJECT ART REFERENCES</span>
@@ -586,11 +596,13 @@ export function ArtReferenceCanvas() {
               {analysisBusy ? '자동 정리 중…' : '전체 레퍼런스 자동 정리'}
             </button>
             <a className="primary-button" href="/assistant">어시스턴트에서 이미지 요청 ↗</a>
+            <button className="art-bible-button" onClick={() => void openBible()} aria-pressed={bibleOpen}>아트바이블</button>
           </div>
         </div>
       </header>
       {actionError && <p role="alert" className="brief-error">{actionError}</p>}
       <div className="art-toolbar">
+        {bibleOpen && <button className="art-tool" onClick={() => setBibleOpen(false)}>← 캔버스로 돌아가기</button>}
         <button className="art-tool" aria-label="실행 취소" title="실행 취소" disabled={!history.current?.past.length} onClick={() => travel('undo')}>↶</button>
         <button className="art-tool" aria-label="다시 실행" title="다시 실행" disabled={!history.current?.future.length} onClick={() => travel('redo')}>↷</button>
         <button className="art-tool active">↖ 선택</button>
@@ -748,7 +760,8 @@ export function ArtReferenceCanvas() {
               )}
             </div>
           )}
-          {analysis && (
+          {bibleOpen && !analysis && <div className="art-bible-empty"><h2>아트바이블</h2><p>{bibleLoading ? '저장된 내용을 불러오는 중…' : '전체 레퍼런스 자동 정리를 누르면 참고 자료를 읽고 초안을 만듭니다.'}</p></div>}
+          {bibleOpen && analysis && (
             <BoardDraftEditor analysis={analysis} refs={refs} stale={Number(analysis.revision) !== revision || dirtyRef.current} onSave={async (draft) => {
               const result = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision, { method: 'PATCH', body: JSON.stringify({ analysis_id: analysis.id, result: draft }) });
               setAnalysis(result); return result;
