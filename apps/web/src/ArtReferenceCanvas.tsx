@@ -77,6 +77,7 @@ function artActionError(error: unknown) {
   const code = (error as { code?: string })?.code;
   if (code === 'REVISION_CONFLICT') return '분석 후 보드가 변경되었습니다. 전체 레퍼런스를 다시 정리한 뒤 승인해 주세요.';
   if (code === 'MODEL_EVIDENCE_OUT_OF_SCOPE') return '분석 결과가 현재 이미지와 연결되지 않았습니다. 다시 분석해 주세요.';
+  if (code === 'REFERENCE_RIGHTS_REQUIRED') return '참고 이미지의 출처와 사용 가능 여부를 권리 메모에 기록한 뒤 다시 생성 준비를 실행해 주세요.';
   return (error instanceof Error ? error.message : '요청을 처리하지 못했습니다.') + (code ? ' (' + code + ')' : '');
 }
 function inferRoleFromObservation(observation: any): Role {
@@ -666,7 +667,8 @@ export function ArtReferenceCanvas() {
                       });
                       setBrief({ ...brief, generated: result.executed === true, generation_not_executed: result.executed !== true });
                       if (result.executed) setGenerated(await api<any[]>('/api/assistant/images'));
-                    } catch {
+                    } catch (error) {
+                      setActionError(artActionError(error));
                       setBrief({ ...brief, generation_error: true });
                     }
                   }}

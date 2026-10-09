@@ -258,7 +258,7 @@ export async function finishImageJob(
       provider_request_id=coalesce(${result?.requestId ?? null}, provider_request_id),
       cost_status=${result?.costUsd == null ? 'UNKNOWN' : 'KNOWN'}, finished_at=now()
       WHERE id=${jobId} AND status='RUNNING'
-        AND (${executionToken ?? null} IS NULL OR execution_token=${executionToken ?? null})`.execute(tx);
+        AND (${executionToken ?? null}::uuid IS NULL OR execution_token=${executionToken ?? null}::uuid)`.execute(tx);
     if (!Number(updated.numAffectedRows ?? 0)) return;
     if (result) await sql`INSERT INTO image_results(id, job_id, storage_key, bytes, width, height, cost_usd, mime, sha256, cost_status)
       VALUES (${randomUUID()}, ${jobId}, ${result.storageKey}, ${result.bytes},
