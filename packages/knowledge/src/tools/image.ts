@@ -209,7 +209,14 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
           const bytes = await storage.read(parent.storage_key);
           if (parent.sha256 && createHash('sha256').update(bytes).digest('hex') !== parent.sha256) throw new DomainError('IMAGE_HASH_MISMATCH', '수정할 원본을 확인하지 못했습니다.', 409);
           inputs = [{ bytes, mime: parent.mime ?? 'image/png', role: 'EDIT_SOURCE', instruction: '이 이미지를 직접 수정한다. 요청하지 않은 인물 얼굴 의상 구도 배경은 유지한다.' }];
-          await sql`UPDATE image_jobs SET options=${JSON.stringify({ parent_image_id: after.parent_image_id })}::jsonb WHERE id=${jobId}`.execute(ctx.store.db);
+          for (const reference of after.reference_images ?? []) {
+            const row = await first<any>(sql`SELECT r.storage_key,r.mime,r.sha256 FROM image_results r JOIN image_jobs j ON j.id=r.job_id WHERE r.id=${reference.id} AND j.project_id=${ctx.projectId} AND j.owner_id=${ctx.userId}`, ctx.store.db);
+            if (!row) throw new DomainError("IMAGE_NOT_FOUND", "보조 참고 이미지를 찾을 수 없습니다.", 404);
+            const bytes = await storage.read(row.storage_key);
+            if (row.sha256 && createHash("sha256").update(bytes).digest("hex") !== row.sha256) throw new DomainError("IMAGE_HASH_MISMATCH", "보조 원본을 확인하지 못했습니다.", 409);
+            inputs.push({ bytes, mime: row.mime ?? "image/png", role: "SUPPORTING_REFERENCE", instruction: reference.instruction });
+          }
+          await sql`UPDATE image_jobs SET options=${JSON.stringify({ parent_image_id: after.parent_image_id, reference_images: after.reference_images ?? [] })}::jsonb WHERE id=${jobId}`.execute(ctx.store.db);
         }
         const out = await provider.generate(brief.prompt, after.negative, inputs);
         const buf = Buffer.from(out.b64, 'base64');

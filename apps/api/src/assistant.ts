@@ -166,6 +166,7 @@ async function executeRunInOrder(
     const explicitTarget = (current?.attachments as any[])?.find(item => item?.type === "edit_image")?.id;
     let mode = await classifyMode(ctx, text);
     let parentImageId: string | undefined;
+    let referenceImages: { id: string; instruction: string }[] = [];
     let generationRequest = text;
     if (conversationImages.length || explicitTarget) {
       const plan = await ctx.model.structured(z.object({ intent: z.enum(["new", "edit", "variant", "question", "other"]), image_number: z.number().int().nonnegative(), change: z.string(), preserve: z.string() }), { request: text, selected_image_id: explicitTarget, images: conversationImages.map((image, index) => ({ number: index + 1, id: image.id, prompt: image.prompt })), recent_messages: history.slice(-12).map(message => ({ role: message.role, content: message.content })) }, "현재 대화의 이미지 요청을 분류한다. 방금/더 밝게/색 변경은 edit, 같은 조건 다른 후보는 variant, 이미지 설명 질문은 question, 새 장면은 new다. 수정 대상 image_number는 사용자가 지정한 순번, 최근 이미지는 마지막 순번이다. 명시 선택 이미지가 우선한다. change는 바꿀 부분, preserve는 인물 얼굴 의상 구도 등 변경하지 않을 부분이다. 사용자 지시를 우선하고 모호하면 image_number=0으로 질문한다.");
@@ -173,6 +174,8 @@ async function executeRunInOrder(
         const target = explicitTarget ? conversationImages.find(image => image.id === explicitTarget) : conversationImages[plan.result.image_number - 1];
         if (!target) throw new Error("어느 이미지를 수정할지 지정해 주세요. 이미지 아래의 이 이미지 수정 버튼을 눌러 주세요.");
         mode = "generate"; parentImageId = target.id;
+        const sources = await ctx.model.structured(z.object({ references: z.array(z.object({ image_number: z.number().int().positive(), instruction: z.string().min(1).max(1000) })).max(15) }), { request: text, primary_image_id: target.id, images: conversationImages.map((image, index) => ({ number: index + 1, id: image.id, description: image.prompt })) }, "사용자 요청을 구현하는 데 필요한 보조 이미지를 현재 대화에서 고른다. 첫 이미지 인물과 두번째 배경을 합쳐달라는 요청처럼 여러 참조가 필요하면 각 이미지의 용도를 instruction에 구체적으로 적는다. 사용자가 명시한 이미지는 반드시 포함한다. 단순 밝기 변경에는 보조 이미지가 필요 없으므로 빈 배열. 주 이미지 자체는 제외. 관련 없는 이미지를 억지로 넣지 않는다.");
+        referenceImages = sources.result.references.map(ref => { const image = conversationImages[ref.image_number - 1]; if (!image) throw new Error("참고할 이미지 순번을 확인해 주세요."); return { id: image.id, instruction: ref.instruction }; }).filter((ref, index, all) => ref.id !== parentImageId && all.findIndex(item => item.id === ref.id) === index);
         generationRequest = ["기존 이미지 편집. 입력 원본을 기준으로 요청한 부분만 변경한다.", "기존 생성 조건: " + String(target.prompt).slice(0, 1600), "이번 요청: " + text, "변경: " + plan.result.change, "유지: " + plan.result.preserve].join("\n").slice(0, 4000);
       } else if (plan.result.intent === "question") mode = "answer";
     }
@@ -221,7 +224,7 @@ async function executeRunInOrder(
       }
     } else {
       // propose/mutate/generate/ingest — 승인 필요 작업은 preview 도구가 approval을 만든다.
-      final = await handleActionMode(ctx, registry, tctx, mode, runId, generationRequest, projectId, userId, parentImageId);
+      final = await handleActionMode(ctx, registry, tctx, mode, runId, generationRequest, projectId, userId, parentImageId, referenceImages);
     }
 
     if (await cancelled()) {
@@ -311,6 +314,7 @@ async function handleActionMode(
   projectId: string,
   userId: string,
   parentImageId?: string,
+  referenceImages: { id: string; instruction: string }[] = [],
 ) {
   if (mode === 'ingest')
     return {
@@ -320,7 +324,7 @@ async function handleActionMode(
     };
 
   if (mode === 'generate') {
-    const preview = await ctx.previewArtBoard?.(projectId, userId, tctx.role, text, parentImageId);
+    const preview = await ctx.previewArtBoard?.(projectId, userId, tctx.role, text, parentImageId, referenceImages);
     const r = preview ? { ok: true, result: { ...preview, summary: "아트보드 전체 참조 · " + preview.reference_upload_ids.length + "개 원본" } } : { ok: false, error: "아트보드 연결을 확인해 주세요." };
     if (!r.ok)
       return {
@@ -429,10 +433,10 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         statusCode: 503,
         code: 'KNOWLEDGE_DISABLED',
       });
-    c.previewArtBoard = async (projectId, userId, role, request, parentImageId) => {
+    c.previewArtBoard = async (projectId, userId, role, request, parentImageId, referenceImages) => {
       const boards = await c.store.listArtBoards(projectId, userId);
       if (!boards[0]) throw Object.assign(new Error("아트보드에 참고 이미지를 먼저 추가해 주세요."), { code: "ART_BOARD_REQUIRED", statusCode: 409 });
-      return previewArtBoard(c, projectId, userId, role, boards[0].id, { request, parent_image_id: parentImageId });
+      return previewArtBoard(c, projectId, userId, role, boards[0].id, { request, parent_image_id: parentImageId, reference_images: referenceImages });
     };
     const project = await findProjectForGuild(c, deps.config.DISCORD_GUILD_ID);
     if (!project)
@@ -1185,6 +1189,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       .object({
         request: z.string().min(1).max(8000).default('캐릭터 컨셉 아트'),
         parent_image_id: z.string().uuid().optional(),
+        reference_images: z.array(z.object({ id: z.string().uuid(), instruction: z.string().max(1000) })).max(15).default([]),
         revision: z.number().int().positive().optional(),
       })
       .parse(input ?? {});
@@ -1299,7 +1304,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
           },
           beforeHash: null,
           after: {
-            image_brief: brief, prompt: brief.prompt, model: brief.model, negative: drafted.result.negative_constraints.join(', '), parent_image_id: body.parent_image_id,
+            image_brief: brief, prompt: brief.prompt, model: brief.model, negative: drafted.result.negative_constraints.join(', '), parent_image_id: body.parent_image_id, reference_images: body.reference_images,
           },
           expiresAt: new Date(
             Date.now() + Number(process.env.ASSISTANT_APPROVAL_TTL_MS ?? 600_000),
