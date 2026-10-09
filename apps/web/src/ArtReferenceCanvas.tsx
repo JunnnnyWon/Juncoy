@@ -97,6 +97,9 @@ export function ArtReferenceCanvas() {
   const [edges, setEdges] = useState<ArtCanvasEdge[]>([]);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  useEffect(() => { zoomRef.current = zoom; panRef.current = pan; }, [zoom, pan]);
   const history = useRef<CanvasHistory<{ refs: RefCard[]; nodes: ArtCanvasNode[]; edges: ArtCanvasEdge[]; zoom: number; pan: { x: number; y: number } }> | null>(null);
   const restoring = useRef(false);
   const loadedBoard = useRef(false);
@@ -136,11 +139,29 @@ export function ArtReferenceCanvas() {
     if (!rect) { setZoom(next); return; }
     const px = cx ?? rect.width / 2;
     const py = cy ?? rect.height / 2;
-    const bx = (px - pan.x) / zoom;
-    const by = (py - pan.y) / zoom;
+    const currentZoom = zoomRef.current;
+    const currentPan = panRef.current;
+    const bx = (px - currentPan.x) / currentZoom;
+    const by = (py - currentPan.y) / currentZoom;
     setZoom(next);
     setPan({ x: px - bx * next, y: py - by * next });
   };
+  useEffect(() => {
+    const board = boardEl.current;
+    if (!board) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const rect = board.getBoundingClientRect();
+      beginGesture();
+      applyZoom(zoomRef.current * Math.exp(-event.deltaY * 0.0015), event.clientX - rect.left, event.clientY - rect.top);
+      if (wheelTimer.current) clearTimeout(wheelTimer.current);
+      wheelTimer.current = setTimeout(() => { endGesture(); }, 350);
+    };
+    board.addEventListener('wheel', onWheel, { passive: false });
+    return () => board.removeEventListener('wheel', onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const travel = (direction: 'undo' | 'redo') => {
     if (!history.current) return;
     const next = travelCanvas(history.current, direction);
@@ -580,15 +601,6 @@ export function ArtReferenceCanvas() {
           onDrop={(event) => {
             event.preventDefault();
             addFiles(event.dataTransfer.files);
-          }}
-          onWheel={(event) => {
-            if (!event.ctrlKey && !event.metaKey) return;
-            event.preventDefault();
-            const rect = boardEl.current?.getBoundingClientRect();
-            beginGesture();
-            applyZoom(zoom * Math.exp(-event.deltaY * 0.0015), rect ? event.clientX - rect.left : undefined, rect ? event.clientY - rect.top : undefined);
-            if (wheelTimer.current) clearTimeout(wheelTimer.current);
-            wheelTimer.current = setTimeout(() => { endGesture(); }, 350);
           }}
           onPointerDown={(event) => {
             if ((event.target as HTMLElement).closest('.reference-card, .canvas-node, button, input, select, textarea')) return;
