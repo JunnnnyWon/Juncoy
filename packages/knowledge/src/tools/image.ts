@@ -202,7 +202,16 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
             , ${briefRef.asset_revision}, ${briefRef.source_sha256}, ${briefRef.crop ? JSON.stringify(briefRef.crop) : null}::jsonb
           )`.execute(ctx.store.db);
         }
-        const out = await provider.generate(brief.prompt, after.negative, referenceInputs);
+        let inputs = referenceInputs;
+        if (after.parent_image_id) {
+          const parent = await first<any>(sql`SELECT r.storage_key, r.mime, r.sha256 FROM image_results r JOIN image_jobs j ON j.id=r.job_id WHERE r.id=${after.parent_image_id} AND j.project_id=${ctx.projectId} AND j.owner_id=${ctx.userId}`, ctx.store.db);
+          if (!parent) throw new DomainError('IMAGE_NOT_FOUND', '수정할 이미지를 찾을 수 없습니다.', 404);
+          const bytes = await storage.read(parent.storage_key);
+          if (parent.sha256 && createHash('sha256').update(bytes).digest('hex') !== parent.sha256) throw new DomainError('IMAGE_HASH_MISMATCH', '수정할 원본을 확인하지 못했습니다.', 409);
+          inputs = [{ bytes, mime: parent.mime ?? 'image/png', role: 'EDIT_SOURCE', instruction: '이 이미지를 직접 수정한다. 요청하지 않은 인물 얼굴 의상 구도 배경은 유지한다.' }];
+          await sql`UPDATE image_jobs SET options=${JSON.stringify({ parent_image_id: after.parent_image_id })}::jsonb WHERE id=${jobId}`.execute(ctx.store.db);
+        }
+        const out = await provider.generate(brief.prompt, after.negative, inputs);
         const buf = Buffer.from(out.b64, 'base64');
         const resultKey = `img-${randomUUID()}.png`;
         await storage.put(resultKey, buf);

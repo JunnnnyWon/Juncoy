@@ -25,7 +25,7 @@ interface Deps {
 }
 
 export interface KnowledgeCtx {
-  previewArtBoard?: (projectId: string, userId: string, role: "reader" | "editor" | "admin", request: string) => Promise<any>;
+  previewArtBoard?: (projectId: string, userId: string, role: "reader" | "editor" | "admin", request: string, parentImageId?: string) => Promise<any>;
   store: KnowledgeStore;
   embeddings?: UpstageEmbeddings;
   discordRead?: (timeoutMs: number) => Promise<{ ok: boolean; gaps: string[] }>;

@@ -81,6 +81,7 @@ function AssistantView() {
   const [files, setFiles] = useState<any[] | null>(null);
   const [images, setImages] = useState<any[] | null>(null);
   const [selectedImage, setSelectedImage] = useState<any | null>(null);
+  const [editImage, setEditImage] = useState<any | null>(null);
   useEffect(() => {
     if (!selectedImage) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setSelectedImage(null); };
@@ -213,9 +214,10 @@ function AssistantView() {
       const content = input.trim();
       const r = await api<{ run_id: string; message_id: string; title?: string }>(
         `/api/assistant/conversations/${convId}/messages`,
-        { method: 'POST', body: JSON.stringify({ content }) },
+        { method: 'POST', body: JSON.stringify({ content, attachments: editImage ? [{ type: 'edit_image', id: editImage.id }] : [] }) },
       );
       setInput('');
+      setEditImage(null);
       setMessages((m) => [
         ...m,
         {
@@ -387,6 +389,7 @@ function AssistantView() {
                   <div className="msg-body">{renderMarkdown(m.content)}</div>
                   {asArray<any>(m.attachments).filter(item => item?.type === 'generated_image').map(image => <button key={image.id} className="chat-generated-image" aria-label="생성 이미지 크게 보기" onClick={() => setSelectedImage(image)}><img src={'/api/assistant/images/' + image.id} alt="채팅에서 생성한 이미지" loading="lazy" /></button>)}
                   <CitationList citations={m.citations} />
+                  {asArray<any>(m.attachments).filter(image => image?.type === 'generated_image').map(image => <button key={'edit-' + image.id} className="ghost-button" onClick={() => setEditImage(image)}>이 이미지 수정</button>)}
                 </div>
               ))}
               {live && (
@@ -438,6 +441,7 @@ function AssistantView() {
               </div>
             )}
             <div className="assistant-input">
+              {editImage && <div className="chat-edit-target"><img src={'/api/assistant/images/' + editImage.id} alt="수정할 이미지" /><span>이 이미지를 수정합니다</span><button aria-label="수정 대상 선택 해제" onClick={() => setEditImage(null)}>×</button></div>}
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
