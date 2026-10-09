@@ -81,6 +81,20 @@ function Help({ text }: { text: string }) {
   return <details ref={details} className="art-help"><summary aria-label="도움말">?</summary><div className="art-help-popup"><button type="button" aria-label="도움말 닫기" onClick={(event) => { event.preventDefault(); if (details.current) details.current.open = false; }}>×</button><p>{text}</p></div></details>;
 }
 const observationFields = { description: '이미지 설명', subjects: '보이는 대상', materials: '재질과 질감', lighting: '빛과 조명', palette: '주요 색', visible_text: '이미지 안의 글자', confidence_note: '분석할 때 주의할 점' };
+function BoardDraftEditor({ analysis, refs, stale, onSave, onApply, onDiscard }: { analysis: any; refs: RefCard[]; stale: boolean; onSave: (result: any) => Promise<any>; onApply: (saved: any) => Promise<void>; onDiscard: () => Promise<void> }) {
+  const [draft, setDraft] = useState<any>(() => structuredClone(analysis.result));
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setDraft(structuredClone(analysis.result)); }, [analysis.id]);
+  const editable = analysis.status === 'DRAFT';
+  const categoryLabel = (value: string) => (roleLabels as Record<string, string>)[value] ?? ({ style: '그림체', composition: '구도', color: '색상', character: '캐릭터' } as Record<string,string>)[value] ?? value;
+  const sourceNames = (ids: string[]) => [...new Set(ids.map(id => refs.find(ref => ref.id === id || ref.art_asset_id === id)?.name).filter(Boolean))].join(', ');
+  const perform = async (apply: boolean) => { setBusy(true); setStatus('저장 중…'); try { const saved = await onSave(draft); if (apply) await onApply(saved); setStatus(apply ? '이 방향을 다음 이미지 생성에 적용했습니다.' : '수정한 초안을 저장했습니다.'); } catch (error) { setStatus(artActionError(error)); } finally { setBusy(false); } };
+  return <section className="analysis-card board-draft-editor"><div className="art-field-heading"><h3>전체 참고 자료 정리</h3><Help text="여러 이미지에서 함께 지킬 방향을 정리한 초안입니다. 내용을 고쳐 저장하고, 생성에 적용을 누르면 다음 이미지 요청에서 이 기준을 참고합니다. 이미지 위치나 역할을 자동으로 바꾸지는 않습니다." /></div><p>{editable ? '내용을 읽고 필요한 부분을 고쳐 주세요.' : analysis.status === 'APPROVED' ? '이미지 생성에 적용 중인 기준입니다.' : '사용하지 않기로 한 초안입니다.'}</p>{stale && <p role="status">보드가 바뀌었습니다. 다시 자동 정리한 뒤 적용해 주세요.</p>}<label>전체 방향<textarea rows={5} disabled={!editable || busy} value={draft.summary ?? ''} onChange={event => setDraft({ ...draft, summary: event.target.value })} /></label>
+    {(['common_rules', 'conflicts'] as const).map(key => <section key={key} className="draft-section"><h4>{key === 'common_rules' ? '함께 지킬 기준' : '서로 다른 방향 · 확인할 점'}</h4><p>{key === 'common_rules' ? '그림체, 재질, 분위기에서 공통으로 지킬 내용을 적습니다.' : '참고 이미지끼리 맞지 않는 부분을 확인합니다.'}</p>{(draft[key] ?? []).map((item: any, index: number) => <div className="draft-item" key={index}>{key === 'common_rules' && <label>어떤 기준인가요?<input disabled={!editable || busy} value={categoryLabel(item.category ?? '')} onChange={event => setDraft({ ...draft, [key]: draft[key].map((row: any, i: number) => i === index ? { ...row, category: event.target.value } : row) })} /></label>}<label>{key === 'common_rules' ? '기준 내용' : '확인할 내용'}<textarea rows={3} disabled={!editable || busy} value={item.statement ?? ''} onChange={event => setDraft({ ...draft, [key]: draft[key].map((row: any, i: number) => i === index ? { ...row, statement: event.target.value } : row) })} /></label>{sourceNames(item.evidence_ids ?? []) && <small>참고 이미지: {sourceNames(item.evidence_ids ?? [])}</small>}{editable && <button type="button" disabled={busy} onClick={() => setDraft({ ...draft, [key]: draft[key].filter((_: any, i: number) => i !== index) })}>이 항목 빼기</button>}</div>)}{!draft[key]?.length && <p>등록된 항목이 없습니다.</p>}{editable && <button type="button" disabled={busy} onClick={() => setDraft({ ...draft, [key]: [...(draft[key] ?? []), { ...(key === 'common_rules' ? { category: '그림체' } : {}), statement: '', evidence_ids: [] }] })}>{key === 'common_rules' ? '기준 추가' : '확인할 점 추가'}</button>}</section>)}
+    <section className="draft-section"><h4>이미지별 참고 제안</h4><p>역할과 강도를 어떻게 쓰면 좋을지 제안합니다. 실제 설정은 각 이미지에서 바꿔 주세요.</p>{(draft.suggestions ?? []).map((item: any, index: number) => <div className="draft-item" key={index}><strong>{refs.find(ref => ref.id === item.asset_id || ref.art_asset_id === item.asset_id)?.name ?? '참고 이미지'}</strong><label>참고할 요소<select disabled={!editable || busy} value={item.role} onChange={event => setDraft({ ...draft, suggestions: draft.suggestions.map((row: any, i: number) => i === index ? { ...row, role: event.target.value } : row) })}>{!Object.keys(roleLabels).includes(item.role) && <option value={item.role}>{categoryLabel(item.role)}</option>}{Object.entries(roleLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>참고 강도<select disabled={!editable || busy} value={item.usage} onChange={event => setDraft({ ...draft, suggestions: draft.suggestions.map((row: any, i: number) => i === index ? { ...row, usage: event.target.value } : row) })}>{!Object.keys(usageLabels).includes(item.usage) && <option value={item.usage}>확인 필요</option>}{Object.entries(usageLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>제안 이유<textarea rows={3} disabled={!editable || busy} value={item.observation ?? ''} onChange={event => setDraft({ ...draft, suggestions: draft.suggestions.map((row: any, i: number) => i === index ? { ...row, observation: event.target.value } : row) })} /></label></div>)}{!draft.suggestions?.length && <p>이미지별 제안이 없습니다.</p>}</section>
+    {editable && <div className="draft-actions"><button disabled={busy} onClick={() => void perform(false)}>초안 저장</button><button disabled={busy || stale} onClick={() => void perform(true)}>생성 기준으로 적용</button><button disabled={busy} onClick={async () => { setBusy(true); try { await onDiscard(); } catch(error) { setStatus(artActionError(error)); } finally { setBusy(false); } }}>이 초안 사용 안함</button></div>}<p role="status">{status}</p></section>;
+}
 function ObservationEditor({ analysis, onSave }: { analysis: any; onSave: (corrections: Record<string, unknown>) => Promise<void> }) {
   const [draft, setDraft] = useState<Record<string, any>>({});
   const [status, setStatus] = useState('');
@@ -735,46 +749,16 @@ export function ArtReferenceCanvas() {
             </div>
           )}
           {analysis && (
-            <div className="analysis-card">
-              <div className="analysis-card-head">
-                <div>
-                  <span className="eyebrow">아트 방향 / {analysis.status}</span>
-                  <h3>자동 정리 결과</h3>
-                </div>
-                <span>{analysis.status}</span>
-              </div>
-              <p>{analysis.result?.summary}</p>
-              {Number(analysis.revision) !== revision && <p role="status">보드가 변경되어 이 분석은 이전 결과입니다. 전체 레퍼런스를 다시 정리해 주세요.</p>}
-              {analysis.status === 'DRAFT' && <><label>Art Bible 초안 수정(JSON)<textarea rows={8} value={analysisEdit} onChange={(event) => setAnalysisEdit(event.target.value)} /></label><button className="secondary-button" onClick={async () => { try { const result = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision, { method: 'PATCH', body: JSON.stringify({ analysis_id: analysis.id, result: JSON.parse(analysisEdit) }) }); setAnalysis(result); setAnalysisEdit(JSON.stringify(result.result, null, 2)); } catch { window.alert('수정된 JSON이 올바르지 않습니다.'); } }}>수정 초안 저장</button><button className="asset-review-button" onClick={async () => { await api('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision + '/reject', { method: 'POST', body: JSON.stringify({ analysis_id: analysis.id }) }); setAnalysis({ ...analysis, status: 'REJECTED' }); }}>초안 거부</button></>}
-              {analysis.status === 'DRAFT' && (
-                <button
-                  className="secondary-button"
-                  disabled={Number(analysis.revision) !== revision || dirtyRef.current}
-                  onClick={async () => {
-                    try {
-                      const approved = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision + '/approve', {
-                        method: 'POST',
-                        body: JSON.stringify({ analysis_id: analysis.id, expected_hash: analysis.result_hash }),
-                      });
-                      setAnalysis({ ...analysis, status: 'APPROVED', style_version: approved.version });
-                    } catch (error) {
-                      setActionError(artActionError(error));
-                    }
-                  }}
-                >
-                  이 결과를 아트 방향으로 승인
-                </button>
-              )}
-              {analysis.status === 'APPROVED' && (
-                <small className="analysis-approved">Art Bible v{analysis.style_version}로 승인됨</small>
-              )}
-              <div className="analysis-rule-list">
-                {(analysis.result?.common_rules ?? []).slice(0, 4).map((rule: any, index: number) => (
-                  <div key={index}><strong>{rule.category}</strong><span>{rule.statement}</span></div>
-                ))}
-              </div>
-              <small>AI 관찰은 초안입니다. 승인 전에는 생성 규칙이나 canonical reference로 사용되지 않습니다.</small>
-            </div>
+            <BoardDraftEditor analysis={analysis} refs={refs} stale={Number(analysis.revision) !== revision || dirtyRef.current} onSave={async (draft) => {
+              const result = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision, { method: 'PATCH', body: JSON.stringify({ analysis_id: analysis.id, result: draft }) });
+              setAnalysis(result); return result;
+            }} onApply={async (saved) => {
+              const approved = await api<any>('/api/assistant/art-boards/' + boardId + '/analysis/' + saved.revision + '/approve', { method: 'POST', body: JSON.stringify({ analysis_id: saved.id, expected_hash: saved.result_hash }) });
+              setAnalysis({ ...saved, status: 'APPROVED', style_version: approved.version });
+            }} onDiscard={async () => {
+              await api('/api/assistant/art-boards/' + boardId + '/analysis/' + analysis.revision + '/reject', { method: 'POST', body: JSON.stringify({ analysis_id: analysis.id }) });
+              setAnalysis({ ...analysis, status: 'REJECTED' });
+            }} />
           )}
           <div className="inspector-title">
             <div>

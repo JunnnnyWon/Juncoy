@@ -3887,6 +3887,18 @@ body:has(.art-workspace) { overflow:hidden; }
 .app-shell:has(.art-workspace) .main-shell { flex:1; min-height:0; overflow:hidden; }
 .art-workspace { height:100%; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 .art-workspace .art-header, .art-workspace .art-toolbar { flex:0 0 auto; }
+.art-inspector .board-draft-editor { padding:20px; margin-bottom:24px; color:#e4e9e5; }
+.board-draft-editor h3 { font-size:20px; }
+.board-draft-editor h4 { font-size:17px; margin:0 0 8px; }
+.board-draft-editor p, .board-draft-editor small { font-size:14px; line-height:1.7; color:#c4cec6; }
+.board-draft-editor .draft-section { margin-top:24px; padding-top:20px; border-top:1px solid #465049; }
+.board-draft-editor .draft-item { margin:16px 0; padding-bottom:16px; border-bottom:1px solid #38433c; }
+.board-draft-editor input { box-sizing:border-box; width:100%; padding:10px; font-size:15px; color:#f0f3ef; background:#202428; border:1px solid #56635b; border-radius:4px; }
+.board-draft-editor label { display:block; margin:12px 0; }
+.board-draft-editor textarea { width:100%; box-sizing:border-box; font-size:15px; }
+.board-draft-editor button { padding:9px 12px; color:#fff; border:1px solid #66766b; background:#333e36; border-radius:4px; }
+.board-draft-editor .draft-actions { display:flex; flex-direction:column; gap:10px; margin-top:24px; }
+.board-draft-editor .draft-actions button:nth-child(2) { background:#963f36; }
 .art-workspace .art-header-buttons > button, .art-workspace .art-header-buttons > a { font-size:14px; line-height:1.5; font-weight:600; }
 .art-workspace .art-header-buttons { align-items:center; }
 .art-workspace .art-header-buttons > button, .art-workspace .art-header-buttons > a { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; height:40px; min-height:40px; width:220px; padding:8px 12px; white-space:nowrap; margin:0; border-width:1px; border-style:solid; border-radius:4px; }
