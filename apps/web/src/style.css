@@ -2973,7 +2973,14 @@ small {
 .canvas-reference-card .reference-card-foot { color:#d5d8d1; padding:7px 8px; background:#25292c; }
 .canvas-reference-card .reference-card-foot span { color:#9fa69f; }
 .reference-drag-handle { position:absolute; z-index:3; top:5px; right:6px; padding:2px 5px; color:#c3c8c1; background:rgba(21,23,25,.78); border:1px solid #4c5255; font:9px monospace; cursor:grab; }
-.reference-resize { position:absolute; z-index:5; width:14px; height:14px; padding:0; color:#aeb5ae; background:#202326; border:1px solid #4b5154; border-radius:3px; font-size:11px; }
+.canvas-reference-card { cursor:grab; touch-action:none; user-select:none; }
+.canvas-reference-card:active { cursor:grabbing; }
+.reference-resize { position:absolute; z-index:5; width:16px; height:16px; padding:0; background:transparent; border:0; border-radius:0; touch-action:none; }
+.reference-resize:hover { border:0; }
+.reference-resize.resize-n { left:10px; right:10px; top:-6px; width:auto; height:12px; cursor:ns-resize; }
+.reference-resize.resize-s { left:10px; right:10px; bottom:-6px; width:auto; height:12px; cursor:ns-resize; }
+.reference-resize.resize-e { top:10px; bottom:10px; right:-6px; width:12px; height:auto; cursor:ew-resize; }
+.reference-resize.resize-w { top:10px; bottom:10px; left:-6px; width:12px; height:auto; cursor:ew-resize; }
 .reference-resize.resize-nw { left:-6px; top:-6px; cursor:nwse-resize; }
 .reference-resize.resize-se { right:-6px; bottom:-6px; cursor:nwse-resize; }
 .reference-resize.resize-ne { right:-6px; top:-6px; cursor:nesw-resize; }
@@ -3139,6 +3146,8 @@ small {
   border-style: dashed;
 }
 .canvas-node-handle {
+  touch-action: none;
+  user-select: none;
   display: flex;
   justify-content: space-between;
   align-items: center;

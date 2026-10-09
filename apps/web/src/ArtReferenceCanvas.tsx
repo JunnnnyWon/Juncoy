@@ -625,12 +625,29 @@ export function ArtReferenceCanvas() {
           {nodes.map((node) => <div key={node.id} className={'canvas-node ' + node.node_type + (activeNodeId === node.id ? ' active' : '')} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={() => setActiveNodeId(node.id)}>
           <div className="canvas-node-handle" onPointerDown={(event) => {
               event.stopPropagation();
+              if (event.button !== 0) return;
               beginGesture();
-              const origin = { x: event.clientX, y: event.clientY, nodeX: node.x, nodeY: node.y };
+              const origin = { x: event.clientX, y: event.clientY };
+              const container = node.node_type === 'frame' || node.node_type === 'group';
+              const frameRect = event.currentTarget.parentElement!.getBoundingClientRect();
+              const contained = (rect: DOMRect) => rect.left >= frameRect.left && rect.top >= frameRect.top && rect.right <= frameRect.right && rect.bottom <= frameRect.bottom;
+              const movingRefs = new Map(refs.flatMap((ref, index) => {
+                const card = Array.from(boardEl.current?.querySelectorAll<HTMLElement>('[data-reference-id]') ?? []).find((el) => el.dataset.referenceId === ref.id);
+                return container && (ref.group_id === node.id || (card && contained(card.getBoundingClientRect())))
+                  ? [[ref.id, { x: ref.x ?? 80 + (index % 4) * 280, y: ref.y ?? 110 + Math.floor(index / 4) * 260 }] as const] : [];
+              }));
+              const movingNodes = new Map(nodes.filter((n) => n.id === node.id || (container && n.x >= node.x && n.y >= node.y && n.x + n.width <= node.x + node.width && n.y + n.height <= node.y + node.height)).map((n) => [n.id, { x: n.x, y: n.y }]));
               const handle = event.currentTarget;
               handle.setPointerCapture(event.pointerId);
-              handle.onpointermove = (move) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, x: origin.nodeX + (move.clientX - origin.x) / zoom, y: origin.nodeY + (move.clientY - origin.y) / zoom } : n));
-              handle.onpointerup = () => { handle.onpointermove = null; handle.onpointerup = null; endGesture(); };
+              handle.onpointermove = (move) => {
+                const dx = (move.clientX - origin.x) / zoom;
+                const dy = (move.clientY - origin.y) / zoom;
+                setNodes((current) => current.map((n) => { const start = movingNodes.get(n.id); return start ? { ...n, x: start.x + dx, y: start.y + dy } : n; }));
+                setRefs((current) => current.map((ref) => { const start = movingRefs.get(ref.id); return start ? { ...ref, x: start.x + dx, y: start.y + dy } : ref; }));
+              };
+              const finish = (end: PointerEvent) => { end.stopPropagation(); handle.onpointermove = null; handle.onpointerup = null; handle.onpointercancel = null; endGesture(); };
+              handle.onpointerup = finish;
+              handle.onpointercancel = finish;
             }}>{node.node_type === 'frame' ? '프레임' : node.node_type === 'group' ? '그룹' : '메모'}<span className="node-handle-hint">이동</span></div>
             <button className="node-delete" aria-label="노드 삭제" title="요소 삭제" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); deleteNode(node.id); }}>삭제</button>
             <textarea aria-label="노드 내용" value={node.text} onChange={(event) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, text: event.target.value } : n))} />
@@ -884,7 +901,7 @@ export function ArtReferenceCanvas() {
     </div>
   );
 }
-const RESIZE_CORNERS = ['nw', 'ne', 'sw', 'se'] as const;
+const RESIZE_EDGES = ['n', 'e', 's', 'w', 'nw', 'ne', 'sw', 'se'] as const;
 function ReferenceCard({
   refCard,
   active,
@@ -909,51 +926,57 @@ function ReferenceCard({
   onGestureEnd: () => void;
 }) {
   const [base, setBase] = useState<{ w: number; h: number } | null>(null);
-  const origin = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const scale = refCard.scale ?? 1;
   const imageWidth = base ? Math.max(80, Math.round(base.w * scale)) : 240;
-  const beginResize = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const beginResize = (event: React.PointerEvent<HTMLElement>, edge: typeof RESIZE_EDGES[number]) => {
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     const handle = event.currentTarget;
     const card = handle.closest('.reference-card') as HTMLElement | null;
     const image = card?.querySelector('img') as HTMLElement | null;
     if (!card || !image) return;
-    const rect = card.getBoundingClientRect();
     const start = {
-      cx: rect.left + rect.width / 2,
-      cy: rect.top + rect.height / 2,
-      d0: Math.max(1, Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2))),
-      w: image.clientWidth / zoom,
-      h: image.clientHeight / zoom,
+      w: image.clientWidth,
+      h: image.clientHeight,
       x: Number(style.left),
       y: Number(style.top),
     };
     handle.setPointerCapture(event.pointerId);
     onGestureStart();
-    const finish = (clientX: number, clientY: number) => {
-      const ratio = Math.min(4, Math.max(0.25, Math.hypot(clientX - start.cx, clientY - start.cy) / start.d0));
-      const width = Math.max(60, start.w * ratio);
-      const height = Math.max(60, start.h * ratio);
-      onResize(start.x - (width - start.w) / 2, start.y - (height - start.h) / 2, width, height, scale * ratio);
+    const resize = (clientX: number, clientY: number) => {
+      const dx = (clientX - event.clientX) / zoom;
+      const dy = (clientY - event.clientY) / zoom;
+      const horizontal = edge.includes('e') ? 1 : edge.includes('w') ? -1 : 0;
+      const vertical = edge.includes('s') ? 1 : edge.includes('n') ? -1 : 0;
+      const ratio = Math.min(4, Math.max(80 / start.w, 1 + (horizontal * dx * start.w + vertical * dy * start.h) / ((horizontal ? start.w ** 2 : 0) + (vertical ? start.h ** 2 : 0))));
+      const width = start.w * ratio;
+      const height = start.h * ratio;
+      onResize(start.x - (width - start.w) * (horizontal < 0 ? 1 : horizontal === 0 ? 0.5 : 0), start.y - (height - start.h) * (vertical < 0 ? 1 : vertical === 0 ? 0.5 : 0), width, height, scale * ratio);
     };
-    handle.onpointermove = (next) => {
-      const ratio = Math.min(4, Math.max(0.25, Math.hypot(next.clientX - start.cx, next.clientY - start.cy) / start.d0));
-      image.style.width = Math.max(60, Math.round(start.w * ratio * zoom)) + 'px';
-    };
+    handle.onpointermove = (next) => resize(next.clientX, next.clientY);
     handle.onpointerup = (next) => {
-      finish(next.clientX, next.clientY);
+      next.stopPropagation();
       handle.onpointermove = null; handle.onpointerup = null; handle.onpointercancel = null;
       onGestureEnd();
     };
-    handle.onpointercancel = () => {
+    handle.onpointercancel = (next) => {
+      next.stopPropagation();
       handle.onpointermove = null; handle.onpointerup = null; handle.onpointercancel = null;
       onGestureEnd();
     };
   };
   return (
-    <article className={'reference-card canvas-reference-card ' + (active ? 'active' : '')} style={style} onClick={onClick}>
-      <button className="reference-drag-handle" aria-label="레퍼런스 이동" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); origin.current = { x: event.clientX, y: event.clientY, left: Number(style.left), top: Number(style.top) }; event.currentTarget.setPointerCapture(event.pointerId); onGestureStart(); }} onPointerMove={(event) => { if (!event.buttons) return; onMove(Math.round((origin.current.left + (event.clientX - origin.current.x) / zoom) / 16) * 16, Math.round((origin.current.top + (event.clientY - origin.current.y) / zoom) / 16) * 16); }} onPointerUp={onGestureEnd} onPointerCancel={onGestureEnd}>⠿ 이동</button>
+    <article data-reference-id={refCard.id} className={'reference-card canvas-reference-card ' + (active ? 'active' : '')} style={style} onClick={onClick} onPointerDown={(event) => {
+      if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, select, .reference-resize')) return;
+      event.preventDefault(); event.stopPropagation(); onClick();
+      const start = { x: event.clientX, y: event.clientY, left: Number(style.left), top: Number(style.top) };
+      const card = event.currentTarget;
+      card.setPointerCapture(event.pointerId); onGestureStart();
+      card.onpointermove = (move) => onMove(start.left + (move.clientX - start.x) / zoom, start.top + (move.clientY - start.y) / zoom);
+      const finish = (end: PointerEvent) => { end.stopPropagation(); card.onpointermove = null; card.onpointerup = null; card.onpointercancel = null; onGestureEnd(); };
+      card.onpointerup = finish; card.onpointercancel = finish;
+    }}>
       <img
         src={refCard.url}
         alt={refCard.name}
@@ -984,8 +1007,8 @@ function ReferenceCard({
           {refCard.selected ? '✓' : '○'}
         </button>
       </div>
-      {RESIZE_CORNERS.map((corner) => (
-        <button key={corner} className={'reference-resize resize-' + corner} aria-label="레퍼런스 크기 조절" onPointerDown={beginResize} />
+      {RESIZE_EDGES.map((edge) => (
+        <span key={edge} className={'reference-resize resize-' + edge} onPointerDown={(event) => beginResize(event, edge)} />
       ))}
     </article>
   );
