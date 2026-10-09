@@ -812,8 +812,7 @@ export function ArtReferenceCanvas() {
               </label>
               {selected.usage === 'PARTIAL_REFERENCE' && <div className="crop-editor"><span>부분 채택 영역</span><div className="crop-preview"><img src={selected.url} alt="crop reference" /><div style={{ left: (selected.crop?.left ?? 0.1) * 100 + '%', top: (selected.crop?.top ?? 0.1) * 100 + '%', width: ((selected.crop?.right ?? 0.9) - (selected.crop?.left ?? 0.1)) * 100 + '%', height: ((selected.crop?.bottom ?? 0.9) - (selected.crop?.top ?? 0.1)) * 100 + '%' }} /></div><div className="crop-fields">{(['left', 'top', 'right', 'bottom'] as const).map((key) => <label key={key}>{key}<input type="number" min={0} max={1} step={0.05} value={selected.crop?.[key] ?? (key === 'right' || key === 'bottom' ? 0.9 : 0.1)} onChange={(event) => { const defaults = { left: 0.1, top: 0.1, right: 0.9, bottom: 0.9 }; update({ crop: { ...defaults, ...selected.crop, [key]: Number(event.target.value) } }); }} /></label>)}</div></div>}
               <label>
-                팀 메모
-                <Help text="이 이미지에서 무엇을 가져오고 무엇을 따라 하지 않을지 적어 주세요. 예: 옷의 질감만 참고하고 얼굴과 자세는 따라 하지 않기. 아래 AI 내용은 이미지 설명이며, 이 메모가 생성 지시입니다." />
+                <span className="art-field-heading">팀 메모 <Help text="이 이미지에서 무엇을 가져오고 무엇을 따라 하지 않을지 적어 주세요. 예: 옷의 질감만 참고하고 얼굴과 자세는 따라 하지 않기. 아래 AI 내용은 이미지 설명이며, 이 메모가 생성 지시입니다." /></span>
                 <textarea
                   value={selected.note}
                   onChange={(event) => update({ note: event.target.value })}
