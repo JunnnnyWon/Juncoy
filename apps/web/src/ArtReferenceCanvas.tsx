@@ -56,6 +56,7 @@ interface RefCard {
   height?: number;
   crop?: { left: number; top: number; right: number; bottom: number } | null;
   group_id?: string;
+  scale?: number;
   local_blob?: Blob;
 }
 const roleLabels: Record<Role, string> = {
@@ -96,19 +97,71 @@ export function ArtReferenceCanvas() {
   const [edges, setEdges] = useState<ArtCanvasEdge[]>([]);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  useEffect(() => { zoomRef.current = zoom; panRef.current = pan; }, [zoom, pan]);
   const history = useRef<CanvasHistory<{ refs: RefCard[]; nodes: ArtCanvasNode[]; edges: ArtCanvasEdge[]; zoom: number; pan: { x: number; y: number } }> | null>(null);
   const restoring = useRef(false);
   const loadedBoard = useRef(false);
+  const gestureDepth = useRef(0);
+  const gestureBaseline = useRef<{ refs: RefCard[]; nodes: ArtCanvasNode[]; edges: ArtCanvasEdge[]; zoom: number; pan: { x: number; y: number } } | null>(null);
+  const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const boardEl = useRef<HTMLElement | null>(null);
   const [, setHistoryVersion] = useState(0);
+  const beginGesture = () => { if (!gestureDepth.current) gestureBaseline.current = history.current?.present ?? null; gestureDepth.current += 1; };
+  const endGesture = () => {
+    if (gestureDepth.current > 0) gestureDepth.current -= 1;
+    if (gestureDepth.current > 0) return;
+    const baseline = gestureBaseline.current;
+    gestureBaseline.current = null;
+    if (!baseline || !history.current) return;
+    if (JSON.stringify(baseline) !== JSON.stringify(history.current.present)) {
+      history.current = { past: [...history.current.past, baseline].slice(-100), present: history.current.present, future: [] };
+      setHistoryVersion((v) => v + 1);
+    }
+  };
   useEffect(() => {
     if (!loadedBoard.current) return;
     const present = { refs, nodes, edges, zoom, pan };
     if (restoring.current) { restoring.current = false; return; }
     const changed = Boolean(history.current && JSON.stringify(history.current.present) !== JSON.stringify(present));
     if (changed) dirtyRef.current = true;
+    if (history.current && gestureDepth.current > 0) {
+      if (changed) history.current = { past: history.current.past, present, future: [] };
+      return;
+    }
     history.current = history.current ? changeCanvas(history.current, present) : { past: [], present, future: [] };
     setHistoryVersion((v) => v + 1);
   }, [refs, nodes, edges, zoom, pan]);
+  const applyZoom = (nextZoom: number, cx?: number, cy?: number) => {
+    const next = Math.min(1.8, Math.max(0.5, nextZoom));
+    const rect = boardEl.current?.getBoundingClientRect();
+    if (!rect) { setZoom(next); return; }
+    const px = cx ?? rect.width / 2;
+    const py = cy ?? rect.height / 2;
+    const currentZoom = zoomRef.current;
+    const currentPan = panRef.current;
+    const bx = (px - currentPan.x) / currentZoom;
+    const by = (py - currentPan.y) / currentZoom;
+    setZoom(next);
+    setPan({ x: px - bx * next, y: py - by * next });
+  };
+  useEffect(() => {
+    const board = boardEl.current;
+    if (!board) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const rect = board.getBoundingClientRect();
+      beginGesture();
+      applyZoom(zoomRef.current * Math.exp(-event.deltaY * 0.0015), event.clientX - rect.left, event.clientY - rect.top);
+      if (wheelTimer.current) clearTimeout(wheelTimer.current);
+      wheelTimer.current = setTimeout(() => { endGesture(); }, 350);
+    };
+    board.addEventListener('wheel', onWheel, { passive: false });
+    return () => board.removeEventListener('wheel', onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const travel = (direction: 'undo' | 'redo') => {
     if (!history.current) return;
     const next = travelCanvas(history.current, direction);
@@ -117,7 +170,7 @@ export function ArtReferenceCanvas() {
     restoring.current = true;
     setRefs(next.present.refs); setNodes(next.present.nodes); setEdges(next.present.edges);
     setZoom(next.present.zoom); setPan(next.present.pan);
-    setActiveNodeId(null); setConnectSource(null);
+    setActiveNodeId(null);
     setBrief(null); setAnalysis(null); setSyncState('미저장 변경');
     setHistoryVersion((v) => v + 1);
   };
@@ -132,10 +185,7 @@ export function ArtReferenceCanvas() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
-  const [connectSource, setConnectSource] = useState<string | null>(null);
-  const [edgeType, setEdgeType] = useState<ArtCanvasEdge['edge_type']>('supports');
   const [selectedId, setSelectedId] = useState('ref-1');
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [boardList, setBoardList] = useState<any[]>([]);
   const [boardName, setBoardName] = useState('비주얼 레퍼런스 보드');
   const [historyItems, setHistoryItems] = useState<any[]>([]);
@@ -478,27 +528,6 @@ export function ArtReferenceCanvas() {
     const result = await api<any>('/api/assistant/art-boards/' + boardId, { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) });
     setBoardName(result.name); setBoardList(await api<any[]>('/api/assistant/art-boards'));
   };
-  const moveSelection = (dx: number, dy: number) => {
-    if (!selectedIds.length) return;
-    const snap = (value: number) => Math.round(value / 16) * 16;
-    setRefs((current) => current.map((ref) => selectedIds.includes(ref.id) ? { ...ref, x: snap((ref.x ?? 80) + dx), y: snap((ref.y ?? 110) + dy) } : ref));
-  };
-  const groupSelection = () => {
-    const items = refs.filter((ref) => selectedIds.includes(ref.id));
-    if (items.length < 2) return;
-    const id = crypto.randomUUID();
-    const x = Math.min(...items.map((ref) => ref.x ?? 80)), y = Math.min(...items.map((ref) => ref.y ?? 110));
-    setNodes((current) => [...current, { id, node_type: 'group', x, y, width: 260, height: 90, text: '그룹 · ' + items.map((item) => item.name).join(', ') }]);
-    setRefs((current) => current.map((ref) => selectedIds.includes(ref.id) ? { ...ref, group_id: id } as RefCard : ref));
-    setSelectedIds([]);
-  };
-  const chooseNode = (id: string) => {
-    if (connectSource && connectSource !== id && nodes.some((node) => node.id === connectSource)) {
-      setEdges((current) => current.some((e) => e.source === connectSource && e.target === id && e.edge_type === edgeType) ? current : [...current, { id: crypto.randomUUID(), source: connectSource, target: id, edge_type: edgeType }]);
-      setConnectSource(null);
-    }
-    setActiveNodeId(id);
-  };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!['Delete', 'Backspace'].includes(event.key)) return;
@@ -539,21 +568,16 @@ export function ArtReferenceCanvas() {
         <button className="art-tool" onClick={() => addNode('frame')}>▧ 프레임</button>
         <button className="art-tool" onClick={() => addNode('text_note')}>T 메모</button>
         <button className="art-tool" onClick={() => addNode('group')}>그룹</button>
-        <button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(-16, 0)}>←</button><button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(16, 0)}>→</button><button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(0, -16)}>↑</button><button className="art-tool" disabled={!selectedIds.length} onClick={() => moveSelection(0, 16)}>↓</button><button className="art-tool" disabled={selectedIds.length < 2} onClick={groupSelection}>선택 묶기</button>
-        <button className={'art-tool ' + (connectSource ? 'active' : '')} disabled={!activeNodeId} onClick={() => setConnectSource(connectSource ? null : activeNodeId)}>↗ 연결</button>
         <button className="art-tool danger-tool" aria-label="선택 요소 삭제" disabled={!activeNodeId} onClick={deleteActiveNode}>⌫ 삭제</button>
-        <select aria-label="연결 관계" value={edgeType} onChange={(event) => setEdgeType(event.target.value as ArtCanvasEdge['edge_type'])}>
-          <option value="supports">뒷받침</option><option value="contradicts">충돌</option><option value="variant_of">변형</option><option value="uses_only">부분 채택</option><option value="derived_from">파생</option>
-        </select>
         <button className="art-tool" disabled={!boardId} onClick={() => void saveRevision()}>변경 저장</button>
         <span className="toolbar-rule" />
         <button className="art-tool" onClick={() => inputRef.current?.click()}>
           ＋ 이미지 추가
         </button>
         <span className="toolbar-spacer" />
-        <button className="art-tool viewport-button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.1))}>−</button>
+        <button className="art-tool viewport-button" onClick={() => applyZoom(zoom - 0.1)}>−</button>
         <span className="zoom-readout">{Math.round(zoom * 100)}%</span>
-        <button className="art-tool viewport-button" onClick={() => setZoom((value) => Math.min(1.8, value + 0.1))}>＋</button>
+        <button className="art-tool viewport-button" onClick={() => applyZoom(zoom + 0.1)}>＋</button>
         <button className="art-tool" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>맞춤 보기</button>
         <span className="save-history-label">{syncState === '서버에 저장됨' ? '최근 변경 저장됨' : '변경 내용 자동 저장'}</span>
         <input
@@ -571,20 +595,17 @@ export function ArtReferenceCanvas() {
       <main className="art-layout">
         <nav className="art-mobile-tabs"><button className={mobilePanel === 'canvas' ? 'active' : ''} onClick={() => setMobilePanel('canvas')}>캔버스</button><button className={mobilePanel === 'inspector' ? 'active' : ''} onClick={() => setMobilePanel('inspector')}>검토 패널</button></nav>
         <section
+          ref={boardEl}
           className={'art-board ' + (dragging ? 'dragging ' : '') + (mobilePanel === 'inspector' ? 'mobile-hidden' : '')}
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => {
             event.preventDefault();
             addFiles(event.dataTransfer.files);
           }}
-          onWheel={(event) => {
-            if (!event.ctrlKey && !event.metaKey) return;
-            event.preventDefault();
-            setZoom((value) => Math.min(1.8, Math.max(0.5, value - event.deltaY * 0.001)));
-          }}
           onPointerDown={(event) => {
             if ((event.target as HTMLElement).closest('.reference-card, .canvas-node, button, input, select, textarea')) return;
             setDragging(true);
+            beginGesture();
             dragOrigin.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
             (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
           }}
@@ -592,8 +613,8 @@ export function ArtReferenceCanvas() {
             if (!dragging) return;
             setPan({ x: dragOrigin.current.panX + event.clientX - dragOrigin.current.x, y: dragOrigin.current.panY + event.clientY - dragOrigin.current.y });
           }}
-          onPointerUp={() => setDragging(false)}
-          onPointerCancel={() => setDragging(false)}
+          onPointerUp={() => { setDragging(false); endGesture(); }}
+          onPointerCancel={() => { setDragging(false); endGesture(); }}
         >
           <div className="board-grid" />
           <div className="board-label">
@@ -601,24 +622,15 @@ export function ArtReferenceCanvas() {
             <strong>{boardId ? '프로젝트 아트보드' : '서버 연결 중'}</strong>
           </div>
           <div className="board-stage" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
-          <svg className="canvas-edges">
-            {edges.map((edge) => {
-              const source = nodes.find((n) => n.id === edge.source);
-              const target = nodes.find((n) => n.id === edge.target);
-              if (!source || !target) return null;
-              const x1 = source.x + source.width / 2, y1 = source.y + source.height / 2;
-              const x2 = target.x + target.width / 2, y2 = target.y + target.height / 2;
-              return <g key={edge.id}><line x1={x1} y1={y1} x2={x2} y2={y2} /></g>;
-            })}
-          </svg>
-          {nodes.map((node) => <div key={node.id} className={'canvas-node ' + node.node_type + (activeNodeId === node.id ? ' active' : '')} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={() => chooseNode(node.id)}>
+          {nodes.map((node) => <div key={node.id} className={'canvas-node ' + node.node_type + (activeNodeId === node.id ? ' active' : '')} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={() => setActiveNodeId(node.id)}>
           <div className="canvas-node-handle" onPointerDown={(event) => {
               event.stopPropagation();
+              beginGesture();
               const origin = { x: event.clientX, y: event.clientY, nodeX: node.x, nodeY: node.y };
               const handle = event.currentTarget;
               handle.setPointerCapture(event.pointerId);
               handle.onpointermove = (move) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, x: origin.nodeX + (move.clientX - origin.x) / zoom, y: origin.nodeY + (move.clientY - origin.y) / zoom } : n));
-              handle.onpointerup = () => { handle.onpointermove = null; handle.onpointerup = null; };
+              handle.onpointerup = () => { handle.onpointermove = null; handle.onpointerup = null; endGesture(); };
             }}>{node.node_type === 'frame' ? '프레임' : node.node_type === 'group' ? '그룹' : '메모'}<span className="node-handle-hint">이동</span></div>
             <button className="node-delete" aria-label="노드 삭제" title="요소 삭제" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); deleteNode(node.id); }}>삭제</button>
             <textarea aria-label="노드 내용" value={node.text} onChange={(event) => setNodes((current) => current.map((n) => n.id === node.id ? { ...n, text: event.target.value } : n))} />
@@ -635,14 +647,15 @@ export function ArtReferenceCanvas() {
                 <ReferenceCard
                   key={ref.id}
                   refCard={ref}
+                  zoom={zoom}
                   active={ref.id === selectedId}
                   onClick={() => setSelectedId(ref.id)}
                   onToggle={() => setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, selected: !item.selected } : item))}
-                  style={{ left: ref.x ?? 80 + (index % 4) * 260, top: ref.y ?? 110 + Math.floor(index / 4) * 250, width: ref.width ?? 220, height: ref.height ?? 210 }}
+                  style={{ left: ref.x ?? 80 + (index % 4) * 280, top: ref.y ?? 110 + Math.floor(index / 4) * 260 }}
                   onMove={(x, y) => setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, x, y } : item))}
-                  onResize={(width, height) => setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, width, height } : item))}
-                  selected={selectedIds.includes(ref.id)}
-                  onSelect={(multi) => setSelectedIds((current) => multi ? current.includes(ref.id) ? current.filter((id) => id !== ref.id) : [...current, ref.id] : [ref.id])}
+                  onResize={(x, y, width, height, scale) => setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, x, y, width, height, scale } : item))}
+                  onGestureStart={beginGesture}
+                  onGestureEnd={endGesture}
                 />
           ))}
           </div>
@@ -745,17 +758,17 @@ export function ArtReferenceCanvas() {
                 사용 역할
                 <select
                   value={selected.role}
-                  onChange={(event) => update({ role: event.target.value as Role })}
+                  onChange={(event) => { const role = event.target.value as Role; update({ role, roles: [role, ...(selected.roles ?? [selected.role]).filter((item) => item !== role)] }); }}
                 >
                   {Object.entries(roleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </label>
-              <fieldset className="role-usage-list"><legend>복수 역할 · 역할별 강도</legend>{Object.entries(roleLabels).map(([value, label]) => { const role=value as Role; const active=(selected.roles ?? [selected.role]).includes(role); return <div key={role}><label><input type="checkbox" checked={active} onChange={(event) => { const roles=event.target.checked ? [...new Set([...(selected.roles ?? [selected.role]), role])] : (selected.roles ?? [selected.role]).filter((item) => item!==role); update({ roles: roles.length ? roles : [selected.role] }); }} />{label}</label>{active && <select aria-label={label + ' 사용 강도'} value={selected.roleUsage?.[role] ?? selected.usage} onChange={(event) => update({ roleUsage: { ...selected.roleUsage, [role]: event.target.value as Usage } })}>{Object.entries(usageLabels).map(([v, title]) => <option key={v} value={v}>{title}</option>)}</select>}</div>; })}</fieldset>
+              <fieldset className="role-usage-list"><legend>추가 역할 · 역할별 강도</legend>{Object.entries(roleLabels).filter(([value]) => value !== selected.role).map(([value, label]) => { const role=value as Role; const active=(selected.roles ?? [selected.role]).includes(role); return <div key={role}><label><input type="checkbox" checked={active} onChange={(event) => { const roles=event.target.checked ? [...new Set([...(selected.roles ?? [selected.role]), role])] : (selected.roles ?? [selected.role]).filter((item) => item!==role); update({ roles: roles.length ? roles : [selected.role] }); }} />{label}</label>{active && <select aria-label={label + ' 사용 강도'} value={selected.roleUsage?.[role] ?? selected.usage} onChange={(event) => update({ roleUsage: { ...selected.roleUsage, [role]: event.target.value as Usage } })}>{Object.entries(usageLabels).map(([v, title]) => <option key={v} value={v}>{title}</option>)}</select>}</div>; })}</fieldset>
               <label>
                 사용 강도
                 <select
                   value={selected.usage}
-                  onChange={(event) => update({ usage: event.target.value as Usage })}
+                  onChange={(event) => update({ usage: event.target.value as Usage, roleUsage: { ...selected.roleUsage, [selected.role]: event.target.value as Usage } })}
                 >
                   {Object.entries(usageLabels).map(([value, label]) => (
                     <option key={value} value={value}>
@@ -871,6 +884,7 @@ export function ArtReferenceCanvas() {
     </div>
   );
 }
+const RESIZE_CORNERS = ['nw', 'ne', 'sw', 'se'] as const;
 function ReferenceCard({
   refCard,
   active,
@@ -879,8 +893,9 @@ function ReferenceCard({
   style,
   onMove,
   onResize,
-  selected,
-  onSelect,
+  zoom,
+  onGestureStart,
+  onGestureEnd,
 }: {
   refCard: RefCard;
   active: boolean;
@@ -888,15 +903,69 @@ function ReferenceCard({
   onToggle: () => void;
   style: React.CSSProperties;
   onMove: (x: number, y: number) => void;
-  onResize: (width: number, height: number) => void;
-  selected: boolean;
-  onSelect: (multi: boolean) => void;
+  onResize: (x: number, y: number, width: number, height: number, scale: number) => void;
+  zoom: number;
+  onGestureStart: () => void;
+  onGestureEnd: () => void;
 }) {
+  const [base, setBase] = useState<{ w: number; h: number } | null>(null);
   const origin = useRef({ x: 0, y: 0, left: 0, top: 0 });
+  const scale = refCard.scale ?? 1;
+  const imageWidth = base ? Math.max(80, Math.round(base.w * scale)) : 240;
+  const beginResize = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const handle = event.currentTarget;
+    const card = handle.closest('.reference-card') as HTMLElement | null;
+    const image = card?.querySelector('img') as HTMLElement | null;
+    if (!card || !image) return;
+    const rect = card.getBoundingClientRect();
+    const start = {
+      cx: rect.left + rect.width / 2,
+      cy: rect.top + rect.height / 2,
+      d0: Math.max(1, Math.hypot(event.clientX - (rect.left + rect.width / 2), event.clientY - (rect.top + rect.height / 2))),
+      w: image.clientWidth / zoom,
+      h: image.clientHeight / zoom,
+      x: Number(style.left),
+      y: Number(style.top),
+    };
+    handle.setPointerCapture(event.pointerId);
+    onGestureStart();
+    const finish = (clientX: number, clientY: number) => {
+      const ratio = Math.min(4, Math.max(0.25, Math.hypot(clientX - start.cx, clientY - start.cy) / start.d0));
+      const width = Math.max(60, start.w * ratio);
+      const height = Math.max(60, start.h * ratio);
+      onResize(start.x - (width - start.w) / 2, start.y - (height - start.h) / 2, width, height, scale * ratio);
+    };
+    handle.onpointermove = (next) => {
+      const ratio = Math.min(4, Math.max(0.25, Math.hypot(next.clientX - start.cx, next.clientY - start.cy) / start.d0));
+      image.style.width = Math.max(60, Math.round(start.w * ratio * zoom)) + 'px';
+    };
+    handle.onpointerup = (next) => {
+      finish(next.clientX, next.clientY);
+      handle.onpointermove = null; handle.onpointerup = null; handle.onpointercancel = null;
+      onGestureEnd();
+    };
+    handle.onpointercancel = () => {
+      handle.onpointermove = null; handle.onpointerup = null; handle.onpointercancel = null;
+      onGestureEnd();
+    };
+  };
   return (
-    <article className={'reference-card canvas-reference-card ' + (active ? 'active' : '') + (selected ? ' multi-selected' : '')} style={style} onClick={(event) => { if (event.shiftKey || event.metaKey || event.ctrlKey) onSelect(true); else { onSelect(false); onClick(); } }}>
-      <button className="reference-drag-handle" aria-label="레퍼런스 이동" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); origin.current = { x: event.clientX, y: event.clientY, left: Number(style.left), top: Number(style.top) }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (!event.buttons) return; onMove(Math.round((origin.current.left + event.clientX - origin.current.x) / 16) * 16, Math.round((origin.current.top + event.clientY - origin.current.y) / 16) * 16); }}>⠿ 이동</button>
-      <img src={refCard.url} alt={refCard.name} />
+    <article className={'reference-card canvas-reference-card ' + (active ? 'active' : '')} style={style} onClick={onClick}>
+      <button className="reference-drag-handle" aria-label="레퍼런스 이동" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); origin.current = { x: event.clientX, y: event.clientY, left: Number(style.left), top: Number(style.top) }; event.currentTarget.setPointerCapture(event.pointerId); onGestureStart(); }} onPointerMove={(event) => { if (!event.buttons) return; onMove(Math.round((origin.current.left + (event.clientX - origin.current.x) / zoom) / 16) * 16, Math.round((origin.current.top + (event.clientY - origin.current.y) / zoom) / 16) * 16); }} onPointerUp={onGestureEnd} onPointerCancel={onGestureEnd}>⠿ 이동</button>
+      <img
+        src={refCard.url}
+        alt={refCard.name}
+        draggable={false}
+        style={{ width: imageWidth }}
+        onLoad={(event) => {
+          const image = event.currentTarget;
+          if (!image.naturalWidth || !image.naturalHeight) return;
+          const fit = Math.min(1, 320 / Math.max(image.naturalWidth, image.naturalHeight));
+          setBase({ w: image.naturalWidth * fit, h: image.naturalHeight * fit });
+        }}
+      />
       <div className="reference-card-foot">
         <div>
           <strong>{refCard.name}</strong>
@@ -915,8 +984,9 @@ function ReferenceCard({
           {refCard.selected ? '✓' : '○'}
         </button>
       </div>
-      <button className="reference-select" aria-label="다중 선택" aria-pressed={selected} onClick={(event) => { event.stopPropagation(); onSelect(true); }}>□</button>
-      <button className="reference-resize" aria-label="레퍼런스 크기 조절" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); const start = { x: event.clientX, width: Number(style.width), height: Number(style.height) }; event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.onpointermove = (next) => { const width = Math.max(160, start.width + next.clientX - start.x); const height = Math.max(140, start.height + next.clientX - start.x); const element = (next.currentTarget as HTMLElement).closest('.reference-card') as HTMLElement | null; if (element) { element.style.width = width + 'px'; element.style.height = height + 'px'; } }; event.currentTarget.onpointerup = (next) => { const width = Math.max(160, start.width + next.clientX - start.x); const height = Math.max(140, start.height + next.clientX - start.x); onResize(width, height); event.currentTarget.onpointermove = null; event.currentTarget.onpointerup = null; }; }}>↘</button>
+      {RESIZE_CORNERS.map((corner) => (
+        <button key={corner} className={'reference-resize resize-' + corner} aria-label="레퍼런스 크기 조절" onPointerDown={beginResize} />
+      ))}
     </article>
   );
 }
