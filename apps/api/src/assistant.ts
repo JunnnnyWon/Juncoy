@@ -160,8 +160,10 @@ async function executeRunInOrder(
   try {
     if (await cancelled()) return;
     await phase('planning_tool_call');
-    const history = await store.listMessages(conversationId, 1000);
-    const conversationImages = history.flatMap(message => (message.attachments as any[]).filter(image => image?.type === "generated_image"));
+    const allMessages = await store.listMessages(conversationId, 1000);
+    const currentIndex = allMessages.findIndex(message => message.run_id === runId && message.role === "user");
+    const history = currentIndex >= 0 ? allMessages.slice(0, currentIndex + 1) : allMessages;
+    const conversationImages = history.flatMap(message => (message.attachments as any[]).filter(image => image?.type === "generated_image").map(image => ({ ...image, message_id: message.id, response: message.content })));
     const current = history.find(message => message.run_id === runId && message.role === "user");
     const explicitTarget = (current?.attachments as any[])?.find(item => item?.type === "edit_image")?.id;
     let mode = await classifyMode(ctx, text);
@@ -169,13 +171,12 @@ async function executeRunInOrder(
     let referenceImages: { id: string; instruction: string }[] = [];
     let generationRequest = text;
     if (conversationImages.length || explicitTarget) {
-      const plan = await ctx.model.structured(z.object({ intent: z.enum(["new", "edit", "variant", "question", "other"]), image_number: z.number().int().nonnegative(), change: z.string(), preserve: z.string() }), { request: text, selected_image_id: explicitTarget, images: conversationImages.map((image, index) => ({ number: index + 1, id: image.id, prompt: image.prompt })), recent_messages: history.slice(-12).map(message => ({ role: message.role, content: message.content })) }, "현재 대화의 이미지 요청을 분류한다. 방금/더 밝게/색 변경은 edit, 같은 조건 다른 후보는 variant, 이미지 설명 질문은 question, 새 장면은 new다. 수정 대상 image_number는 사용자가 지정한 순번, 최근 이미지는 마지막 순번이다. 명시 선택 이미지가 우선한다. change는 바꿀 부분, preserve는 인물 얼굴 의상 구도 등 변경하지 않을 부분이다. 사용자 지시를 우선하고 모호하면 image_number=0으로 질문한다.");
+      const plan = await ctx.model.structured(z.object({ intent: z.enum(["new", "edit", "variant", "question", "other"]), image_number: z.number().int().nonnegative(), change: z.string().max(1000), preserve: z.string().max(1000), references: z.array(z.object({ image_number: z.number().int().positive(), instruction: z.string().min(1).max(500) })).max(15) }), { request: text, selected_image_id: explicitTarget, images: conversationImages.map((image, index) => ({ number: index + 1, id: image.id, prompt: String(image.prompt).slice(0, 1600), parent_image_id: image.parent_image_id, reference_images: image.reference_images, user_request: image.user_request })), conversation: history.slice(-30).map(message => ({ role: message.role, content: message.content.slice(0, 2000), image_ids: (message.attachments as any[]).filter(item => item?.type === "generated_image").map(item => item.id) })) }, "대화 전체 맥락으로 이미지 작업과 참조를 능동적으로 결정한다. 사용자는 이미지 순번을 말할 필요가 없다. 더 밝게, 이 느낌 유지, 이전 분위기로, 다시 수정 등은 기존 이미지 편집이다. 최근 성공 이미지가 기본 기준이며 명시 선택 또는 이전 대화에서 지목한 인물/배경/조명에 맞는 이미지가 있으면 그 대상을 선택한다. new는 기존 결과와 무관한 새 생성, variant는 다른 후보, question은 설명만 하는 질문, other는 이미지 무관 요청이다. image_number는 주 원본 순번. references에는 이전 대화의 요구와 누적 참조 관계를 읽고 필요한 보조 이미지와 그 용도(인물, 배경, 조명 등)를 선택한다. 사용자가 순번을 명시하지 않아도 이전에 좋아했던 조명이나 배경을 가져오라고 하면 해당 이미지를 찾는다. 단순 밝기 변경은 주 원본만 사용하고, 과거 참조가 필요한 복합 요청만 보조를 추가한다. 관련 없는 이미지는 넣지 않는다. 주 원본은 references에서 제외. 서로 다른 대상이 똑같이 가능해 결정 불가능할 때만 image_number=0. change와 preserve는 짧고 구체적인 한국어, JSON 전체를 간결하게 반환한다.");
       if (["edit", "variant"].includes(plan.result.intent) || explicitTarget) {
         const target = explicitTarget ? conversationImages.find(image => image.id === explicitTarget) : conversationImages[plan.result.image_number - 1];
         if (!target) throw new Error("어느 이미지를 수정할지 지정해 주세요. 이미지 아래의 이 이미지 수정 버튼을 눌러 주세요.");
         mode = "generate"; parentImageId = target.id;
-        const sources = await ctx.model.structured(z.object({ references: z.array(z.object({ image_number: z.number().int().positive(), instruction: z.string().min(1).max(1000) })).max(15) }), { request: text, primary_image_id: target.id, images: conversationImages.map((image, index) => ({ number: index + 1, id: image.id, description: image.prompt })) }, "사용자 요청을 구현하는 데 필요한 보조 이미지를 현재 대화에서 고른다. 첫 이미지 인물과 두번째 배경을 합쳐달라는 요청처럼 여러 참조가 필요하면 각 이미지의 용도를 instruction에 구체적으로 적는다. 사용자가 명시한 이미지는 반드시 포함한다. 단순 밝기 변경에는 보조 이미지가 필요 없으므로 빈 배열. 주 이미지 자체는 제외. 관련 없는 이미지를 억지로 넣지 않는다.");
-        referenceImages = sources.result.references.map(ref => { const image = conversationImages[ref.image_number - 1]; if (!image) throw new Error("참고할 이미지 순번을 확인해 주세요."); return { id: image.id, instruction: ref.instruction }; }).filter((ref, index, all) => ref.id !== parentImageId && all.findIndex(item => item.id === ref.id) === index);
+        referenceImages = plan.result.references.map(ref => { const image = conversationImages[ref.image_number - 1]; if (!image) throw new Error("대화의 참고 이미지를 확인하지 못했습니다. 다시 요청해 주세요."); return { id: image.id, instruction: ref.instruction }; }).filter((ref, index, all) => ref.id !== parentImageId && all.findIndex(item => item.id === ref.id) === index);
         generationRequest = ["기존 이미지 편집. 입력 원본을 기준으로 요청한 부분만 변경한다.", "기존 생성 조건: " + String(target.prompt).slice(0, 1600), "이번 요청: " + text, "변경: " + plan.result.change, "유지: " + plan.result.preserve].join("\n").slice(0, 4000);
       } else if (plan.result.intent === "question") mode = "answer";
     }
@@ -346,8 +347,8 @@ async function handleActionMode(
     return {
       status: 'COMPLETE',
       phase: 'completed',
-      text: `${res.summary}을 참고해 이미지를 만들었습니다. 이미지를 누르면 크게 볼 수 있습니다.`,
-      extra: { image_generated: true, images: [{ ...image, type: 'generated_image', parent_image_id: parentImageId ?? null }] },
+      text: parentImageId ? `대화에서 수정할 이미지를 찾고${referenceImages.length ? " 보조 이미지 " + referenceImages.length + "장도 함께 참고해" : ""} 요청하신 부분을 바꿨습니다. 이미지를 누르면 크게 볼 수 있습니다.` : `${res.summary}을 참고해 이미지를 만들었습니다. 이미지를 누르면 크게 볼 수 있습니다.`,
+      extra: { image_generated: true, images: [{ ...image, type: 'generated_image', parent_image_id: parentImageId ?? null, reference_images: referenceImages, user_request: text }] },
     };
   }
 
