@@ -77,9 +77,7 @@ function AssistantView() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState<LiveRun | null>(null);
-  const [schedule, setSchedule] = useState<any[] | null>(null);
-  const [tasks, setTasks] = useState<any[] | null>(null);
-  const [panelTab, setPanelTab] = useState<'schedule' | 'tasks' | 'files' | 'images'>('schedule');
+  const [panelTab, setPanelTab] = useState<'files' | 'images'>('images');
   const [files, setFiles] = useState<any[] | null>(null);
   const [images, setImages] = useState<any[] | null>(null);
   const [selectedImage, setSelectedImage] = useState<any | null>(null);
@@ -257,22 +255,8 @@ function AssistantView() {
   };
 
   useEffect(() => {
-    const path =
-      panelTab === 'schedule'
-        ? '/api/assistant/schedule'
-        : panelTab === 'tasks'
-          ? '/api/assistant/tasks'
-          : panelTab === 'files'
-            ? '/api/assistant/files'
-            : '/api/assistant/images';
-    const set =
-      panelTab === 'schedule'
-        ? setSchedule
-        : panelTab === 'tasks'
-          ? setTasks
-          : panelTab === 'files'
-            ? setFiles
-            : setImages;
+    const path = panelTab === 'files' ? '/api/assistant/files' : '/api/assistant/images';
+    const set = panelTab === 'files' ? setFiles : setImages;
     api<any[]>(path)
       .then((value) => set(asArray(value)))
       .catch(() => set([]));
@@ -496,18 +480,6 @@ function AssistantView() {
         </div>
         <div className="side-tabs">
           <button
-            className={panelTab === 'schedule' ? 'active' : ''}
-            onClick={() => setPanelTab('schedule')}
-          >
-            일정
-          </button>
-          <button
-            className={panelTab === 'tasks' ? 'active' : ''}
-            onClick={() => setPanelTab('tasks')}
-          >
-            할 일
-          </button>
-          <button
             className={panelTab === 'files' ? 'active' : ''}
             onClick={() => setPanelTab('files')}
           >
@@ -520,7 +492,7 @@ function AssistantView() {
             이미지
           </button>
         </div>
-        <p className="panel-source-note">{panelTab === 'schedule' ? 'Notion 일정표에서 가져온 일정입니다.' : panelTab === 'tasks' ? 'Notion 작업 현황판의 담당자와 진행 상태를 확인합니다.' : panelTab === 'files' ? '직접 올린 파일입니다. 파일을 누르면 자세히 볼 수 있습니다.' : '만든 이미지입니다. 누르면 크게 보고 생성 내용을 확인합니다.'}</p>
+        <p className="panel-source-note">{panelTab === 'files' ? '직접 올린 파일입니다. 파일을 누르면 자세히 볼 수 있습니다.' : '만든 이미지입니다. 누르면 크게 보고 생성 내용을 확인합니다.'}</p>
         {panelTab === 'files' && (
           <>
             <button className="primary-button" onClick={() => fileInput.current?.click()}>
@@ -565,17 +537,6 @@ function AssistantView() {
             {asArray<any>(images).length === 0 && <p className="dim">생성된 이미지가 없습니다.</p>}
           </div>
         )}
-        {(panelTab === 'schedule' || panelTab === 'tasks') &&
-          (asArray<any>(panelTab === 'schedule' ? schedule : tasks).map((row: any, index: number) => (
-            <div key={String(row?.id ?? index)} className="side-row">
-              <div className="side-row-title">{safeText(row?.['이름'] ?? row?.['작업명'] ?? row?.id, '이름 없는 항목')}</div>
-              <div className="dim">
-                {safeText(row?.['날짜']?.start ?? row?.date ?? null, '날짜 없음')} · {safeText(row?.['상태'] ?? row?.status, '-')} ·{' '}
-                {Array.isArray(row?.['담당자']) ? row['담당자'].map((person: unknown) => safeText(person)).join(', ') || '-' : safeText(row?.['담당자'], '-')}
-              </div>
-            </div>
-          )))}
-        {(panelTab === 'schedule' || panelTab === 'tasks') && asArray<any>(panelTab === 'schedule' ? schedule : tasks).length === 0 && <p className="dim">항목이 없습니다.</p>}
       </aside>
       {selectedImage && <div className="image-modal-backdrop" onClick={() => setSelectedImage(null)}><section className="image-modal" role="dialog" aria-modal="true" aria-label="생성 이미지 상세" onClick={event => event.stopPropagation()}><button autoFocus className="image-modal-close" aria-label="이미지 상세 닫기" onClick={() => setSelectedImage(null)}>×</button><img src={'/api/assistant/images/' + selectedImage.id} alt="생성 이미지" /><div><h2>생성 이미지</h2><p>{selectedImage.prompt}</p><dl><dt>생성 모델</dt><dd>{selectedImage.model}</dd><dt>만든 시간</dt><dd>{new Date(selectedImage.created_at).toLocaleString('ko-KR')}</dd><dt>파일 크기</dt><dd>{Math.round(Number(selectedImage.bytes) / 1024)}KB</dd></dl><a href={'/api/assistant/images/' + selectedImage.id} target="_blank" rel="noreferrer">원본 이미지 열기 ↗</a></div></section></div>}
       {error && (
