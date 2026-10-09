@@ -17,6 +17,21 @@ it('retries invalid structured output with contract feedback', async () => {
 it('fails after bounded correction rather than accepting invalid data', async () => {
   const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"title":"too long"}' } }] })));
   vi.stubGlobal('fetch', fetcher);
-  await expect(solarModel({ UPSTAGE_API_KEY: 'test' } as AppConfig).structured(z.object({ title: z.string().max(3) }), {}, 'short')).rejects.toThrow();
+  await expect(solarModel({ UPSTAGE_API_KEY: 'test' } as AppConfig).structured(z.object({ title: z.string().max(3) }), {}, 'short')).rejects.toMatchObject({ code: 'MODEL_OUTPUT_INVALID', statusCode: 502 });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+it('recovers malformed JSON with a larger completion budget', async () => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '{"title":"unfinished' } }] })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{"title":"ok"}' } }] })));
+  vi.stubGlobal('fetch', fetcher);
+  const out = await solarModel({ UPSTAGE_API_KEY: 'test' } as AppConfig).structured(z.object({ title: z.string() }), {}, 'title');
+  expect(out.result.title).toBe('ok');
+  expect(JSON.parse(fetcher.mock.calls[1][1].body).max_tokens).toBeGreaterThan(JSON.parse(fetcher.mock.calls[0][1].body).max_tokens);
+});
+it('rejects truncated responses even when their partial JSON parses', async () => {
+  const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '{"title":"ok"}' } }] })));
+  vi.stubGlobal('fetch', fetcher);
+  await expect(solarModel({ UPSTAGE_API_KEY: 'test' } as AppConfig).structured(z.object({ title: z.string() }), {}, 'title')).rejects.toMatchObject({ code: 'MODEL_OUTPUT_INVALID' });
   expect(fetcher).toHaveBeenCalledTimes(2);
 });

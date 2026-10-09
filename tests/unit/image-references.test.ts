@@ -19,8 +19,8 @@ describe('approved image reference resolution', () => {
     expect(() => orderedImageReferences(['a'], [{ ...a, asset_id: 'asset', asset_state: 'FAILED' }])).toThrow();
     expect(orderedImageReferences(['a'], [{ ...a, asset_id: 'asset', asset_state: 'READY', canonical_state: 'NONE', rights_note: '팀 제작 자료' }])).toHaveLength(1);
   });
-  it('requires rights notes for art assets used for generation', () => {
-    expect(() => orderedImageReferences(['a'], [{ ...a, asset_id: 'asset', asset_state: 'READY', canonical_state: 'NONE' }])).toThrow('권리 메모');
+  it('allows ready references without a rights-note field', () => {
+    expect(orderedImageReferences(['a'], [{ ...a, asset_id: 'asset', asset_state: 'READY', canonical_state: 'NONE' }])).toHaveLength(1);
     expect(orderedImageReferences(['a'], [{ ...a, asset_id: 'asset', asset_state: 'READY', canonical_state: 'NONE', rights_note: '팀 제작 자료' }])).toHaveLength(1);
   });
 });

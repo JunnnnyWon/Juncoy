@@ -15,7 +15,7 @@ import type { UploadStorage } from '../uploads.ts';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { orderedImageReferences } from '../image-references.ts';
-import { ImageBrief, ImageBriefDraft } from '@meeting/contracts';
+import { ImageBrief, ImageBriefDraft, imageBriefHashInput } from '@meeting/contracts';
 import sharp from 'sharp';
 
 // 이미지 생성 — spec §12: preview는 프롬프트 합성만, generate는 명시적 승인 후 실행.
@@ -119,7 +119,7 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
 
       const after = approval.after as any;
       const brief = ImageBrief.parse(after.image_brief);
-      const briefHash = createHash('sha256').update(JSON.stringify({ ...brief, brief_hash: undefined })).digest('hex');
+      const briefHash = createHash('sha256').update(imageBriefHashInput(brief)).digest('hex');
       if (briefHash !== brief.brief_hash)
         throw new DomainError('BRIEF_HASH_MISMATCH', 'ImageBrief가 변경되었습니다. 다시 검토해야 합니다.', 409);
       if (after.model !== REQUIRED_IMAGE_MODEL || brief.model !== REQUIRED_IMAGE_MODEL)

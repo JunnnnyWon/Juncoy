@@ -3865,6 +3865,45 @@ small {
 .state-badge{background:rgba(255,255,255,.02)}.state-badge.state-ready{background:rgba(112,197,160,.1)}.state-badge.state-failed{background:rgba(238,128,125,.1)}
 @media(max-width:900px){.art-layout{min-height:0}.art-board,.art-inspector{min-height:600px}.board-stage{width:100%;min-width:0}.art-inspector{max-height:none}.workspace-assistant .assistant-msgs{max-height:none}}
 @media(max-width:680px){.art-header{padding:12px}.art-header-actions{display:flex;flex-direction:column;align-items:stretch}.art-header-buttons{display:grid;grid-template-columns:1fr 1fr}.art-header-buttons button{min-height:38px}.art-layout{min-height:0}.art-board{min-height:560px}.board-stage{width:100%;min-width:0;min-height:850px}.canvas-reference-card{min-width:160px}.art-inspector{padding:14px}.assistant-topbar h2{font-size:15px}.assistant-input{position:sticky;bottom:0}.message-data > div{grid-template-columns:90px minmax(0,1fr)}}
+.art-inspector { font-size:15px; line-height:1.65; padding:24px; }
+.art-inspector label, .art-inspector .eyebrow, .art-inspector .role-usage-list legend, .art-inspector .role-usage-list label { font-size:14px; color:#dce1dd; }
+.art-inspector h2 { font-size:21px; overflow-wrap:anywhere; }
+.art-inspector h3 { font-size:17px; margin:0; }
+.art-inspector select, .art-inspector textarea, .art-inspector .role-usage-list select { font-size:14px; line-height:1.6; padding:10px; }
+.art-inspector button, .art-inspector .asset-review-row, .art-inspector .asset-observation-card p { font-size:14px; line-height:1.6; }
+.art-inspector .role-usage-list { padding:14px; margin-top:20px; }
+.art-inspector .asset-observation-card { margin-top:24px; padding:16px; }
+.art-field-heading { display:flex; gap:8px; align-items:center; }
+.art-help { display:inline-block; position:relative; flex:0 0 auto; }
+.art-help summary { display:grid; place-items:center; width:23px; height:23px; border:1px solid #7c8780; border-radius:50%; cursor:pointer; font-size:14px; color:#e7ece8; list-style:none; }
+.art-help summary::-webkit-details-marker { display:none; }
+.art-help-popup { position:fixed; z-index:40; right:24px; top:80px; width:min(300px,80vw); padding:40px 16px 16px; background:#29302c; border:1px solid #68756c; border-radius:6px; color:#f0f3ef; font-size:15px; font-weight:400; box-shadow:0 8px 24px #0006; }
+.art-help-popup p { margin:0; line-height:1.7; }
+.art-help-popup button { position:absolute; right:8px; top:6px; width:30px; height:30px; padding:0; font-size:24px; background:transparent; color:#fff; border:0; cursor:pointer; }
+.art-help summary:focus-visible { outline:2px solid #e5a095; outline-offset:3px; }
+body:has(.art-workspace) { overflow:hidden; }
+.app-shell:has(.art-workspace) { height:100dvh; overflow:hidden; display:flex; flex-direction:column; }
+.app-shell:has(.art-workspace) .app-header { flex:0 0 auto; }
+.app-shell:has(.art-workspace) .main-shell { flex:1; min-height:0; overflow:hidden; }
+.art-workspace { height:100%; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.art-workspace .art-header, .art-workspace .art-toolbar { flex:0 0 auto; }
+.art-workspace .art-header-buttons > button, .art-workspace .art-header-buttons > a { font-size:14px; line-height:1.5; font-weight:600; }
+.art-workspace .art-header-buttons { align-items:center; }
+.art-workspace .art-header-buttons > button, .art-workspace .art-header-buttons > a { display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; height:40px; min-height:40px; width:220px; padding:8px 12px; white-space:nowrap; margin:0; border-width:1px; border-style:solid; border-radius:4px; }
+.art-workspace .art-header-actions .save-state { display:none; }
+@media(max-width:680px) { .art-workspace .art-header-buttons > button, .art-workspace .art-header-buttons > a { width:100%; font-size:12px; padding:8px 6px; } }
+.art-workspace .art-toolbar .art-tool, .art-workspace .art-toolbar .art-tool:hover, .art-workspace .art-toolbar .art-tool.active { color:#fff; font-size:14px; }
+.art-workspace .art-toolbar .art-tool.active { background:#383f45; border-color:#78828b; }
+.art-workspace .art-toolbar .art-tool:disabled { color:#fff; opacity:.6; }
+.art-workspace .art-layout { flex:1; min-height:0; overflow:hidden; grid-template-columns:minmax(0,1fr) 360px; }
+.art-workspace .art-board { height:100%; min-height:0; overflow:hidden; }
+.art-workspace .art-inspector { height:100%; min-height:0; max-height:100%; overflow-y:auto; overscroll-behavior:contain; }
+.art-inspector .role-usage-list > div { display:grid; grid-template-columns:minmax(0,1fr) minmax(100px,1fr); gap:10px; align-items:center; }
+.art-inspector .role-usage-list label { display:flex; flex-direction:row; align-items:center; gap:10px; font-size:16px; line-height:1.5; margin:0; }
+.art-inspector .role-usage-list input[type=checkbox] { width:18px; height:18px; min-width:18px; flex:0 0 18px; margin:0; padding:0; }
+.art-inspector .role-usage-list legend { font-size:16px; line-height:1.5; }
+.art-inspector .role-usage-list select { font-size:15px; }
+@media(max-width:680px) { .art-workspace .art-layout { display:flex; flex-direction:column; } .art-workspace .art-inspector { flex:1; } .art-workspace .art-board { flex:1; } .art-mobile-tabs { flex:0 0 auto; } }
 .assistant-mobile-panel-button{display:none;padding:7px 9px;color:var(--text-secondary);background:var(--surface-raised);border:1px solid var(--border-strong);border-radius:4px;font-size:10px}
 @media(max-width:680px){.assistant-mobile-panel-button{display:block;margin-left:auto}.workspace-assistant .assistant-side.mobile-open{display:flex;position:fixed;z-index:30;inset:58px 0 0 auto;width:min(92vw,360px);overflow:auto;box-shadow:-18px 0 45px rgba(0,0,0,.3)}}
 @media(max-width:680px){.app-header{height:58px;gap:6px}.app-header .brand span:last-child{display:none}.app-nav{flex:1;justify-content:flex-end}.app-nav a{font-size:9px;padding:7px 4px}.art-board-title-row{min-width:0}.art-board-title-row select{max-width:120px;flex:0 1 120px}.art-board-title-row h1{min-width:0;max-width:145px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px}.art-board-title-row .icon-button{min-width:28px;padding:4px}}

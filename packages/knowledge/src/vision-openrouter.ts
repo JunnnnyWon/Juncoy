@@ -37,7 +37,7 @@ export class OpenRouterVision {
             content: [
               {
                 type: 'text',
-                text: 'Describe this image for a project knowledge index. Return JSON with description, visible_text, subjects, materials, lighting, palette, confidence_note. Do not infer approval, ownership, art direction, or facts not visible in the image.',
+                text: '프로젝트 참고 이미지에서 실제로 보이는 내용을 자연스러운 한국어로 설명한다. JSON 필드 description, visible_text, subjects, materials, lighting, palette, confidence_note를 반환한다. 색상 코드와 고유명사 외에는 한국어를 사용한다. 승인, 소유권, 아트 방향이나 보이지 않는 사실을 추정하지 않는다.',
               },
               { type: 'image_url', image_url: { url: imageUrl } },
             ],

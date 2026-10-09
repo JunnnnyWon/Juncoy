@@ -245,6 +245,7 @@ function AssistantView() {
       method: 'POST',
     });
     setApprovals((a) => a.filter((x) => x.id !== id));
+    if (approve) { setPanelTab('images'); setImages(await api<any[]>('/api/assistant/images')); }
   };
 
   useEffect(() => {
@@ -639,6 +640,6 @@ function ApprovalSummary({ approval }: { approval: Approval }) {
   const data = approval.after && typeof approval.after === 'object' ? approval.after as Record<string, unknown> : {};
   const title = data.name ?? data.title ?? data.filename ?? data.task ?? data['이름'] ?? approval.kind;
   const date = data.date_start ?? data.start ?? data.date;
-  const description = data.description ?? data.note ?? data.content ?? data['설명'];
+  const description = data.description ?? data.note ?? data.content ?? data['설명'] ?? data.prompt;
   return <div className="approval-summary"><h3>{safeText(title, '승인 필요한 작업')}</h3>{date != null && <p className="approval-date">{safeText(date)}</p>}{description != null && <p>{safeText(description)}</p>}</div>;
 }

@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+/** Stable across schema parsing and PostgreSQL jsonb key ordering. */
+export function imageBriefHashInput(value: unknown): string {
+  const normalize = (item: any): any => Array.isArray(item) ? item.map(normalize)
+    : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().filter((key) => key !== 'brief_hash' && item[key] !== undefined).map((key) => [key, normalize(item[key])])) : item;
+  return JSON.stringify(normalize(value));
+}
+
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 const Crop = z.strictObject({
   left: z.number().min(0).max(1),

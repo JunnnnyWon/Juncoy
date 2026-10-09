@@ -25,6 +25,7 @@ interface Deps {
 }
 
 export interface KnowledgeCtx {
+  previewArtBoard?: (projectId: string, userId: string, role: "reader" | "editor" | "admin", request: string) => Promise<any>;
   store: KnowledgeStore;
   embeddings?: UpstageEmbeddings;
   discordRead?: (timeoutMs: number) => Promise<{ ok: boolean; gaps: string[] }>;
@@ -67,17 +68,20 @@ export function solarModel(config: AppConfig) {
               schema: z.toJSONSchema(s, { target: 'draft-7' }),
             },
           },
-          max_tokens: 4096,
+          max_tokens: attempt === 0 ? 8192 : 16384,
         }),
         signal: AbortSignal.timeout(90_000),
       });
-      if (!res.ok) throw new Error(`solar ${res.status}`);
+      if (!res.ok) throw Object.assign(new Error('브리프 작성 모델이 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'), { code: 'MODEL_REQUEST_FAILED', statusCode: 502, providerStatus: res.status });
       const data = (await res.json()) as any;
       let parsed: T;
       try {
-        parsed = s.parse(JSON.parse(data.choices[0].message.content));
+        const choice = data.choices?.[0];
+        if (choice?.finish_reason === 'length') throw new SyntaxError('model_output_truncated');
+        if (typeof choice?.message?.content !== 'string') throw new SyntaxError('model_output_missing');
+        parsed = s.parse(JSON.parse(choice.message.content));
       } catch (error) {
-        if (attempt === 1) throw error;
+        if (attempt === 1) throw Object.assign(new Error('자동 분석 응답의 형식이 올바르지 않아 준비를 완료하지 못했습니다. 다시 시도해 주세요.'), { code: 'MODEL_OUTPUT_INVALID', statusCode: 502 });
         correction = '\n이전 출력이 JSON 계약 검증에 실패했다. 아래 제한을 반드시 지키고 짧게 작성한다: ' + (error instanceof z.ZodError
           ? JSON.stringify(error.issues.map(({ path, code, message }) => ({ path, code, message })))
           : '유효한 JSON 객체만 반환한다.');

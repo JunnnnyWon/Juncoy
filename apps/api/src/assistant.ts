@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { sql, first, rows } from '@meeting/knowledge-db';
-import { AssistantMode, ArtBoardSnapshot, ImageBrief, ImageBriefDraft } from '@meeting/contracts';
+import { AssistantMode, ArtBoardSnapshot, ImageBrief, ImageBriefDraft, imageBriefHashInput } from '@meeting/contracts';
 import {
   ToolRegistry,
   registerReadTools,
@@ -296,7 +296,8 @@ async function handleActionMode(
     };
 
   if (mode === 'generate') {
-    const r = await registry.execute(tctx, 'image.preview_generation', { request: text });
+    const preview = await ctx.previewArtBoard?.(projectId, userId, tctx.role, text);
+    const r = preview ? { ok: true, result: { ...preview, summary: "아트보드 전체 참조 · " + preview.reference_upload_ids.length + "개 원본" } } : { ok: false, error: "아트보드 연결을 확인해 주세요." };
     if (!r.ok)
       return {
         status: 'NEEDS_CLARIFICATION',
@@ -371,8 +372,9 @@ async function handleActionMode(
 }
 
 export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
-  app.setErrorHandler((error, _req, reply) => {
+  app.setErrorHandler((error, req, reply) => {
     const e = error as any;
+    req.log.error({ error_name: e.name, error_code: e.code, provider_status: e.providerStatus, path: req.url.split('?')[0] }, 'assistant request failed');
     const status =
       (e instanceof z.ZodError ? 502 : undefined) ?? e.statusCode ??
       e.status ??
@@ -397,6 +399,11 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         statusCode: 503,
         code: 'KNOWLEDGE_DISABLED',
       });
+    c.previewArtBoard = async (projectId, userId, role, request) => {
+      const boards = await c.store.listArtBoards(projectId, userId);
+      if (!boards[0]) throw Object.assign(new Error("아트보드에 참고 이미지를 먼저 추가해 주세요."), { code: "ART_BOARD_REQUIRED", statusCode: 409 });
+      return previewArtBoard(c, projectId, userId, role, boards[0].id, { request });
+    };
     const project = await findProjectForGuild(c, deps.config.DISCORD_GUILD_ID);
     if (!project)
       throw Object.assign(new Error('no project scope'), {
@@ -865,6 +872,16 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     return { id: extractionId, asset_id: asset.id, asset_revision: asset.sha256, status: 'DRAFT', model: observation.model, observations: observation };
   });
 
+  app.patch('/api/assistant/art-assets/:id/rights-note', async (req, reply) => {
+    const { ctx, projectId, role } = await requireSession(req);
+    if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
+    const body = z.object({ rights_note: z.string().max(1000) }).parse(req.body);
+    const result = await sql`UPDATE art_reference_assets SET rights_note=${body.rights_note}, updated_at=now()
+      WHERE id=${(req.params as any).id} AND project_id=${projectId}`.execute(ctx.store.db);
+    if (!Number(result.numAffectedRows)) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return { saved: true };
+  });
+
   app.post('/api/assistant/art-assets/:id/canonical-review', async (req, reply) => {
     const { session, ctx, projectId, role } = await requireSession(req);
     if (role === 'reader') return reply.code(403).send({ error: { code: 'ROLE_REQUIRED' } });
@@ -1061,7 +1078,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     if (!board) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
     const revision = await ctx.store.getArtBoardRevision(projectId, session.user_id, board.id);
     if (!revision) return reply.code(409).send({ error: { code: 'REVISION_NOT_FOUND' } });
-    const refs = (revision.snapshot as any)?.references ?? [];
+    const refs = ((revision.snapshot as any)?.references ?? []).filter((ref: any) => !ref.excluded);
     const uploadIds = refs.map((ref: any) => ref.upload_id).filter(Boolean);
     const extractions = await ctx.store.getArtExtractionsForUploads(projectId, uploadIds);
     const schema = z.object({
@@ -1127,14 +1144,18 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
 
   app.post('/api/assistant/art-boards/:id/image-briefs/preview', async (req, reply) => {
     const { session, ctx, projectId, role } = await requireSession(req);
-    const board = await ctx.store.getArtBoard(projectId, session.user_id, (req.params as any).id);
-    if (!board) return reply.code(404).send({ error: { code: 'NOT_FOUND' } });
+    return previewArtBoard(ctx, projectId, session.user_id, role, (req.params as any).id, req.body);
+  });
+  async function previewArtBoard(ctx: KnowledgeCtx, projectId: string, userId: string, role: "reader" | "editor" | "admin", boardId: string, input: unknown) {
+    const session = { user_id: userId };
+    const board = await ctx.store.getArtBoard(projectId, userId, boardId);
+    if (!board) throw Object.assign(new Error("아트보드를 찾을 수 없습니다."), { code: "NOT_FOUND", statusCode: 404 });
     const body = z
       .object({
         request: z.string().min(1).max(2000).default('캐릭터 컨셉 아트'),
         revision: z.number().int().positive().optional(),
       })
-      .parse(req.body ?? {});
+      .parse(input ?? {});
     const revision = await ctx.store.getArtBoardRevision(
       projectId,
       session.user_id,
@@ -1142,15 +1163,31 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       body.revision,
     );
     const refs = Array.isArray((revision?.snapshot as any)?.references)
-      ? (revision!.snapshot as any).references.filter((ref: any) => ref.selected)
+      ? (revision!.snapshot as any).references.filter((ref: any) => !ref.excluded)
       : [];
     const candidateUploadIds = refs.map((ref: any) => ref.upload_id).filter(Boolean);
     const uploads = await ctx.store.getUploadsByIds(projectId, candidateUploadIds);
     const readyIds = new Set(uploads.filter((upload: any) => upload.state === 'READY').map((upload: any) => upload.id));
-    const usableRefs = refs.filter((ref: any) =>
+    const eligibleRefs = refs.filter((ref: any) =>
       Boolean(ref.upload_id) && readyIds.has(ref.upload_id) && ref.usage !== 'EXCLUDED' && ref.usage !== 'REVIEW_REQUIRED',
     );
+    const uniqueRefs = new Map<string, any>();
+    for (const ref of eligibleRefs) {
+      const existing = uniqueRefs.get(ref.upload_id);
+      if (!existing) uniqueRefs.set(ref.upload_id, { ...ref });
+      else {
+        existing.roles = [...new Set([...(existing.roles ?? [existing.role]), ...(ref.roles ?? [ref.role])])];
+        existing.roleUsage = { ...existing.roleUsage, ...ref.roleUsage };
+        existing.note = [...new Set([existing.note, ref.note].filter(Boolean))].join('\n').slice(0, 2000);
+      }
+    }
+    const usableRefs = [...uniqueRefs.values()];
+    if (usableRefs.length > 16) throw Object.assign(new Error("현재 이미지 모델은 원본 16개까지 입력할 수 있습니다. 전체 원본을 전달하려면 아트보드의 이미지를 16개 이하로 정리해 주세요."), { code: "REFERENCE_LIMIT", statusCode: 409 });
     const referenceUploadIds = usableRefs.map((ref: any) => ref.upload_id).filter(Boolean);
+    const imageObservations = await Promise.all(refs.filter((ref: any) => ref.art_asset_id).map(async (ref: any) => {
+      const extraction = await ctx.store.getLatestArtExtraction(projectId, ref.art_asset_id);
+      return { name: ref.name, image_content: { ...(extraction?.observations as any ?? {}), ...(extraction?.human_corrections as any ?? {}) } };
+    }));
     const approvedStyle = await ctx.store.getApprovedStyleProfile(projectId);
     const savedRules = approvedStyle ? await ctx.store.getApprovedStyleRules(projectId, approvedStyle.version) : [];
     const ruleSource = savedRules.length ? savedRules : approvedStyle?.body?.common_rules;
@@ -1163,14 +1200,14 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       ...usableRefs.map((ref: any) => (ref.roles ?? [ref.role]).join(', ') + ': ' + ref.note),
       ...approvedRules,
     ].join('\n');
-    if (!ctx.model) return reply.code(503).send({ error: { code: 'MODEL_NOT_CONFIGURED' } });
+    if (!ctx.model) throw Object.assign(new Error("모델 설정을 확인해 주세요."), { code: "MODEL_NOT_CONFIGURED", statusCode: 503 });
     const rag = await buildImagePrompt(ctx.store, {
       projectId, request: body.request, embeddings: ctx.embeddings, acl: { guilds: [deps.config.DISCORD_GUILD_ID] },
     });
     const drafted = await ctx.model.structured(ImageBriefDraft, {
-      request: body.request, project_evidence: rag.prompt, role_directives: usableRefs.map((ref: any) => ({ roles: ref.roles ?? [ref.role], instruction: ref.note })),
-      approved_art_bible_rules: approvedRules, default_negative_constraints: rag.negative,
-    }, '프로젝트 근거와 승인된 Art Bible, 사용자가 정한 역할 지시만 사용해 구조화된 이미지 브리프를 작성한다. 사람 수정/사용자 지시가 AI 관찰보다 우선한다. 근거 없는 고유 설정을 만들지 않는다. 출력 prompt는 GPT Image 2.5 Flare용으로 구체적인 장면/재질/구도를 설명하고 negative_constraints는 제외할 시각 요소만 담는다.');
+      request: body.request, project_evidence: rag.prompt, art_board: { name: board.name, frames_and_notes: (revision?.snapshot as any)?.nodes ?? [], references: refs.map((ref: any) => ({ name: ref.name, roles: ref.roles ?? [ref.role], usage: ref.usage, note: ref.note, frame_id: ref.group_id, crop: ref.crop })) }, role_directives: usableRefs.map((ref: any) => ({ roles: ref.roles ?? [ref.role], instruction: ref.note })),
+      image_observations: imageObservations, approved_art_bible_rules: approvedRules, default_negative_constraints: rag.negative,
+    }, '프로젝트 근거와 승인된 Art Bible, 사용자가 정한 역할 지시만 사용해 구조화된 이미지 브리프를 작성한다. 사람 수정/사용자 지시가 AI 관찰보다 우선한다. 근거 없는 고유 설정을 만들지 않는다. 출력 prompt는 GPT Image 2.5 Flare용으로 구체적인 장면/재질/구도를 설명하고 negative_constraints는 제외할 시각 요소만 담는다. prompt는 4000자 이내로 핵심을 통합하고 레퍼런스별 지시를 반복하지 않는다. negative_constraints는 12개 이내, 각 100자 이내다. role_directives는 역할별로 중복 없이 최대 6개, 각 instruction은 300자 이내로 요약한다. 완결된 JSON 객체만 반환한다.');
     const prompt = drafted.result.prompt;
     const promptHash = createHash('sha256').update(prompt).digest('hex');
     const sourceRows = await rows<any>(sql`SELECT s.kind, s.status, max(c.last_reconciled_at) AS latest_at
@@ -1214,7 +1251,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       coverage, provider: 'openrouter' as const, model: 'openai/gpt-image-2.5-flare' as const,
       prompt, prompt_hash: promptHash,
     };
-    const brief = ImageBrief.parse({ ...briefBase, brief_hash: createHash('sha256').update(JSON.stringify(briefBase)).digest('hex') });
+    const brief = ImageBrief.parse({ ...briefBase, brief_hash: createHash('sha256').update(imageBriefHashInput(briefBase)).digest('hex') });
     const providerReady =
       role !== 'reader' &&
       process.env.IMAGE_GENERATION_ENABLED === 'true' &&
@@ -1262,7 +1299,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       coverage: brief.coverage,
       note: 'ImageBrief 초안입니다. 승인 후 OpenRouter 이미지 생성으로 전달됩니다.',
     };
-  });
+  }
 }
 
 /**
