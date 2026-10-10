@@ -83,3 +83,20 @@ Solar 구조화 응답은 완결된 JSON code fence를 처리하고 검증 오�
 추가 수정의 최종 코드 release는 `54d3b45`다. 운영 image는 `juncoy-meeting:release-54d3b45`, 확인한 digest는 `sha256:48fb62e696d995eaf83feab5204cde80f90d85701432f343084f7b6381b4f67c`다. API·아트보드 UI·이미지 provider의 로컬/컨테이너 source SHA-256이 일치했고 health는 healthy다. 기존 DB/env/image 백업을 유지했다.
 
 추가 화면 증거는 `artifacts/image-plan-live-qa/character-original.jpg`, `character-final-edit.jpg`, `ui-proposal-notice.jpg`, `seven-originals-board.jpg`, `seven-originals-result.jpg`다. artifacts는 Git 제외다. 결과 이미지는 운영의 private endpoint에서 다시 열 수 있으며 자동 canonical 승인하지 않았다. 이번에 열거한 미검증 항목은 수정·검증했지만, 이를 이전 두 명세 전체의 인수 완료로 확대하지 않는다.
+
+## 아트보드 생성 UI 정리 및 사용 안내
+
+코드 release `f32bc95`에서 생성 관련 컨트롤을 오른쪽 패널로 모았다. 헤더에는 보드 이름·저장 상태·작업 버튼을 남기고 긴 원본 목록을 제거했다. 오른쪽은 이미지 정보 / 이미지 만들기 / 생성 결과로 전환한다. 기존 React/CSS·보드 API를 유지하며 배치·간격·상태 표시를 중심으로 개선했다.
+
+- **이미지 정보:** 보드에서 이미지를 누르면 역할·사용 강도·팀 메모·AI 관찰을 확인하고 수정한다.
+- **이미지 만들기:** 원하는 장면 입력 → 자동 또는 직접 선택 → 생성 조건 확인 → 유지/변경/자유 구성·참고 원본·프로젝트 자료 검토 → 확인 후 생성. 준비만으로 이미지 생성 비용이 발생하지 않는다(텍스트 모델 호출은 발생한다).
+- **자동 선택:** 요청과 관련된 원본 최대 6개를 고른다. 자료가 부족하면 더 적게 사용한다.
+- **직접 선택:** 파일명 검색과 썸네일로 고르며 최대 16개다. 입력 순서는 선택한 순서다. 이번 QA에서 직접 1개를 골랐는데 자동 5개가 추가되는 문제를 발견해, 직접 선택은 고른 원본만 사용하도록 수정했다. 검토 화면에서도 정확히 1개가 보이는 것을 재검증했다.
+- **생성 결과:** 이미지를 누르면 원본을 연다. 생성 정보는 모델·참고 원본 수·공급자 요청 번호를 펼쳐 확인한다. 이전 결과 더 보기로 6개씩 추가한다. 출처·사용 범위를 입력해 별도로 참고 자료 승인을 할 수 있다. 이미지별 권리 메모는 서로 공유하지 않는다.
+- **아트바이블:** 레퍼런스 분석으로 만든 공통 그림체·재질 기준을 검토·승인하는 영역이다. 이미지 생성 검토 화면과 구분해 접근한다.
+
+로그인된 운영 브라우저에서 패널 전환, 검색, 원본 선택, 검토 수 일치, 준비 취소, 결과 상세 펼치기, 이전 결과 6→12개 표시를 검증했다. 이번 UI QA에서는 유료 이미지 생성이나 참고 자료 승인을 실행하지 않았다. QA용 준비 요청은 취소했다. unit 124개·타입 검사·웹 build가 통과했다.
+
+실제 CSS viewport 1440px, 767/769px(사용자 브라우저 확대율로 인한 반올림), 390px에서 document scrollWidth가 viewport와 일치했다. 390px에서 도구 모음은 약 167px에서 55px로 줄었고, 패널과 캔버스는 모바일 전환 버튼으로 접근했다. 화면 증거는 `art-layout-desktop.jpg`, `art-layout-mobile.jpg`, `art-layout-tablet.jpg`, `art-layout-review-desktop.jpg`, `art-layout-results-desktop.jpg`이며 기존 artifacts QA 폴더에 있다.
+
+최종 확인한 운영 image는 `juncoy-meeting:release-f32bc95f234033f4de8d0c6dcb842c5507946cb1`, digest는 `sha256:7b7090b58e2529b72b48e31dda76cbc62075972ae9ab3ef49c2437c04ab5591d`다. 생성 설정 UI와 원본 선택 로직의 로컬/컨테이너 hash가 일치했고 API는 healthy였다. DB migration과 회의 봇 재시작은 없었다. Graphify SQL 파서·기존 테스트 AST 제한은 그대로 남는다.
