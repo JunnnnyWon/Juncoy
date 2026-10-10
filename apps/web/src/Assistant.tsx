@@ -253,7 +253,7 @@ function AssistantView() {
       method: 'POST',
     });
     setApprovals((a) => a.filter((x) => x.id !== id));
-    if (approve) { setPanelTab('images'); setImages(await api<any[]>('/api/assistant/images')); }
+    if (approve) { setPanelTab('images'); setImages(await api<any[]>('/api/assistant/images')); if (convId) await openConv(convId); }
   };
 
   useEffect(() => {
@@ -530,5 +530,10 @@ function ApprovalSummary({ approval }: { approval: Approval }) {
   const title = data.name ?? data.title ?? data.filename ?? data.task ?? data['이름'] ?? approval.kind;
   const date = data.date_start ?? data.start ?? data.date;
   const description = data.description ?? data.note ?? data.content ?? data['설명'] ?? data.prompt;
+  if ((data.image_brief as any)?.plan) {
+    const brief = data.image_brief as any;
+    const names: Record<string, string> = { new: '새 이미지', edit: '부분 수정', variant: '다른 후보', recompose: '장면 재구성' };
+    return <div className="approval-summary"><h3>{names[brief.plan.operation]} · {brief.request}</h3><p>유지: {brief.plan.preserve.join(', ') || '없음'}</p><p>변경: {brief.plan.change.join(', ') || '요청에 맞게 구성'}</p><p>자유 구성: {brief.plan.free.join(', ')}</p>{brief.references.map((ref: any) => <p key={ref.upload_id}>{ref.purpose} · {ref.reason}</p>)}{brief.plan.primary && <p>이전 결과 참고: {brief.plan.primary.purpose}</p>}{brief.plan.supporting.map((ref: any) => <p key={ref.id}>보조 원본: {ref.purpose}</p>)}<details><summary>프로젝트 근거</summary>{brief.evidence.map((e: any) => <p key={e.id}>{e.source} · {e.stable_key}</p>)}</details></div>;
+  }
   return <div className="approval-summary"><h3>{safeText(title, '승인 필요한 작업')}</h3>{date != null && <p className="approval-date">{safeText(date)}</p>}{description != null && <p>{safeText(description)}</p>}</div>;
 }

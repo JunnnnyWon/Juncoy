@@ -49,9 +49,9 @@ export async function buildImagePrompt(
 ): Promise<ImagePromptResult> {
   const chunks = await retrieve(store, {
     projectId: opts.projectId,
-    query: opts.request,
+    query: /UI|HUD|인터페이스/i.test(opts.request) ? opts.request + ' UI HUD 인터랙션 화면 기획' : opts.request,
     embeddings: opts.embeddings,
-    limit: opts.evidenceLimit ?? 6,
+    limit: 24,
     acl: opts.acl,
   });
   const style = await activeStyle(store, opts.projectId);
@@ -68,8 +68,9 @@ export async function buildImagePrompt(
         )
         .join(', ')
     : '';
-  const refs = chunks.map(
-    (c) => `[${c.source}:${c.stable_key.slice(0, 80)}] ${c.content.slice(0, 220)}`,
+  const relevant = chunks.filter(c => !/Variant_Platforming|Variant_SideScrolling|PlatformingCharacter/.test(c.stable_key)).slice(0, opts.evidenceLimit ?? 6);
+  const refs = relevant.map(
+    (c) => `[${c.source}:${c.stable_key.slice(0, 160)}] ${c.content.slice(0, 1600)}`,
   );
   const prompt = [
     opts.request,
@@ -83,8 +84,8 @@ export async function buildImagePrompt(
     negative: (style?.body?.negative as string) ?? DEFAULT_NEGATIVE,
     style_version: style?.version ?? null,
     style_approved: style != null,
-    evidence_keys: chunks.map((c) => c.stable_key),
-    evidence: chunks.map((c) => ({ stable_key: c.stable_key, revision: c.revision })),
+    evidence_keys: relevant.map((c) => c.stable_key),
+    evidence: relevant.map((c) => ({ stable_key: c.stable_key, revision: c.revision })),
     retrieved_at: new Date().toISOString(),
     mode: 'prompt_only',
     generation: 'provider_unconfigured',

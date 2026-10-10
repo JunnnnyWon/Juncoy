@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ImageGenerationPlan } from './image-plan.ts';
 
 /** Stable across schema parsing and PostgreSQL jsonb key ordering. */
 export function imageBriefHashInput(value: unknown): string {
@@ -28,6 +29,9 @@ export const ImageBriefReference = z.strictObject({
   usage: z.record(z.string(), z.enum(['MUST_FOLLOW', 'STRONG_REFERENCE', 'MOOD_ONLY', 'PARTIAL_REFERENCE', 'REVIEW_REQUIRED'])),
   crop: Crop.nullable(),
   instruction: z.string().max(2000),
+  purpose: z.string().max(500).optional(),
+  reason: z.string().max(500).optional(),
+  forbidden: z.array(z.string().max(200)).max(16).optional(),
 });
 export type ImageBriefReference = z.infer<typeof ImageBriefReference>;
 
@@ -57,7 +61,9 @@ export const ImageBriefDraft = z.strictObject({
 });
 
 export const ImageBrief = z.strictObject({
-  schema_version: z.literal(1),
+  schema_version: z.union([z.literal(1), z.literal(2)]),
+  plan: ImageGenerationPlan.optional(),
+  plan_hash: Sha256.optional(),
   request: z.string().min(1).max(4000),
   role_directives: z.array(z.strictObject({
     role: z.string().min(1).max(80),
@@ -75,5 +81,8 @@ export const ImageBrief = z.strictObject({
   prompt: z.string().min(1).max(12000),
   prompt_hash: Sha256,
   brief_hash: Sha256,
+}).superRefine((brief, ctx) => {
+  if (brief.schema_version === 2 && (!brief.plan || !brief.plan_hash)) ctx.addIssue({ code: 'custom', message: 'v2_plan_required' });
+  if (brief.plan && brief.references.length + (brief.plan.primary ? 1 : 0) + brief.plan.supporting.length > 16) ctx.addIssue({ code: 'custom', message: 'reference_limit' });
 });
 export type ImageBrief = z.infer<typeof ImageBrief>;

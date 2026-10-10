@@ -119,6 +119,9 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
 
       const after = approval.after as any;
       const brief = ImageBrief.parse(after.image_brief);
+      if (brief.schema_version !== 2 || !brief.plan) throw new DomainError('BRIEF_REVIEW_REQUIRED', '생성 조건이 업데이트되었습니다. 다시 생성 준비를 실행해 주세요.', 409);
+      const plan = brief.plan;
+      if (createHash('sha256').update(imageBriefHashInput(plan)).digest('hex') !== brief.plan_hash) throw new DomainError('BRIEF_HASH_MISMATCH', '생성 계획이 변경되었습니다.', 409);
       const briefHash = createHash('sha256').update(imageBriefHashInput(brief)).digest('hex');
       if (briefHash !== brief.brief_hash)
         throw new DomainError('BRIEF_HASH_MISMATCH', 'ImageBrief가 변경되었습니다. 다시 검토해야 합니다.', 409);
@@ -203,21 +206,24 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
           )`.execute(ctx.store.db);
         }
         let inputs = referenceInputs;
-        if (after.parent_image_id) {
-          const parent = await first<any>(sql`SELECT r.storage_key, r.mime, r.sha256 FROM image_results r JOIN image_jobs j ON j.id=r.job_id WHERE r.id=${after.parent_image_id} AND j.project_id=${ctx.projectId} AND j.owner_id=${ctx.userId}`, ctx.store.db);
+        if (plan.primary) {
+          const parent = await first<any>(sql`SELECT r.storage_key, r.mime, r.sha256 FROM image_results r JOIN image_jobs j ON j.id=r.job_id WHERE r.id=${plan.primary.id} AND j.project_id=${ctx.projectId} AND j.owner_id=${ctx.userId}`, ctx.store.db);
           if (!parent) throw new DomainError('IMAGE_NOT_FOUND', '수정할 이미지를 찾을 수 없습니다.', 404);
+          if (parent.sha256 !== plan.primary.hash) throw new DomainError('IMAGE_HASH_MISMATCH', '승인된 원본이 변경되었습니다.', 409);
           const bytes = await storage.read(parent.storage_key);
           if (parent.sha256 && createHash('sha256').update(bytes).digest('hex') !== parent.sha256) throw new DomainError('IMAGE_HASH_MISMATCH', '수정할 원본을 확인하지 못했습니다.', 409);
-          inputs = [{ bytes, mime: parent.mime ?? 'image/png', role: 'EDIT_SOURCE', instruction: '이 이미지를 직접 수정한다. 요청하지 않은 인물 얼굴 의상 구도 배경은 유지한다.' }];
-          for (const reference of after.reference_images ?? []) {
+          inputs = [{ bytes, mime: parent.mime ?? 'image/png', role: plan.operation === 'edit' ? 'EDIT_SOURCE' : 'SCOPED_REFERENCE', instruction: plan.primary.purpose }];
+          for (const reference of plan.supporting) {
             const row = await first<any>(sql`SELECT r.storage_key,r.mime,r.sha256 FROM image_results r JOIN image_jobs j ON j.id=r.job_id WHERE r.id=${reference.id} AND j.project_id=${ctx.projectId} AND j.owner_id=${ctx.userId}`, ctx.store.db);
             if (!row) throw new DomainError("IMAGE_NOT_FOUND", "보조 참고 이미지를 찾을 수 없습니다.", 404);
+            if (row.sha256 !== reference.hash) throw new DomainError('IMAGE_HASH_MISMATCH', '보조 참고 원본이 변경되었습니다.', 409);
             const bytes = await storage.read(row.storage_key);
             if (row.sha256 && createHash("sha256").update(bytes).digest("hex") !== row.sha256) throw new DomainError("IMAGE_HASH_MISMATCH", "보조 원본을 확인하지 못했습니다.", 409);
-            inputs.push({ bytes, mime: row.mime ?? "image/png", role: "SUPPORTING_REFERENCE", instruction: reference.instruction });
+            inputs.push({ bytes, mime: row.mime ?? "image/png", role: "SUPPORTING_REFERENCE", instruction: reference.purpose });
           }
-          await sql`UPDATE image_jobs SET options=${JSON.stringify({ parent_image_id: after.parent_image_id, reference_images: after.reference_images ?? [] })}::jsonb WHERE id=${jobId}`.execute(ctx.store.db);
+          await sql`UPDATE image_jobs SET options=${JSON.stringify({ plan, parent_image_id: plan.primary.id, reference_images: plan.supporting, actual_inputs: [plan.primary, ...plan.supporting] })}::jsonb WHERE id=${jobId}`.execute(ctx.store.db);
         }
+        if (!plan.primary) await sql`UPDATE image_jobs SET options=${JSON.stringify({ plan, actual_inputs: brief.references.map(ref => ({ upload_id: ref.upload_id, hash: ref.source_sha256, purpose: ref.purpose, usage: ref.usage, crop: ref.crop, order: ref.order })) })}::jsonb WHERE id=${jobId}`.execute(ctx.store.db);
         const out = await provider.generate(brief.prompt, after.negative, inputs);
         const buf = Buffer.from(out.b64, 'base64');
         const resultKey = `img-${randomUUID()}.png`;
@@ -230,6 +236,7 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
           mime: out.mime ?? 'image/png',
           sha256: createHash('sha256').update(buf).digest('hex'),
           requestId: out.requestId,
+          costUsd: out.costUsd,
         }, executionToken);
         const r = await first<{ id: string }>(
           sql`SELECT id FROM image_results WHERE job_id=${jobId}`,

@@ -271,7 +271,7 @@ export async function listImages(store: KnowledgeStore, projectId: string) {
   return rows<any>(
         sql`SELECT r.id, r.job_id, r.bytes, r.width, r.height, r.mime, r.sha256, r.cost_status, r.created_at,
                r.review_status, r.reviewed_by, r.reviewed_at, r.review_note,
-               j.prompt, j.model, j.owner_id, j.brief_hash, j.board_id, j.board_revision, j.art_bible_version, j.provider_request_id
+               j.prompt, j.model, j.owner_id, j.options, j.brief_hash, j.board_id, j.board_revision, j.art_bible_version, j.provider_request_id
         FROM image_results r JOIN image_jobs j ON j.id=r.job_id
         WHERE j.project_id=${projectId} ORDER BY r.created_at DESC LIMIT 100`,
     store.db,
@@ -280,7 +280,7 @@ export async function listImages(store: KnowledgeStore, projectId: string) {
 
 export async function getImage(store: KnowledgeStore, projectId: string, resultId: string) {
   return first<any>(
-    sql`SELECT r.*, j.prompt, j.project_id, j.model, j.brief_hash, j.board_id, j.board_revision, j.art_bible_version, j.provider_request_id
+    sql`SELECT r.*, j.prompt, j.project_id, j.owner_id, j.options, j.model, j.brief_hash, j.board_id, j.board_revision, j.art_bible_version, j.provider_request_id
         FROM image_results r JOIN image_jobs j ON j.id=r.job_id
         WHERE r.id=${resultId} AND j.project_id=${projectId}`,
     store.db,

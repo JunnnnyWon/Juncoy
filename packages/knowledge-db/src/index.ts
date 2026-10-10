@@ -942,6 +942,7 @@ export class KnowledgeStore {
       project_id: string;
       user_id: string;
       run_id: string | null;
+      conversation_id: string | null;
       kind: string;
       target: any;
       before_hash: string | null;
@@ -949,7 +950,7 @@ export class KnowledgeStore {
       status: string;
       expires_at: Date;
     }>(
-      sql`SELECT id, project_id, user_id, run_id, kind, target, before_hash, after, status, expires_at
+      sql`SELECT id, project_id, user_id, run_id, conversation_id, kind, target, before_hash, after, status, expires_at
           FROM assistant_approvals WHERE id=${approvalId}
           ${projectId ? sql`AND project_id=${projectId}` : sql``}`,
       this.db,

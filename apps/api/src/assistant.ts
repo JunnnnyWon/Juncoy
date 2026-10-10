@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
+import { selectReferences } from '../../../packages/knowledge/src/image-selection.ts';
 import { z } from 'zod';
 import { sql, first, rows } from '@meeting/knowledge-db';
-import { AssistantMode, ArtBoardSnapshot, ImageBrief, ImageBriefDraft, imageBriefHashInput } from '@meeting/contracts';
+import { AssistantMode, ArtBoardSnapshot, ImageBrief, ImageBriefDraft, ImageGenerationPlan, imageBriefHashInput } from '@meeting/contracts';
 import {
   ToolRegistry,
   registerReadTools,
@@ -172,12 +173,12 @@ async function executeRunInOrder(
     let generationRequest = text;
     if (conversationImages.length || explicitTarget) {
       const plan = await ctx.model.structured(z.object({ intent: z.enum(["new", "edit", "variant", "question", "other"]), image_number: z.number().int().nonnegative(), change: z.string().max(1000), preserve: z.string().max(1000), references: z.array(z.object({ image_number: z.number().int().positive(), instruction: z.string().min(1).max(500) })).max(15) }), { request: text, selected_image_id: explicitTarget, images: conversationImages.map((image, index) => ({ number: index + 1, id: image.id, prompt: String(image.prompt).slice(0, 1600), parent_image_id: image.parent_image_id, reference_images: image.reference_images, user_request: image.user_request })), conversation: history.slice(-30).map(message => ({ role: message.role, content: message.content.slice(0, 2000), image_ids: (message.attachments as any[]).filter(item => item?.type === "generated_image").map(item => item.id) })) }, "대화 전체 맥락으로 이미지 작업과 참조를 능동적으로 결정한다. 사용자는 이미지 순번을 말할 필요가 없다. 더 밝게, 이 느낌 유지, 이전 분위기로, 다시 수정 등은 기존 이미지 편집이다. 최근 성공 이미지가 기본 기준이며 명시 선택 또는 이전 대화에서 지목한 인물/배경/조명에 맞는 이미지가 있으면 그 대상을 선택한다. new는 기존 결과와 무관한 새 생성, variant는 다른 후보, question은 설명만 하는 질문, other는 이미지 무관 요청이다. image_number는 주 원본 순번. references에는 이전 대화의 요구와 누적 참조 관계를 읽고 필요한 보조 이미지와 그 용도(인물, 배경, 조명 등)를 선택한다. 사용자가 순번을 명시하지 않아도 이전에 좋아했던 조명이나 배경을 가져오라고 하면 해당 이미지를 찾는다. 단순 밝기 변경은 주 원본만 사용하고, 과거 참조가 필요한 복합 요청만 보조를 추가한다. 관련 없는 이미지는 넣지 않는다. 주 원본은 references에서 제외. 서로 다른 대상이 똑같이 가능해 결정 불가능할 때만 image_number=0. change와 preserve는 짧고 구체적인 한국어, JSON 전체를 간결하게 반환한다.");
-      if (["edit", "variant"].includes(plan.result.intent) || explicitTarget) {
-        const target = explicitTarget ? conversationImages.find(image => image.id === explicitTarget) : conversationImages[plan.result.image_number - 1];
+      if (["edit", "variant"].includes(plan.result.intent) || explicitTarget || (/유지/.test(text) && /씬|장면|배경/.test(text))) {
+        const target = explicitTarget ? conversationImages.find(image => image.id === explicitTarget) : conversationImages[plan.result.image_number - 1] ?? (/유지/.test(text) && /씬|장면|배경/.test(text) ? conversationImages.at(-1) : undefined);
         if (!target) throw new Error("어느 이미지를 수정할지 대화에서 알려 주세요.");
         mode = "generate"; parentImageId = target.id;
         referenceImages = plan.result.references.map(ref => { const image = conversationImages[ref.image_number - 1]; if (!image) throw new Error("대화의 참고 이미지를 확인하지 못했습니다. 다시 요청해 주세요."); return { id: image.id, instruction: ref.instruction }; }).filter((ref, index, all) => ref.id !== parentImageId && all.findIndex(item => item.id === ref.id) === index);
-        generationRequest = ["기존 이미지 편집. 입력 원본을 기준으로 요청한 부분만 변경한다.", "기존 생성 조건: " + String(target.prompt).slice(0, 1600), "이번 요청: " + text, "변경: " + plan.result.change, "유지: " + plan.result.preserve].join("\n").slice(0, 4000);
+        generationRequest = [plan.result.intent === "variant" ? "다른 후보 생성. 화풍만 유지하고 인물·행동·장소·구도는 새롭게 구성한다." : "기존 이미지 수정. 아래 유지 대상으로 명시된 요소만 유지한다.", "이번 요청: " + text, "변경: " + plan.result.change, "유지: " + plan.result.preserve].join("\n").slice(0, 4000);
       } else if (plan.result.intent === "question") mode = "answer";
     }
     if (ctx.model) await store.updateRun(runId, { model: 'solar' });
@@ -326,7 +327,7 @@ async function handleActionMode(
 
   if (mode === 'generate') {
     const preview = await ctx.previewArtBoard?.(projectId, userId, tctx.role, text, parentImageId, referenceImages);
-    const r = preview ? { ok: true, result: { ...preview, summary: "아트보드 전체 참조 · " + preview.reference_upload_ids.length + "개 원본" } } : { ok: false, error: "아트보드 연결을 확인해 주세요." };
+    const r = preview ? { ok: true, result: { ...preview, summary: "요청별 참고 자료 · " + preview.reference_upload_ids.length + "개 보드 원본" } } : { ok: false, error: "아트보드 연결을 확인해 주세요." };
     if (!r.ok)
       return {
         status: 'NEEDS_CLARIFICATION',
@@ -335,21 +336,10 @@ async function handleActionMode(
       };
     const res = r.result as any;
     if (!res.approval_id) throw new Error('이미지 생성 기능을 사용할 수 없습니다.');
-    await ctx.store.updateRun(runId, { phase: 'generating_image' });
-    await ctx.store.emitRunEvent(runId, 'phase', { phase: 'generating_image' });
-    const outcome = await ctx.store.resolveApproval(res.approval_id, userId, true);
-    if (outcome !== 'approved') throw new Error('이미지 생성 요청이 만료되었습니다. 다시 요청해 주세요.');
-    const approval = await ctx.store.getApproval(res.approval_id, projectId);
-    const generated = approval && await executeApproval(ctx, { DISCORD_GUILD_ID: tctx.acl?.guilds[0] } as AppConfig, registry, projectId, userId, tctx.role, approval);
-    if (!generated) throw new Error('이미지 생성이 완료되지 않았습니다.');
-    const image = await first<any>(sql`SELECT r.id, r.bytes, r.created_at, j.prompt, j.model FROM image_results r JOIN image_jobs j ON j.id=r.job_id WHERE j.approval_id=${res.approval_id} AND j.project_id=${projectId}`, ctx.store.db);
-    if (!image) throw new Error('생성 이미지 결과를 찾지 못했습니다.');
-    return {
-      status: 'COMPLETE',
-      phase: 'completed',
-      text: parentImageId ? `대화에서 수정할 이미지를 찾고${referenceImages.length ? " 보조 이미지 " + referenceImages.length + "장도 함께 참고해" : ""} 요청하신 부분을 바꿨습니다. 이미지를 누르면 크게 볼 수 있습니다.` : `${res.summary}을 참고해 이미지를 만들었습니다. 이미지를 누르면 크게 볼 수 있습니다.`,
-      extra: { image_generated: true, images: [{ ...image, type: 'generated_image', parent_image_id: parentImageId ?? null, reference_images: referenceImages, user_request: text }] },
-    };
+    const run = await ctx.store.getRun(runId);
+    await sql`UPDATE assistant_approvals SET conversation_id=${run?.conversation_id ?? null}, run_id=${runId} WHERE id=${res.approval_id} AND user_id=${userId}`.execute(ctx.store.db);
+    await ctx.store.emitRunEvent(runId, 'approval', { approval_id: res.approval_id });
+    return { status: 'PARTIAL', phase: 'awaiting_approval', text: '이미지 생성 조건을 준비했습니다. 유지·변경 요소와 참고 목적을 확인한 뒤 승인해 주세요.', extra: { approval_id: res.approval_id, generation_plan: res.brief?.plan } };
   }
 
   // propose / mutate — 모델이 preview 도구와 입력을 고른다.
@@ -645,6 +635,12 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
           approval,
         )
       : false;
+    if (committed && approval?.kind === 'image_generate' && approval.conversation_id) {
+      const image = await first<any>(sql`SELECT r.*, j.prompt, j.model, j.options FROM image_results r JOIN image_jobs j ON j.id=r.job_id WHERE j.approval_id=${approval.id} AND j.project_id=${projectId}`, ctx.store.db);
+      if (image) await ctx.store.createMessage(approval.conversation_id, 'assistant', '이미지 생성이 완료됐습니다. 이미지를 눌러 크게 볼 수 있습니다.', {
+        runId: approval.run_id ?? undefined, attachments: [{ ...image, type: 'generated_image', parent_image_id: image.options?.parent_image_id ?? null, reference_images: image.options?.reference_images ?? [], user_request: approval.after?.image_brief?.request }],
+      });
+    }
     return { approved: true, executed: committed };
   });
 
@@ -1220,14 +1216,26 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         existing.note = [...new Set([existing.note, ref.note].filter(Boolean))].join('\n').slice(0, 2000);
       }
     }
-    const usableRefs = [...uniqueRefs.values()];
+    const planned = await ctx.model.structured(ImageGenerationPlan.omit({ primary: true, supporting: true }), { request: body.request, has_parent: Boolean(body.parent_image_id) }, '이미지 요청을 new/edit/variant/recompose와 character/background/game_scene/ui/other로 분류한다. 다른 후보는 variant, 장면을 바꾸고 HUD 등 일부 유지하면 recompose다. preserve는 사용자가 유지하라고 한 요소만, change는 변경 요소, free는 명시되지 않은 인물/의상/행동/배경/구도다. 신규 UI에 교복 여성이나 복도를 임의로 고정하지 않는다. 배경 전용은 인물 없음. JSON만 반환.');
+    const output = planned.result.output;
+    const usableRefs = body.parent_image_id ? [] : selectReferences([...uniqueRefs.values()], output);
     if (usableRefs.length > 16) throw Object.assign(new Error("현재 이미지 모델은 원본 16개까지 입력할 수 있습니다. 전체 원본을 전달하려면 아트보드의 이미지를 16개 이하로 정리해 주세요."), { code: "REFERENCE_LIMIT", statusCode: 409 });
     const referenceUploadIds = usableRefs.map((ref: any) => ref.upload_id).filter(Boolean);
-    const imageObservations = await Promise.all(refs.filter((ref: any) => ref.art_asset_id).map(async (ref: any) => {
+    const imageObservations = await Promise.all(usableRefs.filter((ref: any) => ref.art_asset_id).map(async (ref: any) => {
       const extraction = await ctx.store.getLatestArtExtraction(projectId, ref.art_asset_id);
-      return { name: ref.name, image_content: { ...(extraction?.observations as any ?? {}), ...(extraction?.human_corrections as any ?? {}) } };
+      const observation = { ...(extraction?.observations as any ?? {}), ...(extraction?.human_corrections as any ?? {}) };
+      return { name: ref.name, style_features: { materials: observation.materials, textures: observation.textures, palette: observation.palette, lighting: observation.lighting }, purpose: ref.purpose };
     }));
     const approvedStyle = await ctx.store.getApprovedStyleProfile(projectId);
+    const loadPlanImage = async (id: string, purpose: string) => {
+      const image = await getImage(ctx.store, projectId, id);
+      if (!image || image.owner_id !== userId || !image.sha256) throw Object.assign(new Error('참고 이미지를 확인하지 못했습니다.'), { code: 'IMAGE_NOT_FOUND', statusCode: 409 });
+      return { id, hash: image.sha256, purpose };
+    };
+    const plan = ImageGenerationPlan.parse({ ...planned.result, operation: body.parent_image_id ? planned.result.operation === 'new' ? 'recompose' : planned.result.operation : planned.result.operation === 'edit' ? 'new' : planned.result.operation,
+      primary: body.parent_image_id ? await loadPlanImage(body.parent_image_id, planned.result.operation === 'variant' ? '화풍만 참고. 인물과 구도는 새로 구성' : '유지 요소: ' + planned.result.preserve.join(', ') + '. 변경 요소: ' + planned.result.change.join(', ')) : null,
+      supporting: await Promise.all(body.reference_images.map(ref => loadPlanImage(ref.id, ref.instruction))),
+    });
     const savedRules = approvedStyle ? await ctx.store.getApprovedStyleRules(projectId, approvedStyle.version) : [];
     const ruleSource = savedRules.length ? savedRules : approvedStyle?.body?.common_rules;
     const approvedRules = Array.isArray(ruleSource)
@@ -1240,14 +1248,15 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       ...approvedRules,
     ].join('\n');
     if (!ctx.model) throw Object.assign(new Error("모델 설정을 확인해 주세요."), { code: "MODEL_NOT_CONFIGURED", statusCode: 503 });
+    if (ctx.discordRead) await ctx.discordRead(10_000).catch(() => ({ ok: false, gaps: ['refresh_failed'] }));
     const rag = await buildImagePrompt(ctx.store, {
       projectId, request: body.request, embeddings: ctx.embeddings, acl: { guilds: [deps.config.DISCORD_GUILD_ID] },
     });
     const drafted = await ctx.model.structured(ImageBriefDraft, {
-      request: body.request, project_evidence: rag.prompt, art_board: { name: board.name, frames_and_notes: (revision?.snapshot as any)?.nodes ?? [], references: refs.map((ref: any) => ({ name: ref.name, roles: ref.roles ?? [ref.role], usage: ref.usage, note: ref.note, frame_id: ref.group_id, crop: ref.crop })) }, role_directives: usableRefs.map((ref: any) => ({ roles: ref.roles ?? [ref.role], instruction: ref.note })),
+      request: body.request, generation_plan: plan, project_evidence: rag.prompt, art_board: { name: board.name, frames_and_notes: (revision?.snapshot as any)?.nodes ?? [], references: usableRefs.map((ref: any) => ({ name: ref.name, roles: ref.roles, usage: ref.roleUsage, purpose: ref.purpose, instruction: ref.note })) }, role_directives: usableRefs.map((ref: any) => ({ roles: ref.roles, instruction: ref.note })),
       image_observations: imageObservations, approved_art_bible_rules: approvedRules, default_negative_constraints: rag.negative,
     }, '프로젝트 근거와 승인된 Art Bible, 사용자가 정한 역할 지시만 사용해 구조화된 이미지 브리프를 작성한다. 사람 수정/사용자 지시가 AI 관찰보다 우선한다. 근거 없는 고유 설정을 만들지 않는다. 출력 prompt는 GPT Image 2.5 Flare용으로 구체적인 장면/재질/구도를 설명하고 negative_constraints는 제외할 시각 요소만 담는다. prompt는 4000자 이내로 핵심을 통합하고 레퍼런스별 지시를 반복하지 않는다. negative_constraints는 12개 이내, 각 100자 이내다. role_directives는 역할별로 중복 없이 최대 6개, 각 instruction은 300자 이내로 요약한다. 완결된 JSON 객체만 반환한다.');
-    const prompt = drafted.result.prompt;
+    const prompt = drafted.result.prompt + '\n必須条件 / 요청 우선: ' + body.request + '\n유지: ' + plan.preserve.join(', ') + '\n변경: ' + plan.change.join(', ') + '\n자유 구성: ' + plan.free.join(', ') + (output === 'background' ? '\n배경 전용. 인물을 추가하지 않는다.' : output === 'ui' ? '\nUI 설계 중심. 요청하지 않은 교복 여성/복도를 고정하지 않는다.' : '');
     const promptHash = createHash('sha256').update(prompt).digest('hex');
     const sourceRows = await rows<any>(sql`SELECT s.kind, s.status, max(c.last_reconciled_at) AS latest_at
       FROM knowledge_sources s LEFT JOIN connector_cursors c ON c.source_id=s.id
@@ -1272,7 +1281,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       return [source, { read_status, latest_at, gaps }];
     }));
     const briefBase = {
-      schema_version: 1 as const, request: body.request,
+      schema_version: 2 as const, request: body.request, plan, plan_hash: createHash('sha256').update(imageBriefHashInput(plan)).digest('hex'),
       role_directives: usableRefs.flatMap((ref: any) => (ref.roles ?? [ref.role]).map((role: string) => ({ role, instruction: ref.note || '원본의 해당 역할만 참고' }))),
       negative_constraints: drafted.result.negative_constraints,
       board_id: board.id, board_revision: revision?.revision ?? board.current_revision,
@@ -1281,7 +1290,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         asset_id: uploads.find((upload: any) => upload.id === ref.upload_id)?.asset_id ?? ref.art_asset_id ?? null, upload_id: ref.upload_id,
         asset_revision: uploads.find((upload: any) => upload.id === ref.upload_id)?.sha256 ?? ref.sha256,
         source_sha256: uploads.find((upload: any) => upload.id === ref.upload_id)?.sha256 ?? ref.sha256, order: index, role: ref.roles ?? [ref.role], usage: ref.roleUsage ?? Object.fromEntries((ref.roles ?? [ref.role]).map((item: string) => [item, ref.usage])),
-        crop: ref.crop ?? null, instruction: ref.note ?? '',
+        crop: ref.crop ?? null, instruction: ref.note ?? '', purpose: ref.purpose, reason: ref.reason, forbidden: ref.forbidden,
       })),
       evidence: [
         { id: `board:${board.id}:${revision?.revision ?? board.current_revision}`, source: 'art_board' as const, stable_key: `art_board:${board.id}`, revision: String(revision?.revision ?? board.current_revision), read_status: 'OK' as const },
@@ -1326,6 +1335,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         note: ref.note,
         ready: Boolean(ref.upload_id && readyIds.has(ref.upload_id)),
       })),
+      request: body.request,
+      review_warnings: [...uniqueRefs.values()].filter(ref => Object.keys(ref.roleUsage ?? {}).some(key => !(ref.roles ?? [ref.role]).includes(key))).map(ref => ref.name + '의 역할과 사용 강도가 달라 자동 참고에서 제외했습니다.'),
       reference_upload_ids: referenceUploadIds,
       approval_id: approvalId,
       generation_ready: Boolean(approvalId),

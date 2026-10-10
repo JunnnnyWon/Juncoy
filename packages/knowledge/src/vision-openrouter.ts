@@ -10,6 +10,8 @@ export interface VisionObservation {
   confidence_note: string;
   source_sha256: string;
   model: string;
+  style_features?: Record<string, unknown>;
+  scene_content?: Record<string, unknown>;
 }
 
 export class OpenRouterVision {
@@ -37,7 +39,7 @@ export class OpenRouterVision {
             content: [
               {
                 type: 'text',
-                text: '프로젝트 참고 이미지에서 실제로 보이는 내용을 자연스러운 한국어로 설명한다. JSON 필드 description, visible_text, subjects, materials, lighting, palette, confidence_note를 반환한다. 색상 코드와 고유명사 외에는 한국어를 사용한다. 승인, 소유권, 아트 방향이나 보이지 않는 사실을 추정하지 않는다.',
+                text: '프로젝트 참고 이미지의 description, visible_text, subjects, materials, lighting, palette, confidence_note를 한국어 JSON으로 반환한다. style_features(모델링 방식, 얼굴 표현 방식, 재질, 텍스처, 색감, 조명)와 scene_content(인물, 의상, 자세, 행동, 장소, 오브젝트, 카메라 구도)를 별도 객체로 반환한다. 스타일에 특정 인물이나 행동을 포함하지 않는다. 승인, 소유권이나 보이지 않는 사실을 추정하지 않는다.',
               },
               { type: 'image_url', image_url: { url: imageUrl } },
             ],
@@ -64,6 +66,8 @@ export class OpenRouterVision {
       confidence_note: String(result.confidence_note ?? ''),
       source_sha256: sourceSha256,
       model: this.model,
+      style_features: result.style_features && typeof result.style_features === 'object' ? result.style_features : {},
+      scene_content: result.scene_content && typeof result.scene_content === 'object' ? result.scene_content : {},
     };
   }
 }
