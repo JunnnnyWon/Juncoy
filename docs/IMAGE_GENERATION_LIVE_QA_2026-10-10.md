@@ -45,3 +45,41 @@
 - Graphify 코드 갱신: 2470 nodes / 4845 edges. SQL parser 누락 및 기존 outbox/recovery 테스트 AST 파싱 제한을 별도 유지한다.
 
 6개 실제 생성 시나리오는 완료했다. 위 실패·request ID·캐릭터 품질·확장 선택 검증의 제한을 전체 명세 완료와 혼동하지 않는다.
+
+## 추가 수정 및 미검증 항목 해소
+
+아래 내용은 위 초기 QA 이후의 추가 검증이다. 초기 미검증 기록은 역사로 남기며 현재 판정은 이 절을 따른다.
+
+### 공급자 요청 추적
+
+응답의 `request_id`, `generation_id`, usage의 generation ID, `x-generation-id`도 읽도록 보완했다. 공급자 ID와 내부 UUID를 구분하며, 공급자가 ID를 반환하지 않으면 NOT_RETURNED 상태로 남긴다. 비용 0도 KNOWN 값으로 보존한다. 추적 정보는 결과 완료와 같은 트랜잭션에서 job options에 저장한다.
+
+실제 캐릭터 신규 생성 `1c02ae48-9b02-452a-9df2-758667dd5620`의 공급자 ID는 `gen-img-1791634946-o5DHllRGmi9icZ6sCvX5`다. 최종 편집 `33603cdd-e6a8-426c-ae09-ea6f793ac2b9`의 공급자 ID는 `gen-img-1791635688-RacNrClWy9KAy2vLNVQW`, 내부 번호는 `8326902c-bf6a-4351-807e-1276b6a24c68`다. 로그인된 웹 이미지 상세에서 두 번호를 확인했다. 채팅 첨부에 최상위 ID가 없어도 저장된 trace ID를 표시하도록 수정했다.
+
+### 캐릭터 보존
+
+짧은 검은 머리·붉은 재킷·회색 바지·손전등·정면 전신의 성인 남성 캐릭터를 신규 생성했다. 이후 얼굴·머리·의상·포즈·구도를 유지하고 조명만 따뜻하고 밝게 편집했다. 원본과 편집 결과를 직접 열어 비교했다. 첫 편집에서 모델 지시 말미에 잘못된 배경 전용 문구가 붙는 것을 발견했으며, 원래 사용자 요청만으로 출력 종류를 판정하도록 수정했다. 최종 편집은 operation=edit, output=character, 주 원본 1개이며 이 문구가 없다.
+
+이는 한 캐릭터의 시각적 보존 회귀 검증이다. 생성 모델이 모든 이미지에서 픽셀 단위 동일성이나 신원 일치를 보장한다는 뜻은 아니다. 원본·기존 편집 이력은 모두 유지했다.
+
+### 원본 7~16개 지정
+
+아트보드에 별도의 직접 선택 목록을 추가했다. 기본 자동 선택은 최대 6개이며, 지정 원본은 사용자 순서로 최대 16개까지 사용한다. 중복·누락·준비되지 않은 원본은 실패시키고 조용히 생략하지 않는다. 제외된 테스트 자료는 목록에서 선택할 수 없다. 검토 패널·생성 중 표시·결과 패널을 연결했으며, 새로고침 시 유효한 미승인 초안을 복구한다.
+
+격리 PostgreSQL schema에서 유효한 PNG 원본 7개와 16개를 등록하고 mock provider payload의 순서·base64·실제 입력 이력·image_job_references 개수를 검증했다. 서비스 DB의 팀 자료와 섞지 않았다.
+
+실제 OpenRouter 모델에도 합성 색상 PNG 16개를 전송해 생성에 성공했다. 공급자 ID는 `gen-img-1791635235-EgAwYGVLTyvTHpQnZGeS`, 출력 SHA-256은 `9462982f0ee143d66551d673be9c49acfe26daedffc487daaf2c555869f994a8`, 크기는 2,574,152 bytes, 비용은 $0.010533이다. 이는 16개 입력의 실호출 검증이며 팀 레퍼런스 품질 검증과 구분한다. 증거는 로컬 `artifacts/image-plan-live-qa/sixteen-provider-evidence.json` 및 `sixteen-provider-result.png`다.
+
+팀 자료 7개(의상재질 1~5, 예상컨셉아트 1~2)를 웹에서 직접 선택했다. 이전에 형식 오류가 났던 긴 항구 배경 요청을 그대로 사용해 준비에 성공했으며, 새로고침 후 승인 초안 복구 → 확인 후 생성 → 결과 원본 열기까지 완료했다. 결과 ID는 `5008c144-744e-4750-969f-07ec88f1b122`, 공급자 ID는 `gen-img-1791636129-arAkfsb4jttjg5aAcZMp`다. DB에서 actual_inputs 7개, image_job_references 7개, 승인된 순서·hash·purpose·usage·crop과 실제 입력 목록의 정확한 일치(`approval_inputs_match=true`)를 확인했다. 출력 SHA-256은 `162010bd23dee303e8b925a352f25bfb49cca3834c0d159a9c4355b67a3fb566`, 크기는 2,184,660 bytes, 비용은 $0.0683이다. 인물·HUD 없는 비 오는 항구 창고 결과를 직접 검토했다.
+
+### UI 시안과 형식 오류
+
+UI 생성 계획에 review_notice를 승인 hash와 결속했다. 승인 화면과 생성 prompt에 디자인 제안임을 표시하며, 논의·예시를 확정 기능으로 간주하지 않도록 안내한다. 실제 로그인된 웹에서 새 UI 요청의 제안 문구와 원본 0개를 확인한 뒤 승인하지 않고 거부했다. 팀 기획을 에이전트가 임의로 확정 승인하지 않는다.
+
+Solar 구조화 응답은 완결된 JSON code fence를 처리하고 검증 오류·이전 출력을 함께 보내 최대 3회 교정한다. 매번 같은 schema로 검증하고 잘린 JSON은 거부하며, 실패 시에도 임의 데이터를 채택하지 않는다. 교정 호출의 토큰 사용량은 합산한다. malformed/truncated/길이 초과와 제한된 실패의 자동 테스트를 통과했다. 모델 응답 오류가 영원히 재발하지 않는다는 보장은 하지 않는다.
+
+최종 자동 검증은 unit 124/124, TypeScript check, 웹 build 통과다. 실제 PostgreSQL 격리 schema의 image-plan 통합 테스트도 통과했다. Discord 회의 봇은 재시작하지 않았고 추가 migration은 없다.
+
+추가 수정의 최종 코드 release는 `54d3b45`다. 운영 image는 `juncoy-meeting:release-54d3b45`, 확인한 digest는 `sha256:48fb62e696d995eaf83feab5204cde80f90d85701432f343084f7b6381b4f67c`다. API·아트보드 UI·이미지 provider의 로컬/컨테이너 source SHA-256이 일치했고 health는 healthy다. 기존 DB/env/image 백업을 유지했다.
+
+추가 화면 증거는 `artifacts/image-plan-live-qa/character-original.jpg`, `character-final-edit.jpg`, `ui-proposal-notice.jpg`, `seven-originals-board.jpg`, `seven-originals-result.jpg`다. artifacts는 Git 제외다. 결과 이미지는 운영의 private endpoint에서 다시 열 수 있으며 자동 canonical 승인하지 않았다. 이번에 열거한 미검증 항목은 수정·검증했지만, 이를 이전 두 명세 전체의 인수 완료로 확대하지 않는다.
