@@ -242,6 +242,7 @@ export function ArtReferenceCanvas() {
   const [analysisEdit, setAnalysisEdit] = useState('');
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [briefBusy, setBriefBusy] = useState(false);
+  const [generationBusy, setGenerationBusy] = useState(false);
   const [generationRequest, setGenerationRequest] = useState('');
   const [useSelectedReferences, setUseSelectedReferences] = useState(false);
   const [referenceUploadSelection, setReferenceUploadSelection] = useState<string[]>([]);
@@ -441,6 +442,7 @@ export function ArtReferenceCanvas() {
         },
       );
       setBrief(brief);
+      setMobilePanel('inspector');
     } catch (error) { setActionError(artActionError(error)); }
     finally { setBriefBusy(false); }
   };
@@ -730,7 +732,7 @@ export function ArtReferenceCanvas() {
           </div>
         </section>
         <aside className={'art-inspector ' + (mobilePanel === 'canvas' ? 'mobile-hidden' : '')}>
-          {false && brief && (
+          {brief && (
             <div className="brief-card">
               <span className="eyebrow">이미지 생성 준비</span>
               <strong>{brief.request}</strong>
@@ -744,7 +746,9 @@ export function ArtReferenceCanvas() {
               {brief.approval_id ? (
                 <button
                   className="primary-button"
+                  disabled={generationBusy || brief.generated}
                   onClick={async () => {
+                    setGenerationBusy(true);
                     try {
                       const result = await api<{ executed?: boolean }>('/api/assistant/images/generate', {
                         method: 'POST',
@@ -755,10 +759,10 @@ export function ArtReferenceCanvas() {
                     } catch (error) {
                       setActionError(artActionError(error));
                       setBrief({ ...brief, generation_error: true });
-                    }
+                    } finally { setGenerationBusy(false); }
                   }}
                 >
-                  {brief.generated ? '이미지 생성 완료' : '확인하고 이미지 생성'}
+                  {brief.generated ? '이미지 생성 완료' : generationBusy ? '이미지 생성 중…' : '확인하고 이미지 생성'}
                 </button>
               ) : (
                 <small>
