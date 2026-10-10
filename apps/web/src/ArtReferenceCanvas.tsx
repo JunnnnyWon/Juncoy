@@ -845,7 +845,7 @@ export function ArtReferenceCanvas() {
               )}
             </>
           )}
-          <div className="art-output-panel" style={{ display: 'none' }}>
+          <div className="art-output-panel">
             <div className="output-heading">
               <div>
                 <span className="eyebrow">GENERATED OUTPUTS</span>
@@ -863,14 +863,14 @@ export function ArtReferenceCanvas() {
                     <small>{image.review_status ?? 'DRAFT'} · {image.model}</small>
                     {image.review_status !== 'APPROVED_CANONICAL' && (
                       <div>
-                      <input className="output-rights-note" placeholder="canonical 권리 메모" value={canonicalNote} onChange={(event) => setCanonicalNote(event.target.value)} />
+                      <input className="output-rights-note" placeholder="참고 자료로 사용할 수 있는 권리 메모" value={canonicalNote} onChange={(event) => setCanonicalNote(event.target.value)} />
                       <button className="output-review" disabled={!canonicalNote.trim()} onClick={async () => {
                         const result = await api<any>('/api/assistant/images/' + image.id + '/review', {
                           method: 'POST',
                           body: JSON.stringify({ status: 'APPROVED_CANONICAL', review_role: 'art_reference', note: canonicalNote }),
                         });
                         if (result.reviewed) setGenerated(await api<any[]>('/api/assistant/images'));
-                      }}>canonical 승인</button>
+                      }}>참고 자료로 승인</button>
                       </div>
                     )}
                   </div>
