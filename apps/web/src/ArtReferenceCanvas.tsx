@@ -333,6 +333,13 @@ export function ArtReferenceCanvas() {
         autosaveEnabled.current = true;
         setSyncState('서버에 연결됨');
         setGenerated(await api<any[]>('/api/assistant/images'));
+        const pending = (await api<any[]>('/api/assistant/approvals').catch(() => [])).find(item => item.kind === 'image_generate' && item.status === 'PENDING' && new Date(item.expires_at).getTime() > Date.now() && item.after?.image_brief?.board_id === activeBoardId && item.after.image_brief.board_revision === Number(boards[0]?.current_revision ?? 0) && !item.after.image_brief.plan?.primary);
+        if (pending) {
+          const savedBrief = pending.after.image_brief;
+          setBrief({ brief: savedBrief, request: savedBrief.request, approval_id: pending.id, reference_upload_ids: savedBrief.references.map((ref: any) => ref.upload_id), style_approved: savedBrief.art_bible_version != null });
+          setGenerationRequest(savedBrief.request);
+          setMobilePanel('inspector');
+        }
       } catch {
         setSyncState('로컬 초안');
       }
