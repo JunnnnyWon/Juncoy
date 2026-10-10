@@ -35,6 +35,7 @@
 - 기존 격리 PostgreSQL의 image-plan 통합 검증은 mock provider payload·실제 DB 저장·중복 실행·구계약 차단을 다룬다. 이번 실제 운영 생성과 구분한다.
 - API image: `juncoy-meeting:release-7f37f1b`.
 - Image digest: `sha256:c7d8232a7a7befc7a1243e21eaa11b674df24ef731b791b1febf86a6e76c6391`.
+- 최종 확인 시 동시 배포로 같은 commit의 full tag `juncoy-meeting:release-7f37f1b67b6224a87d3cae6f053581cff9ee64fe`가 실행 중이었다. 최종 digest는 `sha256:64065a6c27273963dd20555bfb2e13449c8d42ce1e31f3c581779b6a26d30285`다. assistant source hash는 위 배포와 동일했고 healthy였다.
 - API `apps/api/src/assistant.ts` SHA-256: `d5176ceec6c9b996f61a33f432fb9d9f1b79ad56e16a88019d83b3e1797d5a41`. 로컬과 컨테이너가 일치했다.
 - `/healthz`: `ok:true`, `mode:real`.
 - API만 교체했고 기존 Discord 회의 봇은 재시작하지 않았다. 추가 migration은 없다.
