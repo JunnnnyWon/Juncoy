@@ -45,6 +45,7 @@ export async function buildImagePrompt(
     embeddings?: UpstageEmbeddings;
     evidenceLimit?: number;
     acl?: AclInput;
+    output?: string;
   },
 ): Promise<ImagePromptResult> {
   const chunks = await retrieve(store, {
@@ -58,11 +59,13 @@ export async function buildImagePrompt(
   const styleText = style?.body
     ? Object.entries(style.body)
         .filter(([, v]) => typeof v === 'string')
+        .filter(([k]) => !['ui', 'background'].includes(opts.output ?? '') || !['summary', 'character'].includes(k))
         .map(([k, v]) => `${k}: ${v}`)
         .concat(
           Array.isArray(style.body.common_rules)
             ? style.body.common_rules
                 .filter((rule: any) => typeof rule?.statement === 'string')
+                .filter((rule: any) => !['ui', 'background'].includes(opts.output ?? '') || !/캐릭터|인물|얼굴|교복|의상/.test(rule.statement))
                 .map((rule: any) => `${rule.category ?? 'style'}: ${rule.statement}`)
             : [],
         )
