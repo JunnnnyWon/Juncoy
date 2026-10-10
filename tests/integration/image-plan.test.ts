@@ -27,7 +27,7 @@ it('v2 stores exact empty UI inputs, result and unknown cost; rejects legacy app
     const brief = { schema_version: 2, request: 'UI', plan, plan_hash: hash(plan), role_directives: [], negative_constraints: [], board_id: boardId, board_revision: 1, art_bible_version: null, references: [], evidence: [], coverage: Object.fromEntries(['notion','github','discord','meeting'].map(s => [s, { read_status: 'NOT_CONFIGURED', latest_at: null, gaps: [] }])), provider: 'openrouter', model: 'openai/gpt-image-2.5-flare', prompt: 'UI without character', prompt_hash: createHash('sha256').update('UI without character').digest('hex') };
     const approvalId = await store.createApproval({ projectId, userId: 'qa', kind: 'image_generate', target: {}, after: { image_brief: { ...brief, brief_hash: hash(brief) }, model: brief.model }, expiresAt: new Date(Date.now()+600000) });
     process.env.OPENROUTER_API_KEY='test'; process.env.IMAGE_GENERATION_ENABLED='true'; process.env.OPENROUTER_IMAGE_MODEL=brief.model;
-    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ b64_json: 'cG5n' }], id: 'qa-request' })));
+    const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ data: [{ b64_json: 'cG5n' }], id: 'qa-request' })));
     vi.stubGlobal('fetch', fetcher);
     const reg = new ToolRegistry(); registerImageTools(reg, new UploadStorage(dir));
     const ctx = { store, projectId, userId: 'qa', role: 'editor' as const, deps: {} };

@@ -1249,7 +1249,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       ...approvedRules,
     ].join('\n');
     if (!ctx.model) throw Object.assign(new Error("모델 설정을 확인해 주세요."), { code: "MODEL_NOT_CONFIGURED", statusCode: 503 });
-    if (ctx.discordRead) await ctx.discordRead(10_000).catch(() => ({ ok: false, gaps: ['refresh_failed'] }));
+    const discordLive = ctx.discordRead ? await ctx.discordRead(10_000).catch(() => ({ ok: false, gaps: ['discord_live_read_failed'] })) : { ok: false, gaps: ['discord_context_disabled'] };
     const rag = await buildImagePrompt(ctx.store, {
       projectId, request: body.request, output, embeddings: ctx.embeddings, acl: { guilds: [deps.config.DISCORD_GUILD_ID] },
     });
@@ -1262,10 +1262,6 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const sourceRows = await rows<any>(sql`SELECT s.kind, s.status, max(c.last_reconciled_at) AS latest_at
       FROM knowledge_sources s LEFT JOIN connector_cursors c ON c.source_id=s.id
       WHERE s.project_id=${projectId} GROUP BY s.kind, s.status`, ctx.store.db);
-    let discordLive: { ok: boolean; gaps: string[] } = { ok: true, gaps: [] };
-    if (ctx.discordRead) {
-      try { discordLive = await ctx.discordRead(10_000); } catch { discordLive = { ok: false, gaps: ['discord_live_read_failed'] }; }
-    } else discordLive = { ok: false, gaps: ['discord_context_disabled'] };
     const coverage = Object.fromEntries(['notion', 'github', 'discord', 'meeting'].map((source) => {
       const row = sourceRows.find((item: any) => item.kind === source);
       const sourceEvidence = rag.evidence.some((item) => item.stable_key.startsWith(source + ':'));
