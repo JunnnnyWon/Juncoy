@@ -244,6 +244,7 @@ export function ArtReferenceCanvas() {
   const [briefBusy, setBriefBusy] = useState(false);
   const [generationRequest, setGenerationRequest] = useState('');
   const [useSelectedReferences, setUseSelectedReferences] = useState(false);
+  const [referenceUploadSelection, setReferenceUploadSelection] = useState<string[]>([]);
   const [actionError, setActionError] = useState('');
   const [assetAnalysis, setAssetAnalysis] = useState<any>(null);
   const [assetCorrections, setAssetCorrections] = useState('');
@@ -412,7 +413,7 @@ export function ArtReferenceCanvas() {
   const previewBrief = async () => {
     if (!boardId || briefBusy || analysisBusy) return;
     if (!generationRequest.trim()) { setActionError('만들고 싶은 이미지를 먼저 설명해 주세요.'); return; }
-    if (useSelectedReferences && (selectedCount === 0 || selectedCount > 16)) { setActionError('참고할 원본을 1~16개 선택해 주세요.'); return; }
+    if (useSelectedReferences && (referenceUploadSelection.length === 0 || referenceUploadSelection.length > 16)) { setActionError('참고할 원본을 1~16개 선택해 주세요.'); return; }
     setBriefBusy(true);
     setActionError('');
     setSyncState('저장 중');
@@ -434,7 +435,7 @@ export function ArtReferenceCanvas() {
           method: 'POST',
           body: JSON.stringify({
             request: generationRequest.trim(),
-            reference_upload_ids: useSelectedReferences ? refs.filter(ref => ref.selected && ref.upload_id).map(ref => ref.upload_id) : [],
+            reference_upload_ids: useSelectedReferences ? referenceUploadSelection : [],
             revision: savedRevision,
           }),
         },
@@ -599,7 +600,8 @@ export function ArtReferenceCanvas() {
           </span>
           <div className="art-header-buttons">
             <input aria-label="만들고 싶은 이미지" placeholder="예: 인물 없이 낡은 학교 복도 배경" value={generationRequest} onChange={event => setGenerationRequest(event.target.value)} />
-            <label><input type="checkbox" checked={useSelectedReferences} onChange={event => setUseSelectedReferences(event.target.checked)} />선택한 원본을 우선 참고 ({selectedCount}개 · 최대 16개)</label>
+            <label><input type="checkbox" checked={useSelectedReferences} onChange={event => setUseSelectedReferences(event.target.checked)} />원본 직접 선택 ({referenceUploadSelection.length}개 · 최대 16개)</label>
+            {useSelectedReferences && <details open><summary>참고할 원본 선택</summary>{refs.filter(ref => ref.upload_id).map(ref => <label key={ref.id} style={{ display: 'block' }}><input aria-label={'생성 원본 ' + ref.name} type="checkbox" checked={referenceUploadSelection.includes(ref.upload_id!)} disabled={ref.excluded || ref.usage === 'REVIEW_REQUIRED' || (!referenceUploadSelection.includes(ref.upload_id!) && referenceUploadSelection.length >= 16)} onChange={event => setReferenceUploadSelection(current => event.target.checked ? [...new Set([...current, ref.upload_id!])] : current.filter(id => id !== ref.upload_id))} />{ref.name}{ref.excluded ? ' · 참고 제외' : ''}</label>)}</details>}
             <button className="primary-button" onClick={() => void previewBrief()} disabled={briefBusy || analysisBusy}>{briefBusy ? '생성 조건 준비 중…' : '이미지 생성 준비'}</button>
             <button className="secondary-button" onClick={() => void analyzeBoard()} disabled={analysisBusy || briefBusy}>
               {analysisBusy ? '자동 정리 중…' : '전체 레퍼런스 자동 정리'}

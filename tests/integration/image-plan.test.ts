@@ -6,6 +6,7 @@ import { imageBriefHashInput } from '@meeting/contracts';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import sharp from 'sharp';
 it('v2 stores exact empty UI inputs, result and unknown cost; rejects legacy approvals', async () => {
   if (!process.env.KNOWLEDGE_DATABASE_URL) throw new Error('knowledge DB required');
   const admin = new KnowledgeStore(process.env.KNOWLEDGE_DATABASE_URL);
@@ -43,6 +44,29 @@ it('v2 stores exact empty UI inputs, result and unknown cost; rejects legacy app
     await reg.execute(ctx, 'image.generate', { approval_id: approvalId });
     expect(fetcher).toHaveBeenCalledTimes(1);
     const original = await first<any>(sql`SELECT * FROM image_results WHERE job_id=${job.id}`, store.db);
+    const originals = [];
+    const storage = new UploadStorage(dir);
+    for (let index = 0; index < 16; index++) {
+      const uploadId = randomUUID(), assetId = randomUUID(), key = `fixture-${index}.png`;
+      const bytes = await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: index * 15, g: 80, b: 160 } } }).png().toBuffer();
+      const sha = createHash('sha256').update(bytes).digest('hex');
+      await storage.put(key, bytes);
+      await sql`INSERT INTO knowledge_uploads(id,project_id,owner_id,filename,mime,bytes,sha256,storage_key,state) VALUES(${uploadId},${projectId},'qa',${key},'image/png',${bytes.length},${sha},${key},'READY')`.execute(store.db);
+      await sql`INSERT INTO art_reference_assets(id,project_id,upload_id,rights_note,state,created_by) VALUES(${assetId},${projectId},${uploadId},'Synthetic QA fixture; allowed','READY','qa')`.execute(store.db);
+      originals.push({ asset_id: assetId, upload_id: uploadId, asset_revision: 'fixture', source_sha256: sha, order: index, role: ['texture'], usage: { texture: 'STRONG_REFERENCE' }, crop: null, instruction: '색감만 참고', purpose: '합성 테스트 원본', bytes });
+    }
+    for (const count of [7, 16]) {
+      const referenceBrief = { ...brief, references: originals.slice(0, count).map(({bytes: _, ...reference})=>reference), prompt: 'synthetic references' };
+      const referenceId = await store.createApproval({ projectId, userId:'qa', kind:'image_generate', target:{}, after:{ image_brief:{...referenceBrief, brief_hash:hash(referenceBrief)}, model:brief.model }, expiresAt:new Date(Date.now()+600000) });
+      await reg.execute(ctx,'image.generate',{approval_id:referenceId});
+      const saved = await first<any>(sql`SELECT * FROM image_jobs WHERE approval_id=${referenceId}`,store.db);
+      expect(saved.status).toBe('DONE');
+      expect(saved.options.actual_inputs.map((item:any)=>item.upload_id)).toEqual(originals.slice(0,count).map(item=>item.upload_id));
+      const payload = JSON.parse(fetcher.mock.calls.at(-1)![1].body);
+      expect(payload.input_references).toHaveLength(count);
+      expect(payload.input_references.map((item:any)=>item.image_url.url)).toEqual(originals.slice(0,count).map(item=>'data:image/png;base64,'+item.bytes.toString('base64')));
+      expect((await first<any>(sql`SELECT count(*)::int AS count FROM image_job_references WHERE image_job_id=${saved.id}`,store.db)).count).toBe(count);
+    }
     for (const operation of ['edit', 'variant', 'recompose']) {
       const editPlan = { ...plan, operation, preserve: operation === 'edit' ? ['인물', '구도'] : operation === 'recompose' ? ['HUD'] : ['화풍'], change: ['조명'], primary: { id: original.id, hash: original.sha256, purpose: operation === 'recompose' ? 'HUD만 참고' : operation === 'variant' ? '화풍만 참고' : '인물·구도 유지, 조명 변경' }, supporting: [] };
       const editBrief = { ...brief, plan: editPlan, plan_hash: hash(editPlan) };
