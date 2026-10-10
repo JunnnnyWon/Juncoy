@@ -1283,7 +1283,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const briefBase = {
       schema_version: 2 as const, request: body.request, plan, plan_hash: createHash('sha256').update(imageBriefHashInput(plan)).digest('hex'),
       role_directives: usableRefs.flatMap((ref: any) => (ref.roles ?? [ref.role]).map((role: string) => ({ role, instruction: ref.note || '원본의 해당 역할만 참고' }))),
-      negative_constraints: drafted.result.negative_constraints,
+      negative_constraints: [...drafted.result.negative_constraints, ...(output === 'background' ? ['인물, 캐릭터 추가 금지'] : [])],
       board_id: board.id, board_revision: revision?.revision ?? board.current_revision,
       art_bible_version: approvedStyle?.version ?? null,
       references: usableRefs.map((ref: any, index: number) => ({

@@ -224,7 +224,7 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
           await sql`UPDATE image_jobs SET options=${JSON.stringify({ plan, parent_image_id: plan.primary.id, reference_images: plan.supporting, actual_inputs: [plan.primary, ...plan.supporting] })}::jsonb WHERE id=${jobId}`.execute(ctx.store.db);
         }
         if (!plan.primary) await sql`UPDATE image_jobs SET options=${JSON.stringify({ plan, actual_inputs: brief.references.map(ref => ({ upload_id: ref.upload_id, hash: ref.source_sha256, purpose: ref.purpose, usage: ref.usage, crop: ref.crop, order: ref.order })) })}::jsonb WHERE id=${jobId}`.execute(ctx.store.db);
-        const out = await provider.generate(brief.prompt, after.negative, inputs);
+        const out = await provider.generate(brief.prompt, brief.negative_constraints.join(', '), inputs);
         const buf = Buffer.from(out.b64, 'base64');
         const resultKey = `img-${randomUUID()}.png`;
         await storage.put(resultKey, buf);
