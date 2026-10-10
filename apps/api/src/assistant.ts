@@ -179,7 +179,7 @@ async function executeRunInOrder(
         if (!target) throw new Error("어느 이미지를 수정할지 대화에서 알려 주세요.");
         mode = "generate"; parentImageId = target.id;
         referenceImages = plan.result.references.map(ref => { const image = conversationImages[ref.image_number - 1]; if (!image) throw new Error("대화의 참고 이미지를 확인하지 못했습니다. 다시 요청해 주세요."); return { id: image.id, instruction: ref.instruction }; }).filter((ref, index, all) => ref.id !== parentImageId && all.findIndex(item => item.id === ref.id) === index);
-        generationRequest = [/유지/.test(text) && /씬|장면|배경/.test(text) ? "장면 재구성. 지정한 요소만 유지하고 나머지는 바꾼다." : plan.result.intent === "variant" ? "다른 후보 생성. 화풍만 유지하고 인물·행동·장소·구도는 새롭게 구성한다." : "기존 이미지 수정. 아래 유지 대상으로 명시된 요소만 유지한다.", "이번 요청: " + text, "변경: " + plan.result.change, "유지: " + plan.result.preserve].join("\n").slice(0, 4000);
+        generationRequest = [plan.result.intent === "variant" ? "다른 후보 생성. 화풍만 유지하고 인물·행동·장소·구도는 새롭게 구성한다." : /(?:씬|장면|배경).{0,20}(?:바꿔|교체|변경|재구성)/.test(text) ? "장면 재구성. 지정한 요소만 유지하고 나머지는 바꾼다." : "기존 이미지 수정. 아래 유지 대상으로 명시된 요소만 유지한다.", "이번 요청: " + text, "변경: " + plan.result.change, "유지: " + plan.result.preserve].join("\n").slice(0, 4000);
       } else if (plan.result.intent === "question") mode = "answer";
     }
     if (ctx.model) await store.updateRun(runId, { model: 'solar' });
@@ -1218,9 +1218,10 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       }
     }
     const planned = await ctx.model.structured(ImageGenerationPlan.omit({ primary: true, supporting: true }), { request: body.request, has_parent: Boolean(body.parent_image_id) }, '이미지 요청을 new/edit/variant/recompose와 character/background/game_scene/ui/other로 분류한다. 다른 후보는 variant, 장면을 바꾸고 HUD 등 일부 유지하면 recompose다. preserve는 사용자가 유지하라고 한 요소만, change는 변경 요소, free는 명시되지 않은 인물/의상/행동/배경/구도다. 신규 UI에 교복 여성이나 복도를 임의로 고정하지 않는다. 배경 전용은 인물 없음. JSON만 반환.');
-    const output = /(?:HUD|UI).{0,12}(?:제외|넣지|없이)/i.test(body.request) ? 'background' : /UI|HUD|인터페이스/i.test(body.request) ? 'ui' : /배경.*(?:전용|만)|인물s*없이|인물s*없는/.test(body.request) ? 'background' : planned.result.output;
+    const output = /(?:HUD|UI).{0,12}(?:제외|넣지|없이)/i.test(body.request) ? 'background' : /UI|HUD|인터페이스/i.test(body.request) ? 'ui' : /배경.*(?:전용|만)|인물\s*없이|인물\s*없는/.test(body.request) ? 'background' : planned.result.output;
     if (/다른 후보|새 후보/.test(body.request)) planned.result.operation = 'variant';
-    else if (/HUD.*유지|유지.*씬|유지.*장면/.test(body.request)) planned.result.operation = 'recompose';
+    else if (/조명만|밝기만|톤만/.test(body.request) && body.parent_image_id) planned.result.operation = 'edit';
+    else if (/(?:씬|장면|배경).{0,20}(?:바꿔|교체|변경|재구성)/.test(body.request)) planned.result.operation = 'recompose';
     planned.result.output = output;
     const usableRefs = body.parent_image_id ? [] : selectReferences([...uniqueRefs.values()], output);
     if (usableRefs.length > 16) throw Object.assign(new Error("현재 이미지 모델은 원본 16개까지 입력할 수 있습니다. 전체 원본을 전달하려면 아트보드의 이미지를 16개 이하로 정리해 주세요."), { code: "REFERENCE_LIMIT", statusCode: 409 });
