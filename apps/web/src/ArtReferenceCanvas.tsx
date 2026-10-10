@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api.ts';
+import { ArtGenerationSetup, ArtGenerationReview } from './ArtGenerationSetup.tsx';
 import type { ArtCanvasNode, ArtCanvasEdge } from '@meeting/contracts';
 import { changeCanvas, travelCanvas, type CanvasHistory } from './canvas-history.ts';
 
@@ -228,6 +229,7 @@ export function ArtReferenceCanvas() {
   const [revision, setRevision] = useState(0);
   const [syncState, setSyncState] = useState('로컬 초안');
   const [brief, setBrief] = useState<any>(null);
+  const [inspectorPanel, setInspectorPanel] = useState<'asset' | 'create' | 'results'>('asset');
   const [generated, setGenerated] = useState<any[]>([]);
   const [analysis, setAnalysis] = useState<any>(null);
   const [bibleOpen, setBibleOpen] = useState(false);
@@ -249,7 +251,7 @@ export function ArtReferenceCanvas() {
   const [actionError, setActionError] = useState('');
   const [assetAnalysis, setAssetAnalysis] = useState<any>(null);
   const [assetCorrections, setAssetCorrections] = useState('');
-  const [canonicalNote, setCanonicalNote] = useState('');
+  const [canonicalNotes, setCanonicalNotes] = useState<Record<string, string>>({});
   const [assetAnalysisBusy, setAssetAnalysisBusy] = useState(false);
   const assetAnalysisGeneration = useRef(0);
   const [dragging, setDragging] = useState(false);
@@ -338,6 +340,7 @@ export function ArtReferenceCanvas() {
           const savedBrief = pending.after.image_brief;
           setBrief({ brief: savedBrief, request: savedBrief.request, approval_id: pending.id, reference_upload_ids: savedBrief.references.map((ref: any) => ref.upload_id), style_approved: savedBrief.art_bible_version != null });
           setGenerationRequest(savedBrief.request);
+          setInspectorPanel('create');
           setMobilePanel('inspector');
         }
       } catch {
@@ -449,6 +452,7 @@ export function ArtReferenceCanvas() {
         },
       );
       setBrief(brief);
+      setInspectorPanel('create');
       setMobilePanel('inspector');
     } catch (error) { setActionError(artActionError(error)); }
     finally { setBriefBusy(false); }
@@ -608,14 +612,11 @@ export function ArtReferenceCanvas() {
             <i /> {syncState}
           </span>
           <div className="art-header-buttons">
-            <input aria-label="만들고 싶은 이미지" placeholder="예: 인물 없이 낡은 학교 복도 배경" value={generationRequest} onChange={event => setGenerationRequest(event.target.value)} />
-            <label><input type="checkbox" checked={useSelectedReferences} onChange={event => setUseSelectedReferences(event.target.checked)} />원본 직접 선택 ({referenceUploadSelection.length}개 · 최대 16개)</label>
-            {useSelectedReferences && <details open><summary>참고할 원본 선택</summary>{refs.filter(ref => ref.upload_id).map(ref => <label key={ref.id} style={{ display: 'block' }}><input aria-label={'생성 원본 ' + ref.name} type="checkbox" checked={referenceUploadSelection.includes(ref.upload_id!)} disabled={ref.excluded || ref.usage === 'REVIEW_REQUIRED' || (!referenceUploadSelection.includes(ref.upload_id!) && referenceUploadSelection.length >= 16)} onChange={event => setReferenceUploadSelection(current => event.target.checked ? [...new Set([...current, ref.upload_id!])] : current.filter(id => id !== ref.upload_id))} />{ref.name}{ref.excluded ? ' · 참고 제외' : ''}</label>)}</details>}
-            <button className="primary-button" onClick={() => void previewBrief()} disabled={briefBusy || analysisBusy}>{briefBusy ? '생성 조건 준비 중…' : '이미지 생성 준비'}</button>
+            <button className="primary-button" onClick={() => { setBibleOpen(false); setInspectorPanel('create'); setMobilePanel('inspector'); }}>이미지 만들기</button>
             <button className="secondary-button" onClick={() => void analyzeBoard()} disabled={analysisBusy || briefBusy}>
               {analysisBusy ? '자동 정리 중…' : '전체 레퍼런스 자동 정리'}
             </button>
-            <a className="primary-button" href="/assistant">어시스턴트에서 이미지 요청 ↗</a>
+            <a className="art-assistant-link" href="/assistant">대화로 요청 ↗</a>
             <button className="art-bible-button" onClick={() => void openBible()} aria-pressed={bibleOpen}>아트바이블</button>
           </div>
         </div>
@@ -727,7 +728,7 @@ export function ArtReferenceCanvas() {
                   refCard={ref}
                   zoom={zoom}
                   active={ref.id === selectedId}
-                  onClick={() => setSelectedId(ref.id)}
+                  onClick={() => { setSelectedId(ref.id); setInspectorPanel('asset'); setMobilePanel('inspector'); }}
                   onToggle={() => {}}
                   style={{ left: ref.x ?? 80 + (index % 4) * 280, top: ref.y ?? 110 + Math.floor(index / 4) * 260 }}
                   onMove={(x, y) => setRefs((current) => current.map((item) => item.id === ref.id ? { ...item, x, y } : item))}
@@ -739,13 +740,16 @@ export function ArtReferenceCanvas() {
           </div>
         </section>
         <aside className={'art-inspector ' + (mobilePanel === 'canvas' ? 'mobile-hidden' : '')}>
+          <nav className="art-panel-nav" aria-label="오른쪽 작업 패널">{([['asset','이미지 정보'],['create','이미지 만들기'],['results','생성 결과']] as const).map(([key,label]) => <button key={key} aria-pressed={inspectorPanel === key} onClick={() => setInspectorPanel(key)}>{label}</button>)}</nav>
+          <div hidden={inspectorPanel !== 'create'}>
+            <ArtGenerationSetup request={generationRequest} manual={useSelectedReferences} selected={referenceUploadSelection} refs={refs} busy={briefBusy || generationBusy || analysisBusy} onRequest={value => { setGenerationRequest(value); setBrief(null); }} onManual={value => { setUseSelectedReferences(value); setBrief(null); }} onSelected={value => { setReferenceUploadSelection(value); setBrief(null); }} onPreview={() => void previewBrief()} />
           {brief && (
             <div className="brief-card">
-              <span className="eyebrow">이미지 생성 준비</span>
+              <h3>생성 전 확인</h3>
               <strong>{brief.request}</strong>
               {brief.review_warnings?.map((warning: string) => <p key={warning} role="status">{warning}</p>)}
-              {brief.brief?.plan && <div>{brief.brief.review_notice && <p role="note">{brief.brief.review_notice}</p>}<p>작업: {brief.brief.plan.operation} · {brief.brief.plan.output}</p><p>유지: {brief.brief.plan.preserve.join(', ') || '없음'}</p><p>변경: {brief.brief.plan.change.join(', ')}</p><p>자유 구성: {brief.brief.plan.free.join(', ')}</p>{brief.brief.references.map((ref: any) => <p key={ref.upload_id}>{ref.purpose} · {ref.reason}</p>)}<details><summary>프로젝트 근거</summary>{brief.brief.evidence.map((e: any) => <p key={e.id}>{e.source} · {e.stable_key}</p>)}</details></div>}
-              <p>{brief.instructions || '자동으로 정리된 레퍼런스가 없습니다.'}</p>
+              {brief.brief?.plan && <ArtGenerationReview brief={brief.brief} refs={refs} />}
+              {!brief.brief?.plan && <p>{brief.instructions || '원본을 선택하지 않은 생성입니다.'}</p>}
               <small className="brief-meta">
                 {brief.style_approved ? '승인된 아트 규칙 적용' : '승인된 아트 규칙 없음'}
                 {' · '}참고 이미지 {brief.reference_upload_ids?.length ?? 0}개
@@ -782,8 +786,10 @@ export function ArtReferenceCanvas() {
               {brief.generation_not_executed && (
                 <small className="brief-error">생성 작업이 실행되지 않았습니다. provider와 권한 상태를 확인해 주세요.</small>
               )}
+              {brief.generated && <button className="secondary-button" onClick={() => setInspectorPanel('results')}>생성 결과 보기</button>}
             </div>
           )}
+          </div>
           {bibleOpen && !analysis && <div className="art-bible-empty"><h2>아트바이블</h2><p>{bibleLoading ? '저장된 내용을 불러오는 중…' : '전체 레퍼런스 자동 정리를 누르면 참고 자료를 읽고 초안을 만듭니다.'}</p></div>}
           {bibleOpen && analysis && (
             <BoardDraftEditor analysis={analysis} refs={refs} stale={Number(analysis.revision) !== revision || dirtyRef.current} onSave={async (draft) => {
@@ -797,6 +803,7 @@ export function ArtReferenceCanvas() {
               setAnalysis({ ...analysis, status: 'REJECTED' });
             }} />
           )}
+          <section hidden={inspectorPanel !== 'asset'}>
           <div className="inspector-title">
             <div>
               <span className="eyebrow">이미지 정보</span>
@@ -852,14 +859,15 @@ export function ArtReferenceCanvas() {
               )}
             </>
           )}
-          <div className="art-output-panel">
+          </section>
+          <section className="art-output-panel" hidden={inspectorPanel !== 'results'}>
             <div className="output-heading">
               <div>
-                <span className="eyebrow">GENERATED OUTPUTS</span>
                 <h3>생성 결과</h3>
               </div>
               <span>{generated.length}개</span>
             </div>
+            <p className="panel-help">이미지를 눌러 원본을 엽니다. 승인 전 결과는 검색·추천에 사용되지 않습니다.</p>
             {generated.length ? (
               <div className="output-grid">
                 {generated.slice(0, 6).map((image) => (
@@ -867,17 +875,20 @@ export function ArtReferenceCanvas() {
                     <a href={'/api/assistant/images/' + image.id} target="_blank" rel="noreferrer">
                       <img src={'/api/assistant/images/' + image.id} alt="생성 결과" loading="lazy" />
                     </a>
-                    <small>{image.review_status ?? 'DRAFT'} · {image.model}</small>
+                    <small>{image.review_status === 'APPROVED_CANONICAL' ? '참고 자료로 승인됨' : image.review_status === 'REJECTED' ? '사용 제외' : '검토 전'}</small>
+                    <details className="output-provenance"><summary>생성 정보</summary><p>{image.model}</p><p>참고 원본 {image.options?.actual_inputs?.length ?? 0}개</p><p>{image.provider_request_id ?? image.options?.provider_trace?.provider_request_id ?? '공급자 요청 번호 없음'}</p></details>
                     {image.review_status !== 'APPROVED_CANONICAL' && (
                       <div>
-                      <input className="output-rights-note" placeholder="참고 자료로 사용할 수 있는 권리 메모" value={canonicalNote} onChange={(event) => setCanonicalNote(event.target.value)} />
-                      <button className="output-review" disabled={!canonicalNote.trim()} onClick={async () => {
+                      <details className="output-approval"><summary>참고 자료로 등록</summary><p className="panel-help">출처와 사용 권한을 확인한 경우에만 승인하세요.</p>
+                      <input className="output-rights-note" aria-label={'권리 메모 ' + image.id} placeholder="출처 · 사용 가능한 범위" value={canonicalNotes[image.id] ?? ''} onChange={(event) => setCanonicalNotes(current => ({ ...current, [image.id]: event.target.value }))} />
+                      <button className="output-review" disabled={!canonicalNotes[image.id]?.trim()} onClick={async () => {
                         const result = await api<any>('/api/assistant/images/' + image.id + '/review', {
                           method: 'POST',
-                          body: JSON.stringify({ status: 'APPROVED_CANONICAL', review_role: 'art_reference', note: canonicalNote }),
+                          body: JSON.stringify({ status: 'APPROVED_CANONICAL', review_role: 'art_reference', note: canonicalNotes[image.id] }),
                         });
                         if (result.reviewed) setGenerated(await api<any[]>('/api/assistant/images'));
                       }}>참고 자료로 승인</button>
+                      </details>
                       </div>
                     )}
                   </div>
@@ -886,7 +897,7 @@ export function ArtReferenceCanvas() {
             ) : (
               <p className="output-empty">아직 생성된 결과가 없습니다. 이미지 생성 준비를 확인하면 결과가 표시됩니다.</p>
             )}
-          </div>
+          </section>
         </aside>
       </main>
     </div>
