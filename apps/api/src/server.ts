@@ -17,6 +17,7 @@ import { exportMarkdown, exportText } from './export.ts';
 import { segmentAudio, type AudioChunk } from './segment-audio.ts';
 import { registerKnowledgeRoutes } from './knowledge.ts';
 import { registerAssistantRoutes } from './assistant.ts';
+import { requestBucket } from './request-limits.ts';
 export async function buildServer(config: AppConfig, store: Store) {
   const app = Fastify({
     logger:
@@ -63,15 +64,15 @@ export async function buildServer(config: AppConfig, store: Store) {
     },
   });
   await app.register(rateLimit, {
-    max: 180,
+    max: (req) => requestBucket(req.method, req.url).max,
     timeWindow: '1 minute',
     keyGenerator: async (req) => {
       if (req.cookies.session) {
         try {
-          return 'user:' + (await auth.session(req.cookies.session)).user_id;
+          return requestBucket(req.method, req.url).name + ' user:' + (await auth.session(req.cookies.session)).user_id;
         } catch {}
       }
-      return 'ip:' + req.ip;
+      return requestBucket(req.method, req.url).name + ' ip:' + req.ip;
     },
   });
   const cookieOptions = {
@@ -115,9 +116,9 @@ export async function buildServer(config: AppConfig, store: Store) {
           ? e.message
           : status === 400
             ? '요청 값을 확인해 주세요.'
-            : '요청을 처리하지 못했습니다.',
+            : status === 429 ? '요청이 잠시 몰렸습니다. 잠시 후 다시 시도해 주세요.' : '요청을 처리하지 못했습니다.',
         request_id: req.id,
-        retryable: known ? e.retryable : status >= 500,
+        retryable: status === 429 || (known ? e.retryable : status >= 500),
       },
     });
   });

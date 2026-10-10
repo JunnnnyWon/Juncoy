@@ -416,8 +416,9 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       (e.code === 'KNOWLEDGE_DISABLED' ? 503 : e.code === 'PROJECT_SCOPE_DENIED' ? 403 : 503);
     return reply.code(status).send({
       error: {
-        code: e instanceof z.ZodError ? 'MODEL_OUTPUT_INVALID' : e.code ?? 'TEMPORARY_FAILURE',
-        message: e instanceof z.ZodError ? '자동 분석 결과의 형식이 올바르지 않습니다. 다시 시도해 주세요.' : e.code ? e.message : '어시스턴트가 일시적으로 불안정합니다.',
+        code: status === 429 ? 'RATE_LIMITED' : e instanceof z.ZodError ? 'MODEL_OUTPUT_INVALID' : e.code ?? 'TEMPORARY_FAILURE',
+        message: status === 429 ? '요청이 잠시 몰렸습니다. 잠시 후 다시 시도해 주세요.' : e instanceof z.ZodError ? '자동 분석 결과의 형식이 올바르지 않습니다. 다시 시도해 주세요.' : e.code ? e.message : '어시스턴트가 일시적으로 불안정합니다.',
+        retryable: status === 429 || status >= 500,
       },
     });
   });
