@@ -6,7 +6,7 @@ import { imageBriefHashInput } from '@meeting/contracts';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import sharp from 'sharp';
+import sharp from '../../packages/knowledge/node_modules/sharp/lib/index.js';
 it('v2 stores exact empty UI inputs, result and unknown cost; rejects legacy approvals', async () => {
   if (!process.env.KNOWLEDGE_DATABASE_URL) throw new Error('knowledge DB required');
   const admin = new KnowledgeStore(process.env.KNOWLEDGE_DATABASE_URL);

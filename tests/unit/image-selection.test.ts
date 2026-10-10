@@ -1,5 +1,11 @@
 import { expect, it } from 'vitest';
-import { normalizeReference, selectReferences } from '../../packages/knowledge/src/image-selection.ts';
+import { normalizeReference, selectReferences, inferImageOutput } from '../../packages/knowledge/src/image-selection.ts';
+it('keeps character edits as character even when expanded instructions mention background and lighting only', () => {
+  expect(inferImageOutput('기존 이미지 수정\n이번 요청: 남성 탐험가 얼굴과 포즈 유지, 조명만 밝게\n변경: 배경 요소 유지, 조명만 밝게', 'background')).toBe('character');
+  expect(inferImageOutput('캐릭터 생성. 남성 탐험가. HUD 제외', 'game_scene')).toBe('character');
+  expect(inferImageOutput('온실 배경 전용 이미지. HUD 제외, 인물 제외', 'ui')).toBe('background');
+  expect(inferImageOutput('게임 UI 신규 시안. 인물 없이', 'game_scene')).toBe('ui');
+});
 it('marks inconsistent role strengths for review', () => {
   expect(normalizeReference({ roles: ['mood'], roleUsage: { modeling_language: 'MUST_FOLLOW' } }).review_required).toBe(true);
 });

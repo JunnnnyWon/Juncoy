@@ -1,4 +1,13 @@
 // One authoritative role/strength mapping. Legacy disagreement requires review.
+export function inferImageOutput(request: string, fallback: 'ui' | 'background' | 'character' | 'game_scene' | 'other') {
+  // Classify the user's words, not the expanded keep/change instructions.
+  const original = request.match(/이번 요청:\s*([\s\S]*?)(?:\n변경:|\n유지:|$)/)?.[1] ?? request;
+  const withoutExcludedUI = original.replace(/(?:HUD|UI).{0,8}(?:제외|넣지|없이)/gi, '');
+  if (/UI|HUD|인터페이스/i.test(withoutExcludedUI)) return 'ui';
+  if (/배경\s*(?:전용|이미지|만)|인물\s*(?:없이|없는)|(?:인물|캐릭터).{0,5}(?:제외|넣지|없)/.test(original)) return 'background';
+  if (/캐릭터|남성|여성|얼굴|인물/.test(original)) return 'character';
+  return fallback;
+}
 export function normalizeReference(ref: any) {
   const roles: string[] = ref.roles?.length ? [...new Set<string>(ref.roles)] : [ref.role ?? 'mood'];
   const usage = ref.roleUsage ?? {};

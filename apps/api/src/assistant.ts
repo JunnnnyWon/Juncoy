@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
-import { selectReferences } from '../../../packages/knowledge/src/image-selection.ts';
+import { selectReferences, inferImageOutput } from '../../../packages/knowledge/src/image-selection.ts';
 import { z } from 'zod';
 import { sql, first, rows } from '@meeting/knowledge-db';
 import { AssistantMode, ArtBoardSnapshot, ImageBrief, ImageBriefDraft, ImageGenerationPlan, imageBriefHashInput } from '@meeting/contracts';
@@ -1219,7 +1219,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       }
     }
     const planned = await ctx.model.structured(ImageGenerationPlan.omit({ primary: true, supporting: true }), { request: body.request, has_parent: Boolean(body.parent_image_id) }, '이미지 요청을 new/edit/variant/recompose와 character/background/game_scene/ui/other로 분류한다. 다른 후보는 variant, 장면을 바꾸고 HUD 등 일부 유지하면 recompose다. preserve는 사용자가 유지하라고 한 요소만, change는 변경 요소, free는 명시되지 않은 인물/의상/행동/배경/구도다. 신규 UI에 교복 여성이나 복도를 임의로 고정하지 않는다. 배경 전용은 인물 없음. JSON만 반환.');
-    const output = /(?:HUD|UI).{0,12}(?:제외|넣지|없이)/i.test(body.request) ? 'background' : /UI|HUD|인터페이스/i.test(body.request) ? 'ui' : /배경.*(?:전용|만)|인물\s*없이|인물\s*없는/.test(body.request) ? 'background' : planned.result.output;
+    const output = inferImageOutput(body.request, planned.result.output);
     if (/다른 후보|새 후보/.test(body.request)) planned.result.operation = 'variant';
     else if (/조명만|밝기만|톤만/.test(body.request) && body.parent_image_id) planned.result.operation = 'edit';
     else if (/(?:씬|장면|배경).{0,20}(?:바꿔|교체|변경|재구성)/.test(body.request)) planned.result.operation = 'recompose';
