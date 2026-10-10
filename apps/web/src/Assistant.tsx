@@ -389,7 +389,6 @@ function AssistantView() {
                   <div className="msg-body">{renderMarkdown(m.content)}</div>
                   {asArray<any>(m.attachments).filter(item => item?.type === 'generated_image').map(image => <button key={image.id} className="chat-generated-image" aria-label="생성 이미지 크게 보기" onClick={() => setSelectedImage(image)}><img src={'/api/assistant/images/' + image.id} alt="채팅에서 생성한 이미지" loading="lazy" /></button>)}
                   <CitationList citations={m.citations} />
-                  {asArray<any>(m.attachments).filter(image => image?.type === 'generated_image').map(image => <button key={'edit-' + image.id} className="ghost-button" onClick={() => setEditImage(image)}>이 이미지 수정</button>)}
                 </div>
               ))}
               {live && (
