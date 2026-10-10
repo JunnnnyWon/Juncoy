@@ -231,6 +231,7 @@ export function ArtReferenceCanvas() {
   const [brief, setBrief] = useState<any>(null);
   const [inspectorPanel, setInspectorPanel] = useState<'asset' | 'create' | 'results'>('asset');
   const [generated, setGenerated] = useState<any[]>([]);
+  const [visibleResultCount, setVisibleResultCount] = useState(6);
   const [analysis, setAnalysis] = useState<any>(null);
   const [bibleOpen, setBibleOpen] = useState(false);
   const [bibleLoading, setBibleLoading] = useState(false);
@@ -873,13 +874,13 @@ export function ArtReferenceCanvas() {
             <p className="panel-help">이미지를 눌러 원본을 엽니다. 승인 전 결과는 검색·추천에 사용되지 않습니다.</p>
             {generated.length ? (
               <div className="output-grid">
-                {generated.slice(0, 6).map((image) => (
+                {generated.slice(0, visibleResultCount).map((image) => (
                   <div key={image.id} className="output-item">
                     <a href={'/api/assistant/images/' + image.id} target="_blank" rel="noreferrer">
                       <img src={'/api/assistant/images/' + image.id} alt="생성 결과" loading="lazy" />
                     </a>
                     <small>{image.review_status === 'APPROVED_CANONICAL' ? '참고 자료로 승인됨' : image.review_status === 'REJECTED' ? '사용 제외' : '검토 전'}</small>
-                    <details className="output-provenance"><summary>생성 정보</summary><p>{image.model}</p><p>참고 원본 {image.options?.actual_inputs?.length ?? 0}개</p><p>{image.provider_request_id ?? image.options?.provider_trace?.provider_request_id ?? '공급자 요청 번호 없음'}</p></details>
+                    <details className="output-provenance"><summary>생성 정보</summary><p>{image.model}</p><p>{Array.isArray(image.options?.actual_inputs) ? '참고 원본 ' + image.options.actual_inputs.length + '개' : '입력 이력 없음'}</p><p>{image.provider_request_id ?? image.options?.provider_trace?.provider_request_id ?? '공급자 요청 번호 없음'}</p></details>
                     {image.review_status !== 'APPROVED_CANONICAL' && (
                       <div>
                       <details className="output-approval"><summary>참고 자료로 등록</summary><p className="panel-help">출처와 사용 권한을 확인한 경우에만 승인하세요.</p>
@@ -900,6 +901,7 @@ export function ArtReferenceCanvas() {
             ) : (
               <p className="output-empty">아직 생성된 결과가 없습니다. 이미지 생성 준비를 확인하면 결과가 표시됩니다.</p>
             )}
+            {generated.length > visibleResultCount && <button className="secondary-button" onClick={() => setVisibleResultCount(current => current + 6)}>이전 결과 더 보기</button>}
           </section>
         </aside>
       </main>

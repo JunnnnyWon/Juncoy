@@ -4022,10 +4022,13 @@ body:has(.art-workspace) { overflow:hidden; }
 .art-inspector summary { cursor:pointer; }
 .art-workspace button:focus-visible, .art-workspace textarea:focus-visible, .art-workspace input:focus-visible, .art-workspace summary:focus-visible { outline:2px solid #e99b8c; outline-offset:3px; }
 .art-workspace button:disabled { opacity:.5; cursor:not-allowed; }
+.art-workspace .art-toolbar .art-tool, .art-workspace .art-toolbar .zoom-readout, .art-workspace .art-toolbar .save-history-label { flex-shrink:0; white-space:nowrap; }
 .art-inspector .brief-cancel-button { display:block; width:100%; padding:10px; margin-top:8px; border:0; background:transparent; color:#c3cbd2; font-size:13px; cursor:pointer; }
 @media(max-width:900px) {
   .art-workspace .art-header { padding:12px 16px; flex-wrap:wrap; gap:12px; }
   .art-workspace .art-header-actions { width:100%; }
+  .art-workspace .art-board-title-row h1 { max-width:none; font-size:18px; white-space:normal; overflow:visible; }
+  .art-workspace .art-toolbar .save-history-label { display:none; }
   .art-workspace .art-header-actions .save-state { justify-content:flex-start; }
   .art-workspace .art-header-buttons { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
   .art-workspace .art-header-buttons > button, .art-workspace .art-header-buttons > a { width:100%; min-width:0; font-size:12px; padding:8px 6px; }
