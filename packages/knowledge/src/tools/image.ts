@@ -236,6 +236,7 @@ export function registerImageTools(reg: ToolRegistry, storage: UploadStorage) {
           mime: out.mime ?? 'image/png',
           sha256: createHash('sha256').update(buf).digest('hex'),
           requestId: out.requestId,
+          trace: out.trace,
           costUsd: out.costUsd,
         }, executionToken);
         const r = await first<{ id: string }>(

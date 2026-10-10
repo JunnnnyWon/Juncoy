@@ -1189,6 +1189,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         request: z.string().min(1).max(8000).default('캐릭터 컨셉 아트'),
         parent_image_id: z.string().uuid().optional(),
         reference_images: z.array(z.object({ id: z.string().uuid(), instruction: z.string().max(1000) })).max(15).default([]),
+        reference_upload_ids: z.array(z.string().uuid()).max(16).default([]),
         revision: z.number().int().positive().optional(),
       })
       .parse(input ?? {});
@@ -1223,7 +1224,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     else if (/조명만|밝기만|톤만/.test(body.request) && body.parent_image_id) planned.result.operation = 'edit';
     else if (/(?:씬|장면|배경).{0,20}(?:바꿔|교체|변경|재구성)/.test(body.request)) planned.result.operation = 'recompose';
     planned.result.output = output;
-    const usableRefs = body.parent_image_id ? [] : selectReferences([...uniqueRefs.values()], output);
+    if (body.parent_image_id && body.reference_upload_ids.length) throw Object.assign(new Error('기존 결과 편집에는 주 원본과 보조 결과를 지정해 주세요.'), { code: 'REFERENCE_MODE_CONFLICT', statusCode: 409 });
+    const usableRefs = body.parent_image_id ? [] : selectReferences([...uniqueRefs.values()], output, body.reference_upload_ids);
     if (usableRefs.length > 16) throw Object.assign(new Error("현재 이미지 모델은 원본 16개까지 입력할 수 있습니다. 전체 원본을 전달하려면 아트보드의 이미지를 16개 이하로 정리해 주세요."), { code: "REFERENCE_LIMIT", statusCode: 409 });
     const referenceUploadIds = usableRefs.map((ref: any) => ref.upload_id).filter(Boolean);
     const imageObservations = await Promise.all(usableRefs.filter((ref: any) => ref.art_asset_id).map(async (ref: any) => {
@@ -1262,7 +1264,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       request: body.request, generation_plan: plan, project_evidence: rag.prompt, art_board: { name: board.name, frames_and_notes: (revision?.snapshot as any)?.nodes ?? [], references: usableRefs.map((ref: any) => ({ name: ref.name, roles: ref.roles, usage: ref.roleUsage, purpose: ref.purpose, instruction: ref.note })) }, role_directives: usableRefs.map((ref: any) => ({ roles: ref.roles, instruction: ref.note })),
       image_observations: imageObservations, approved_art_bible_rules: approvedRules, default_negative_constraints: rag.negative,
     }, '프로젝트 근거와 승인된 Art Bible, 사용자가 정한 역할 지시만 사용해 구조화된 이미지 브리프를 작성한다. 사람 수정/사용자 지시가 AI 관찰보다 우선한다. 근거 없는 고유 설정을 만들지 않는다. 출력 prompt는 GPT Image 2.5 Flare용으로 구체적인 장면/재질/구도를 설명하고 negative_constraints는 제외할 시각 요소만 담는다. prompt는 4000자 이내로 핵심을 통합하고 레퍼런스별 지시를 반복하지 않는다. negative_constraints는 12개 이내, 각 100자 이내다. role_directives는 역할별로 중복 없이 최대 6개, 각 instruction은 300자 이내로 요약한다. 완결된 JSON 객체만 반환한다.');
-    const prompt = drafted.result.prompt + '\n必須条件 / 요청 우선: ' + body.request + '\n유지: ' + plan.preserve.join(', ') + '\n변경: ' + plan.change.join(', ') + '\n자유 구성: ' + plan.free.join(', ') + (output === 'background' ? '\n배경 전용. 인물을 추가하지 않는다.' : output === 'ui' ? '\nUI 설계 중심. 요청하지 않은 교복 여성/복도를 고정하지 않는다.' : '');
+    const reviewNotice = output === 'ui' ? 'UI 시안의 배치와 기능 요소는 디자인 제안입니다. 참고 자료에 나오는 논의·예시를 프로젝트의 확정 기능으로 간주하지 마세요.' : undefined;
+    const prompt = drafted.result.prompt + '\n必須条件 / 요청 우선: ' + body.request + '\n유지: ' + plan.preserve.join(', ') + '\n변경: ' + plan.change.join(', ') + '\n자유 구성: ' + plan.free.join(', ') + (output === 'background' ? '\n배경 전용. 인물을 추가하지 않는다.' : output === 'ui' ? '\nUI 설계 중심. 요청하지 않은 교복 여성/복도를 고정하지 않는다. ' + reviewNotice : '');
     const promptHash = createHash('sha256').update(prompt).digest('hex');
     const sourceRows = await rows<any>(sql`SELECT s.kind, s.status, max(c.last_reconciled_at) AS latest_at
       FROM knowledge_sources s LEFT JOIN connector_cursors c ON c.source_id=s.id
@@ -1284,6 +1287,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     }));
     const briefBase = {
       schema_version: 2 as const, request: body.request, plan, plan_hash: createHash('sha256').update(imageBriefHashInput(plan)).digest('hex'),
+      ...(reviewNotice ? { review_notice: reviewNotice } : {}),
       role_directives: usableRefs.flatMap((ref: any) => (ref.roles ?? [ref.role]).map((role: string) => ({ role, instruction: ref.note || '원본의 해당 역할만 참고' }))),
       negative_constraints: [...drafted.result.negative_constraints, ...(output === 'background' ? ['인물, 캐릭터 추가 금지'] : [])],
       board_id: board.id, board_revision: revision?.revision ?? board.current_revision,

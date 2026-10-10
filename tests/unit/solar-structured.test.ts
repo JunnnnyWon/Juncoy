@@ -18,7 +18,7 @@ it('fails after bounded correction rather than accepting invalid data', async ()
   const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"title":"too long"}' } }] })));
   vi.stubGlobal('fetch', fetcher);
   await expect(solarModel({ UPSTAGE_API_KEY: 'test' } as AppConfig).structured(z.object({ title: z.string().max(3) }), {}, 'short')).rejects.toMatchObject({ code: 'MODEL_OUTPUT_INVALID', statusCode: 502 });
-  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher).toHaveBeenCalledTimes(3);
 });
 it('recovers malformed JSON with a larger completion budget', async () => {
   const fetcher = vi.fn()
@@ -33,5 +33,15 @@ it('rejects truncated responses even when their partial JSON parses', async () =
   const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '{"title":"ok"}' } }] })));
   vi.stubGlobal('fetch', fetcher);
   await expect(solarModel({ UPSTAGE_API_KEY: 'test' } as AppConfig).structured(z.object({ title: z.string() }), {}, 'title')).rejects.toMatchObject({ code: 'MODEL_OUTPUT_INVALID' });
-  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+});
+it('accepts a complete fenced JSON response and accumulates corrective usage', async () => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 3 }, choices: [{ message: { content: '{"title":"invalid"}' } }] })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ usage: { prompt_tokens: 20, completion_tokens: 4 }, choices: [{ message: { content: '```json\n{"title":"ok"}\n```' } }] })));
+  vi.stubGlobal('fetch', fetcher);
+  const out = await solarModel({ UPSTAGE_API_KEY: 'test' } as AppConfig).structured(z.object({ title: z.string().max(3) }), {}, 'short');
+  expect(out.result.title).toBe('ok');
+  expect(out.usage).toEqual({ input_tokens: 30, output_tokens: 7 });
+  expect(JSON.parse(fetcher.mock.calls[1][1].body).messages.some((item: any) => item.role === 'assistant')).toBe(true);
 });

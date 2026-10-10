@@ -65,6 +65,7 @@ export const ImageBrief = z.strictObject({
   plan: ImageGenerationPlan.optional(),
   plan_hash: Sha256.optional(),
   request: z.string().min(1).max(4000),
+  review_notice: z.string().max(500).optional(),
   role_directives: z.array(z.strictObject({
     role: z.string().min(1).max(80),
     instruction: z.string().min(1).max(2000),

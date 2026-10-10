@@ -48,7 +48,10 @@ export function solarModel(config: AppConfig) {
   return {
     async structured<T>(s: z.ZodType<T>, input: unknown, system: string) {
       let correction = '';
-      for (let attempt = 0; attempt < 2; attempt++) {
+      let previousOutput = '';
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      for (let attempt = 0; attempt < 3; attempt++) {
       const res = await fetch('https://api.upstage.ai/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
@@ -59,6 +62,7 @@ export function solarModel(config: AppConfig) {
           messages: [
             { role: 'system', content: system + correction },
             { role: 'user', content: JSON.stringify(input) },
+            ...(previousOutput ? [{ role: 'assistant', content: previousOutput }, { role: 'user', content: '이전 JSON을 계약에 맞게 수정해 완결된 JSON 객체만 반환하세요. 검증 오류: ' + correction }] : []),
           ],
           response_format: {
             type: 'json_schema',
@@ -74,14 +78,18 @@ export function solarModel(config: AppConfig) {
       });
       if (!res.ok) throw Object.assign(new Error('브리프 작성 모델이 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'), { code: 'MODEL_REQUEST_FAILED', statusCode: 502, providerStatus: res.status });
       const data = (await res.json()) as any;
+      totalInputTokens += data.usage?.prompt_tokens ?? 0;
+      totalOutputTokens += data.usage?.completion_tokens ?? 0;
       let parsed: T;
       try {
         const choice = data.choices?.[0];
         if (choice?.finish_reason === 'length') throw new SyntaxError('model_output_truncated');
         if (typeof choice?.message?.content !== 'string') throw new SyntaxError('model_output_missing');
-        parsed = s.parse(JSON.parse(choice.message.content));
+        const content = choice.message.content.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i, '$1').trim();
+        parsed = s.parse(JSON.parse(content));
       } catch (error) {
-        if (attempt === 1) throw Object.assign(new Error('자동 분석 응답의 형식이 올바르지 않아 준비를 완료하지 못했습니다. 다시 시도해 주세요.'), { code: 'MODEL_OUTPUT_INVALID', statusCode: 502 });
+        if (attempt === 2) throw Object.assign(new Error('자동 분석 응답의 형식이 올바르지 않아 준비를 완료하지 못했습니다. 다시 시도해 주세요.'), { code: 'MODEL_OUTPUT_INVALID', statusCode: 502 });
+        previousOutput = String(data.choices?.[0]?.message?.content ?? '').slice(0, 24_000);
         correction = '\n이전 출력이 JSON 계약 검증에 실패했다. 아래 제한을 반드시 지키고 짧게 작성한다: ' + (error instanceof z.ZodError
           ? JSON.stringify(error.issues.map(({ path, code, message }) => ({ path, code, message })))
           : '유효한 JSON 객체만 반환한다.');
@@ -91,8 +99,8 @@ export function solarModel(config: AppConfig) {
         result: parsed,
         model: (data.model ?? config.UPSTAGE_MODEL) as string,
         usage: {
-          input_tokens: data.usage?.prompt_tokens ?? 0,
-          output_tokens: data.usage?.completion_tokens ?? 0,
+          input_tokens: totalInputTokens,
+          output_tokens: totalOutputTokens,
         },
       };
       }

@@ -15,6 +15,7 @@ export interface ImageResult {
   requestId?: string;
   mime?: string;
   costUsd?: number;
+  trace?: { client_request_id: string; provider_request_id: string | null; request_id_status: 'RETURNED' | 'NOT_RETURNED'; response_keys: string[]; edge_request_id: string | null };
 }
 export interface ImageReferenceInput {
   bytes: Buffer;
@@ -93,6 +94,7 @@ export class OpenRouterImages {
     prompt: string,
     references: ImageReferenceInput[],
   ): Promise<ImageResult> {
+    const clientRequestId = randomUUID();
     const r = await fetch(`${this.baseUrl}/images`, {
       method: 'POST',
       headers: {
@@ -111,6 +113,7 @@ export class OpenRouterImages {
               .join('\n')
           : prompt,
         n: 1,
+        metadata: { trace_id: clientRequestId },
         input_references: references.map((r) => ({
           type: 'image_url',
           image_url: { url: 'data:' + r.mime + ';base64,' + r.bytes.toString('base64') },
@@ -123,15 +126,18 @@ export class OpenRouterImages {
     if (!r.ok) throw Object.assign(new Error(`openrouter_${r.status}`), { status: r.status });
     const body = (await r.json()) as any;
     const item = body.data?.[0];
-    if (item?.b64_json) return { b64: item.b64_json, requestId: body.id ?? r.headers.get('x-request-id') ?? undefined, mime: 'image/png', costUsd: Number(body.usage?.cost ?? NaN) || undefined };
+    const requestId = [body.id, body.request_id, body.generation_id, body.usage?.generation_id, r.headers.get('x-request-id'), r.headers.get('x-generation-id')].find(value => typeof value === 'string' && value.length > 0);
+    const cost = body.usage?.cost;
+    const metadata = { requestId, costUsd: typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined,
+      trace: { client_request_id: clientRequestId, provider_request_id: requestId ?? null, request_id_status: requestId ? 'RETURNED' as const : 'NOT_RETURNED' as const, response_keys: Object.keys(body), edge_request_id: r.headers.get('cf-ray') } };
+    if (item?.b64_json) return { b64: item.b64_json, ...metadata, mime: item.media_type ?? 'image/png' };
     if (item?.url) {
       const img = await fetch(item.url, { signal: AbortSignal.timeout(60_000) });
       if (!img.ok) throw new Error(`image_fetch_${img.status}`);
       return {
         b64: Buffer.from(await img.arrayBuffer()).toString('base64'),
-        requestId: body.id ?? r.headers.get('x-request-id') ?? undefined,
+        ...metadata,
         mime: img.headers.get('content-type') ?? undefined,
-        costUsd: Number(body.usage?.cost ?? NaN) || undefined,
       };
     }
     throw new Error('empty_image_response');
@@ -250,12 +256,13 @@ export async function finishImageJob(
   jobId: string,
   status: 'DONE' | 'FAILED',
   error?: string,
-  result?: { storageKey: string; bytes: number; width?: number; height?: number; costUsd?: number; mime?: string; sha256?: string; requestId?: string },
+  result?: { storageKey: string; bytes: number; width?: number; height?: number; costUsd?: number; mime?: string; sha256?: string; requestId?: string; trace?: ImageResult['trace'] },
   executionToken?: string | null,
 ) {
   await store.db.transaction().execute(async (tx) => {
     const updated = await sql`UPDATE image_jobs SET status=${status}, error=${error ?? null},
       provider_request_id=coalesce(${result?.requestId ?? null}, provider_request_id),
+      options=options || ${JSON.stringify(result?.trace ? { provider_trace: result.trace } : {})}::jsonb,
       cost_status=${result?.costUsd == null ? 'UNKNOWN' : 'KNOWN'}, finished_at=now()
       WHERE id=${jobId} AND status='RUNNING'
         AND (${executionToken ?? null}::uuid IS NULL OR execution_token=${executionToken ?? null}::uuid)`.execute(tx);

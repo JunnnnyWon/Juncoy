@@ -243,6 +243,7 @@ export function ArtReferenceCanvas() {
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [briefBusy, setBriefBusy] = useState(false);
   const [generationRequest, setGenerationRequest] = useState('');
+  const [useSelectedReferences, setUseSelectedReferences] = useState(false);
   const [actionError, setActionError] = useState('');
   const [assetAnalysis, setAssetAnalysis] = useState<any>(null);
   const [assetCorrections, setAssetCorrections] = useState('');
@@ -411,6 +412,7 @@ export function ArtReferenceCanvas() {
   const previewBrief = async () => {
     if (!boardId || briefBusy || analysisBusy) return;
     if (!generationRequest.trim()) { setActionError('만들고 싶은 이미지를 먼저 설명해 주세요.'); return; }
+    if (useSelectedReferences && (selectedCount === 0 || selectedCount > 16)) { setActionError('참고할 원본을 1~16개 선택해 주세요.'); return; }
     setBriefBusy(true);
     setActionError('');
     setSyncState('저장 중');
@@ -432,6 +434,7 @@ export function ArtReferenceCanvas() {
           method: 'POST',
           body: JSON.stringify({
             request: generationRequest.trim(),
+            reference_upload_ids: useSelectedReferences ? refs.filter(ref => ref.selected && ref.upload_id).map(ref => ref.upload_id) : [],
             revision: savedRevision,
           }),
         },
@@ -596,6 +599,8 @@ export function ArtReferenceCanvas() {
           </span>
           <div className="art-header-buttons">
             <input aria-label="만들고 싶은 이미지" placeholder="예: 인물 없이 낡은 학교 복도 배경" value={generationRequest} onChange={event => setGenerationRequest(event.target.value)} />
+            <label><input type="checkbox" checked={useSelectedReferences} onChange={event => setUseSelectedReferences(event.target.checked)} />선택한 원본을 우선 참고 ({selectedCount}개 · 최대 16개)</label>
+            <button className="primary-button" onClick={() => void previewBrief()} disabled={briefBusy || analysisBusy}>{briefBusy ? '생성 조건 준비 중…' : '이미지 생성 준비'}</button>
             <button className="secondary-button" onClick={() => void analyzeBoard()} disabled={analysisBusy || briefBusy}>
               {analysisBusy ? '자동 정리 중…' : '전체 레퍼런스 자동 정리'}
             </button>
@@ -728,7 +733,7 @@ export function ArtReferenceCanvas() {
               <span className="eyebrow">이미지 생성 준비</span>
               <strong>{brief.request}</strong>
               {brief.review_warnings?.map((warning: string) => <p key={warning} role="status">{warning}</p>)}
-              {brief.brief?.plan && <div><p>작업: {brief.brief.plan.operation} · {brief.brief.plan.output}</p><p>유지: {brief.brief.plan.preserve.join(', ') || '없음'}</p><p>변경: {brief.brief.plan.change.join(', ')}</p><p>자유 구성: {brief.brief.plan.free.join(', ')}</p>{brief.brief.references.map((ref: any) => <p key={ref.upload_id}>{ref.purpose} · {ref.reason}</p>)}<details><summary>프로젝트 근거</summary>{brief.brief.evidence.map((e: any) => <p key={e.id}>{e.source} · {e.stable_key}</p>)}</details></div>}
+              {brief.brief?.plan && <div>{brief.brief.review_notice && <p role="note">{brief.brief.review_notice}</p>}<p>작업: {brief.brief.plan.operation} · {brief.brief.plan.output}</p><p>유지: {brief.brief.plan.preserve.join(', ') || '없음'}</p><p>변경: {brief.brief.plan.change.join(', ')}</p><p>자유 구성: {brief.brief.plan.free.join(', ')}</p>{brief.brief.references.map((ref: any) => <p key={ref.upload_id}>{ref.purpose} · {ref.reason}</p>)}<details><summary>프로젝트 근거</summary>{brief.brief.evidence.map((e: any) => <p key={e.id}>{e.source} · {e.stable_key}</p>)}</details></div>}
               <p>{brief.instructions || '자동으로 정리된 레퍼런스가 없습니다.'}</p>
               <small className="brief-meta">
                 {brief.style_approved ? '승인된 아트 규칙 적용' : '승인된 아트 규칙 없음'}

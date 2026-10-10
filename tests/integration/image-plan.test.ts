@@ -35,6 +35,9 @@ it('v2 stores exact empty UI inputs, result and unknown cost; rejects legacy app
     expect(result.ok).toBe(true);
     const job = await first<any>(sql`SELECT * FROM image_jobs WHERE approval_id=${approvalId}`,store.db);
     expect(job.status).toBe('DONE'); expect(job.options.actual_inputs).toEqual([]);
+    expect(job.options.provider_trace.request_id_status).toBe('RETURNED');
+    expect(job.provider_request_id).toBe('qa-request');
+    expect(job.options.provider_trace.client_request_id).toBe(JSON.parse(fetcher.mock.calls[0][1].body).metadata.trace_id);
     expect(JSON.parse(fetcher.mock.calls[0][1].body).input_references).toEqual([]);
     expect((await first<any>(sql`SELECT cost_status FROM image_results WHERE job_id=${job.id}`,store.db)).cost_status).toBe('UNKNOWN');
     await reg.execute(ctx, 'image.generate', { approval_id: approvalId });

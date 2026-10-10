@@ -15,3 +15,13 @@ it('selects up to six related styles and prevents scene copying', () => {
 it('does not overwrite human scope and keeps review assets out', () => {
   expect(selectReferences([{ roles: ['texture'], roleUsage: { texture: 'REVIEW_REQUIRED' }, note: 'human' }], 'background')).toEqual([]);
 });
+it('preserves 7 and 16 explicitly requested originals in user order; rejects missing and duplicate inputs', () => {
+  const refs = Array.from({ length: 17 }, (_, index) => ({ upload_id: String(index), roles: ['texture'], usage: 'STRONG_REFERENCE' }));
+  for (const count of [7, 16]) {
+    const ids = refs.slice(0, count).map(ref => ref.upload_id).reverse();
+    expect(selectReferences(refs, 'background', ids).map(ref => ref.upload_id)).toEqual(ids);
+  }
+  expect(() => selectReferences(refs, 'background', ['missing'])).toThrow('준비되지');
+  expect(() => selectReferences(refs, 'background', ['1', '1'])).toThrow('중복');
+  expect(() => selectReferences(refs, 'background', refs.map(ref => ref.upload_id))).toThrow('16개');
+});
