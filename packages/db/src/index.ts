@@ -1212,7 +1212,7 @@ export class Store {
         meeting_id: id,
         summary_version: next,
       });
-      if (!pending)
+      if (!pending && process.env.AUDIO_RETENTION !== "forever")
         await sql`UPDATE audio_chunks SET expires_at=least(expires_at,now()+interval '24 hours') WHERE meeting_id=${id}::uuid`.execute(
           tx,
         );

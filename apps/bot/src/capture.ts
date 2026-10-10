@@ -1,5 +1,5 @@
 import { Worker } from 'node:worker_threads';
-import { rm } from 'node:fs/promises';
+import { rm, statfs } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import {
@@ -181,6 +181,9 @@ export class Capture {
     await Promise.all([...this.tracks.values()].flatMap((t) => [t.persist, t.mutation]));
   }
   async start(participants: ParticipantDTO[], resume = false) {
+    const disk = await statfs(this.config.RECORDING_STORAGE_PATH);
+    if (disk.bavail * disk.bsize < 5 * 1024 ** 3) throw new Error("녹음 저장 공간이 5GB 미만입니다. 관리자 확인이 필요합니다.");
+    await sql`UPDATE meetings SET stt_provider=${this.config.STT_PROVIDER},transcription_mode=${this.config.TRANSCRIPTION_MODE} WHERE id=${this.meeting.id}::uuid`.execute(this.store.db);
     this.leaseDeadline = Date.now() + 14000;
     this.leaseTimer = setInterval(() => void this.renewLease(), 4000);
     this.connection = joinVoiceChannel({
@@ -469,6 +472,7 @@ export class Capture {
             );
           });
           t.counters.archived_pcm_bytes += pcm.length;
+          if (this.config.AUDIO_RETENTION === "forever") await sql`UPDATE audio_chunks SET expires_at='infinity' WHERE id=${id}::uuid`.execute(this.store.db);
         } catch (e) {
           await rm(safeAudioPath(this.config.RECORDING_STORAGE_PATH, ref), { force: true });
           throw e;
@@ -483,6 +487,7 @@ export class Capture {
     await t.persist;
   }
   private async open(t: Track) {
+    if (this.config.TRANSCRIPTION_MODE === "after_meeting") return;
     if (t.opening || t.stream || t.queued || !t.eligible || !this.accepting) return;
     t.queued = true;
     t.queueAbort = new AbortController();
@@ -648,6 +653,7 @@ export class Capture {
         if (!t.eligible || this.paused || Date.now() >= this.leaseDeadline) continue;
         if (t.pendingPartial && Date.now() - t.partialAt >= 500 && t.epoch) this.flushPartial(t);
         if (t.archiveBytes && this.now() - t.lastFrame > 2000) void this.flushArchive(t);
+        if (this.config.TRANSCRIPTION_MODE === "after_meeting") { t.frames = []; continue; }
         if (t.queued && this.now() - t.lastSpeech > 2000) {
           t.queueAbort?.abort();
           t.frames = [];
@@ -871,6 +877,7 @@ export class Capture {
   async pause() {
     this.accepting = false;
     this.paused = true;
+    if (this.config.TRANSCRIPTION_MODE === "after_meeting") await Promise.all([...this.tracks.values()].map(track => this.flushArchive(track)));
     for (const t of this.tracks.values()) this.disable(t);
     await this.settled();
   }
@@ -1041,6 +1048,10 @@ export class Capture {
         this.metrics(),
       );
       this.disconnect();
+      if (this.config.TRANSCRIPTION_MODE === "after_meeting") {
+        const audio = (await sql<{ user_id: string; end_ms: number }>`SELECT user_id,max(end_ms) AS end_ms FROM audio_chunks WHERE meeting_id=${this.meeting.id}::uuid GROUP BY user_id`.execute(this.store.db)).rows;
+        for (const track of audio) await this.store.enqueueRecovery(this.guild.id, this.meeting.id, `soniox-full:${this.meeting.id}:${track.user_id}`, { guild_id: this.guild.id, user_id: track.user_id, start_ms: 0, end_ms: track.end_ms, capture_recovery: true }, new Date());
+      }
       await this.store.transition(
         this.guild.id,
         this.meeting.id,

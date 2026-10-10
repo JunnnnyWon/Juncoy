@@ -7,6 +7,8 @@ import {
   MockSolar,
   Solar,
   ReturnZero,
+  Soniox,
+  speechRanges,
   PROMPT_HASH,
   readEncrypted,
   flacToPcm,
@@ -20,7 +22,7 @@ import type { SegmentDTO, GapDTO } from '@meeting/contracts';
 import type { Outbox } from './outbox.ts';
 export class Jobs {
   private solar: Solar;
-  private rtzr: ReturnZero;
+  private rtzr: ReturnZero | Soniox;
   constructor(
     private store: Store,
     private config: AppConfig,
@@ -29,7 +31,7 @@ export class Jobs {
   ) {
     if (testFileProvider && config.NODE_ENV !== 'test') throw new Error('TEST_ADAPTER_NOT_ALLOWED');
     this.solar = new Solar(config);
-    this.rtzr = new ReturnZero(config);
+    this.rtzr = config.STT_PROVIDER === "soniox" ? new Soniox(config) : new ReturnZero(config);
   }
   async run(job: Job) {
     if (job.kind === 'DELETE') return this.delete(job);
@@ -45,6 +47,11 @@ export class Jobs {
     if (!['FINALIZING', 'COMPLETED', 'PARTIAL', 'FAILED'].includes(m.status))
       throw new DomainError('NOT_FINALIZABLE');
     const UNRECOVERABLE_SETTLE_MS = 10 * 60_000;
+    const meetingProvider = await first<{ stt_provider: string }>(sql`SELECT stt_provider FROM meetings WHERE id=${id}::uuid`, this.store.db);
+    if (this.config.STT_PROVIDER === "soniox" && meetingProvider?.stt_provider === "soniox") {
+      const tracks = await rows<{ user_id: string; end_ms: number }>(sql`SELECT user_id,max(end_ms) AS end_ms FROM audio_chunks WHERE meeting_id=${id}::uuid GROUP BY user_id`, this.store.db);
+      for (const track of tracks) await this.store.enqueueRecovery(guildId, id, `soniox-full:${id}:${track.user_id}`, { guild_id: guildId, user_id: track.user_id, start_ms: 0, end_ms: track.end_ms }, new Date());
+    }
     const endedAtMs = Date.parse(m.view.ended_at ?? '');
     // Unrecoverable gaps only auto-close once late audio flushes had time to land.
     const canSettle = Number.isFinite(endedAtMs) && Date.now() - endedAtMs >= UNRECOVERABLE_SETTLE_MS;
@@ -66,7 +73,7 @@ export class Jobs {
     );
     if (
       Number(pending?.n) > 0 &&
-      Date.now() - Date.parse(m.view.ended_at ?? new Date().toISOString()) < 120000
+      (this.config.STT_PROVIDER === "soniox" || Date.now() - Date.parse(m.view.ended_at ?? new Date().toISOString()) < 120000)
     ) {
       await sql`UPDATE jobs SET status='PENDING',due_at=now()+interval '5 seconds',attempts=attempts-1 WHERE id=${job.id}::uuid AND generation=${job.generation}`.execute(
         this.store.db,
@@ -171,6 +178,10 @@ export class Jobs {
       userId = String(job.payload.user_id),
       start = Number(job.payload.start_ms),
       end = Number(job.payload.end_ms);
+    if (this.config.TRANSCRIPTION_MODE === "after_meeting" && ["STARTING", "RECORDING", "PAUSED", "DEGRADED", "STOPPING"].includes(m.status)) {
+      await sql`UPDATE jobs SET status='PENDING',due_at=now()+interval '5 seconds',attempts=attempts-1 WHERE id=${job.id}::uuid AND generation=${job.generation}`.execute(this.store.db);
+      return;
+    }
     const audio = await rows(
       sql<{
         id: string;
@@ -185,7 +196,7 @@ export class Jobs {
     let batch: typeof audio = [];
     let batchDuration = 0;
     for (const chunk of audio) {
-      if (batch.length && batchDuration + chunk.end_ms - chunk.start_ms > 300000) {
+      if (batch.length && batchDuration + chunk.end_ms - chunk.start_ms > (this.config.STT_PROVIDER === "soniox" ? 1800000 : 300000)) {
         groups.push(batch);
         batch = [];
         batchDuration = 0;
@@ -218,6 +229,13 @@ export class Jobs {
         chunk.id,
       );
       const pcm = await flacToPcm(flac);
+      if (this.config.STT_PROVIDER === "soniox") {
+        for (const range of speechRanges(pcm)) {
+          const slice = pcm.subarray(Math.floor(range.start * 16) * 2, Math.ceil(range.end * 16) * 2);
+          buffers.push(slice); pieces.push({ file_start_ms: offset, file_end_ms: offset + slice.length / 32, source_start_ms: chunk.start_ms + range.start }); offset += slice.length / 32;
+        }
+        continue;
+      }
       buffers.push(pcm);
       pieces.push({
         file_start_ms: offset,
@@ -229,6 +247,9 @@ export class Jobs {
     if (this.config.PROVIDER_MODE === 'mock' && !this.testFileProvider)
       throw new DomainError('MOCK_AUDIO_NOT_TRANSCRIBED');
     const provider = this.testFileProvider ?? this.rtzr;
+    const applied = await first(sql`SELECT 1 FROM recovery_applications WHERE job_key=${job.key}`, this.store.db);
+    if (applied) return;
+    if (!offset && this.config.STT_PROVIDER === "soniox") { await this.store.completeEmptyRecovery(job); return; }
     let providerId = job.provider_job_id;
     if (!providerId) {
       await this.store.assertJob(this.store.db, job);
@@ -239,17 +260,37 @@ export class Jobs {
         await this.store.assertRecoveryConsent(tx, job);
         await this.store.assertJob(tx, job);
         await this.store.meeting(guildId, id, tx);
+        if (provider instanceof Soniox) {
+          let remote = await first<{ file_id: string | null; transcription_id: string | null }>(sql`SELECT file_id,transcription_id FROM stt_provider_jobs WHERE job_id=${job.id}::uuid`, tx);
+          if (remote?.transcription_id) return JSON.stringify({ file: remote.file_id, transcription: remote.transcription_id });
+          const uncertain = await first<{ cleanup_status: string }>(sql`SELECT cleanup_status FROM stt_provider_jobs WHERE job_id=${job.id}::uuid`, tx);
+          if (uncertain?.cleanup_status === "SUBMITTING") throw new DomainError("SONIOX_SUBMISSION_UNCERTAIN", "Soniox 제출 결과가 불확실합니다. 중복 과금을 막기 위해 관리자 확인이 필요합니다.", 409);
+          return remote?.file_id ? JSON.stringify({ file: remote.file_id }) : JSON.stringify({ file: await provider.upload(encoded) });
+        }
         return provider.submitFile(encoded, job.payload.glossary ?? m.settings.glossary);
       });
+      if (provider instanceof Soniox) {
+        const remote = JSON.parse(providerId);
+        await sql`INSERT INTO stt_provider_jobs(job_id,provider,file_id,submitted_audio_ms,source_time_map) VALUES(${job.id}::uuid,'soniox',${remote.file},${Math.round(offset)},${JSON.stringify(pieces)}::jsonb) ON CONFLICT(job_id) DO UPDATE SET file_id=excluded.file_id`.execute(this.store.db);
+        if (!remote.transcription) {
+          await sql`UPDATE stt_provider_jobs SET cleanup_status='SUBMITTING' WHERE job_id=${job.id}::uuid`.execute(this.store.db);
+          providerId = await provider.createTranscription(remote.file, job.payload.glossary ?? m.settings.glossary, job.key);
+          await sql`UPDATE stt_provider_jobs SET transcription_id=${JSON.parse(providerId).transcription},cleanup_status='PENDING' WHERE job_id=${job.id}::uuid`.execute(this.store.db);
+        }
+      }
       await sql`UPDATE jobs SET provider_job_id=${providerId} WHERE id=${job.id}::uuid AND generation=${job.generation} AND status='RUNNING'`.execute(
         this.store.db,
       );
+      if (provider instanceof Soniox) {
+        const remote = JSON.parse(providerId);
+        await sql`UPDATE stt_provider_jobs SET transcription_id=${remote.transcription} WHERE job_id=${job.id}::uuid`.execute(this.store.db);
+      }
       await this.store.usage(
         guildId,
         id,
         'file:' + job.key,
-        'returnzero',
-        (Math.max(10000, offset) / 3600000) * 1000,
+        this.config.STT_PROVIDER,
+        this.config.STT_PROVIDER === "soniox" ? (offset / 3600000) * this.config.SONIOX_PRICE_USD_PER_HOUR * m.settings.usd_krw : (Math.max(10000, offset) / 3600000) * 1000,
         { audio_ms: Math.round(offset), is_mock: Boolean(this.testFileProvider) },
       );
     }
@@ -308,6 +349,9 @@ export class Jobs {
       (g) => g.gap_id === job.payload.gap_id,
     );
     if (gap) await this.store.gap(guildId, id, { ...gap, resolved: true });
+    if (provider instanceof Soniox) {
+      try { await provider.cleanup(providerId); await sql`UPDATE stt_provider_jobs SET cleanup_status='DONE' WHERE job_id=${job.id}::uuid`.execute(this.store.db); } catch { /* Retention independently retries provider cleanup. */ }
+    }
   }
   async delete(job: Job) {
     const id = job.meeting_id!,
@@ -341,6 +385,10 @@ export class Jobs {
     });
   }
   async retention() {
+    if (this.rtzr instanceof Soniox) {
+      const pending = await rows<{ job_id: string; file_id: string; transcription_id: string }>(sql`SELECT p.job_id,p.file_id,p.transcription_id FROM stt_provider_jobs p JOIN jobs j ON j.id=p.job_id WHERE p.cleanup_status='PENDING' AND j.status='DONE' AND p.transcription_id IS NOT NULL LIMIT 20`, this.store.db);
+      for (const remote of pending) { try { await this.rtzr.cleanup(JSON.stringify({ file: remote.file_id, transcription: remote.transcription_id })); await sql`UPDATE stt_provider_jobs SET cleanup_status='DONE' WHERE job_id=${remote.job_id}::uuid`.execute(this.store.db); } catch {} }
+    }
     if (this.config.NODE_ENV === 'production')
       await cleanQaRuns(resolve(this.config.RECORDING_STORAGE_PATH, '../qa'));
     const expired = await rows(
@@ -350,7 +398,7 @@ export class Jobs {
       }>`SELECT id,guild_id FROM meetings WHERE deleted_at IS NULL AND view->>'ended_at' IS NOT NULL AND (view->>'ended_at')::timestamptz<now()-interval '180 days'`,
       this.store.db,
     );
-    for (const m of expired) await this.store.deleteMeeting(m.guild_id, m.id, 'retention');
+    if (this.config.AUDIO_RETENTION !== "forever") for (const m of expired) await this.store.deleteMeeting(m.guild_id, m.id, 'retention');
     const files = await rows(
       sql<{
         id: string;
@@ -358,7 +406,7 @@ export class Jobs {
       }>`SELECT id,storage_ref FROM audio_chunks WHERE expires_at<now()`,
       this.store.db,
     );
-    for (const file of files) {
+    for (const file of this.config.AUDIO_RETENTION === "forever" ? [] : files) {
       await rm(safeAudioPath(this.config.RECORDING_STORAGE_PATH, file.storage_ref), {
         force: true,
       });

@@ -95,6 +95,8 @@ export const Snapshot = z
     cursor: Cursor,
     server_time: z.iso.datetime(),
     meeting: MeetingView,
+    transcription_mode: z.enum(["realtime", "after_meeting"]).optional(),
+    transcription_progress: z.object({ total: z.number(), done: z.number(), failed: z.number() }).optional(),
     participants: z.array(Participant),
     segments: z.array(Segment),
     gaps: z.array(Gap),

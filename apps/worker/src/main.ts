@@ -11,12 +11,12 @@ const config = loadConfig(),
   outbox = new Outbox(store, config, owner),
   jobs = new Jobs(store, config, outbox);
 let stopping = false,
-  busy = false,
+  busy = 0,
   posting = false,
   refreshing = false;
 const jobTimer = setInterval(() => {
-  if (busy || stopping) return;
-  busy = true;
+  if (busy >= (config.STT_PROVIDER === "soniox" ? config.SONIOX_CONCURRENCY : 1) || stopping) return;
+  busy++;
   void (async () => {
     const job = await store.claimJob(owner, config.DISCORD_GUILD_ID);
     if (!job) return;
@@ -51,9 +51,10 @@ const jobTimer = setInterval(() => {
                   'HUMAN_CORRECTION_CONFLICT',
                   'CONSENT_WITHDRAWN',
                   'RECOVERY_NO_TRANSCRIPT',
+                  'SONIOX_SUBMISSION_UNCERTAIN',
                 ].includes(e.code)
               );
-      const retry = retryable && job.attempts < 3 ? backoff(job.attempts) : undefined;
+      const retry = retryable && job.attempts < 3 ? Math.max(backoff(job.attempts), Number((e as any)?.retryAfterSeconds ?? 0) * 1000) : undefined;
       if (
         retry === undefined &&
         job.kind === 'FINALIZE' &&
@@ -67,7 +68,7 @@ const jobTimer = setInterval(() => {
   })()
     .catch(() => {})
     .finally(() => {
-      busy = false;
+      busy--;
     });
 }, 400);
 const postTimer = setInterval(() => {

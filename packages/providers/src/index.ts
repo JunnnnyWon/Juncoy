@@ -2,6 +2,8 @@ export * from './config.ts';
 export * from './knowledge-config.ts';
 export * from './crypto.ts';
 export * from './returnzero.ts';
+export * from './soniox.ts';
+export * from './audio-vad.ts';
 export * from './solar.ts';
 export * from './mock.ts';
 export * from './stream-pool.ts';

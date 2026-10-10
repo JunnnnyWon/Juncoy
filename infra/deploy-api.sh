@@ -11,6 +11,7 @@ bot_id=$(docker inspect discord-meeting-bot-1 --format '{{.Id}}')
 worker_id=$(docker inspect discord-meeting-worker-1 --format '{{.Id}}')
 docker build --label "org.opencontainers.image.revision=$deploy_revision" -t "$deploy_image" -f infra/Dockerfile .
 cd "$deploy_root"
+docker run --rm --network discord-meeting_default --env-file .env.production "$deploy_image" node --import tsx scripts/migrate.ts
 docker exec discord-meeting-api-1 node --import tsx scripts/assert-idle.ts
 MEETING_IMAGE="$previous_image" bash infra/backup.sh
 cp -p .env.production ".env.production.pre-$deploy_revision"

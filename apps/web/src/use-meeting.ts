@@ -33,6 +33,14 @@ export function useMeeting(id: string) {
     let probePending = false;
     let incompatible = 0;
     const controller = new AbortController();
+    const progressTimer = setInterval(() => {
+      if (!active || ref.current?.snapshot.transcription_mode !== "after_meeting" || ref.current.snapshot.meeting.status !== "FINALIZING") return;
+      void api(`/api/meetings/${id}/snapshot`, { signal: controller.signal }).then(value => {
+        if (!active || !ref.current) return;
+        const snapshot = Snapshot.parse(value);
+        commit({ ...ref.current, snapshot: { ...ref.current.snapshot, transcription_progress: snapshot.transcription_progress } });
+      }).catch(() => {});
+    }, 5000);
     generation.current++;
     commit(null);
     setSummary(null);
@@ -151,6 +159,7 @@ export function useMeeting(id: string) {
     void load();
     return () => {
       active = false;
+      clearInterval(progressTimer);
       generation.current++;
       controller.abort();
       source?.close();

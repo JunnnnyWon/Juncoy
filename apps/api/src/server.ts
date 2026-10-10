@@ -289,7 +289,9 @@ export async function buildServer(config: AppConfig, store: Store) {
   });
   app.get('/api/meetings/:id/snapshot', async (req) => {
     const { meeting } = await checkMeeting(req);
-    return Snapshot.parse(await store.snapshot(meeting.guild_id, meeting.id));
+    const row = await first<{ transcription_mode: string }>(sql`SELECT transcription_mode FROM meetings WHERE id=${meeting.id}::uuid`, store.db);
+    const progress = await first<{ total: string; done: string; failed: string }>(sql`SELECT count(*) AS total,count(*) FILTER(WHERE status='DONE') AS done,count(*) FILTER(WHERE status='FAILED') AS failed FROM jobs WHERE meeting_id=${meeting.id}::uuid AND kind='RETRANSCRIBE'`, store.db);
+    return Snapshot.parse({ ...await store.snapshot(meeting.guild_id, meeting.id), transcription_mode: row?.transcription_mode ?? "realtime", transcription_progress: { total: Number(progress?.total ?? 0), done: Number(progress?.done ?? 0), failed: Number(progress?.failed ?? 0) } });
   });
   const pageQuery = z.object({
     before: z.string().max(512).optional(),

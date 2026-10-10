@@ -756,8 +756,9 @@ function Meeting() {
         </div>
       </div>
       <div className="meeting-body">
+        {data.state.snapshot.transcription_mode === "after_meeting" && m.status === "FINALIZING" && <div role="status" className="search-note">{data.state.snapshot.transcription_progress?.total ? `음성 전사 ${data.state.snapshot.transcription_progress.done}/${data.state.snapshot.transcription_progress.total}개 완료 · 실패 ${data.state.snapshot.transcription_progress.failed}개` : "음성을 정리하고 있습니다."} · 전사가 모두 끝나면 회의록을 작성합니다.</div>}
         <section className="meeting-content">
-          {selectedTab === 'summary' ? (
+          {data.state.snapshot.transcription_mode === "after_meeting" && ongoing(m.status) ? <Empty title="회의를 녹음하고 있습니다"><p>종료 후 참가자별로 전사하고 회의록을 만듭니다. 실시간 전사는 제공하지 않습니다.</p></Empty> : selectedTab === 'summary' ? (
             <Summary
               result={data.summary}
               participants={participants}

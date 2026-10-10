@@ -66,7 +66,7 @@ export class Outbox {
         components = [{ type: 1, components: [link(active.id)] }];
       } else {
         embed.title = '회의 중이신가요?';
-        embed.description = `<#${e.channel_id}> · ${e.body.members.length}명이 모였어요.\n발언자별 실시간 전사와 회의 요약을 남겨드릴게요.\n\n아직 기록하지 않고 있어요. 시작 전 대화는 저장되지 않아요.`;
+        embed.description = `<#${e.channel_id}> · ${e.body.members.length}명이 모였어요.\n${this.config.TRANSCRIPTION_MODE === "after_meeting" ? "회의를 녹음하고 종료 후 참가자별로 전사·요약합니다. 원음은 암호화해 보관하며 삭제·동의 철회 요청 시 삭제합니다." : "발언자별 실시간 전사와 회의 요약을 남겨드릴게요."}\n\n아직 기록하지 않고 있어요. 시작 전 대화는 저장되지 않아요.`;
         components = [
           {
             type: 1,
@@ -172,8 +172,8 @@ export class Outbox {
           RECORDING: '회의를 기록하고 있어요',
           PAUSED: '회의 기록이 일시정지되어 있어요',
           DEGRADED: '전사 지연 또는 수신 장애가 있어요',
-          STOPPING: '전사를 마감하고 있어요',
-          FINALIZING: '회의록을 만들고 있어요',
+          STOPPING: '녹음을 마감하고 있어요',
+          FINALIZING: this.config.TRANSCRIPTION_MODE === "after_meeting" ? '녹음이 끝났습니다. 음성을 전사하고 회의록을 만들고 있어요' : '회의록을 만들고 있어요',
           COMPLETED: '회의 기록이 완료되었어요',
           PARTIAL: '부분 회의록이 준비되었어요',
           FAILED: '회의 기록에 문제가 발생했어요',
