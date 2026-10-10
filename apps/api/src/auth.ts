@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { Store, sql, first, json } from '@meeting/db';
 import { hash, openJson, sealJson, type AppConfig } from '@meeting/providers';
 import { DomainError } from '@meeting/domain';
+export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 export interface Session {
   id_hash: string;
   user_id: string;
@@ -44,10 +45,16 @@ export class Auth {
   ) {
     const cookie = randomBytes(32).toString('base64url'),
       idHash = hash(cookie);
-    await sql`INSERT INTO oauth_sessions(id_hash,user_id,display_name,tokens,expires_at) VALUES(${idHash},${user.id},${user.global_name ?? user.username},${sealJson(tokens, this.config.TOKEN_ENCRYPTION_KEY, idHash)},now()+interval '12 hours')`.execute(
+    await sql`INSERT INTO oauth_sessions(id_hash,user_id,display_name,tokens,expires_at) VALUES(${idHash},${user.id},${user.global_name ?? user.username},${sealJson(tokens, this.config.TOKEN_ENCRYPTION_KEY, idHash)},now()+interval '30 days')`.execute(
       this.store.db,
     );
     return cookie;
+  }
+  async renew(session: Session) {
+    // Call only after Discord access has been verified; expired sessions stay expired.
+    const renewed = await first< { expires_at: Date } >(sql`UPDATE oauth_sessions SET expires_at=now()+interval '30 days' WHERE id_hash=${session.id_hash} AND expires_at>now() RETURNING expires_at`, this.store.db);
+    if (!renewed) throw new DomainError('UNAUTHENTICATED', '세션이 만료되었습니다.', 401);
+    session.expires_at = renewed.expires_at;
   }
   async tokens(session: Session): Promise<Tokens> {
     let tokens = openJson<Tokens>(

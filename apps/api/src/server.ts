@@ -12,7 +12,7 @@ import { type AppConfig, hash, readEncrypted, flacToPcm } from '@meeting/provide
 import { randomUUID } from 'node:crypto';
 import { DomainError, parseCursor, safeReturnTo } from '@meeting/domain';
 import { Id, Snapshot, SummaryResult } from '@meeting/contracts';
-import { Auth, type Session } from './auth.ts';
+import { Auth, SESSION_MAX_AGE_SECONDS, type Session } from './auth.ts';
 import { exportMarkdown, exportText } from './export.ts';
 import { segmentAudio, type AudioChunk } from './segment-audio.ts';
 import { registerKnowledgeRoutes } from './knowledge.ts';
@@ -134,9 +134,13 @@ export async function buildServer(config: AppConfig, store: Store) {
     await sql`SELECT 1`.execute(store.db);
     return { ok: true, mode: config.PROVIDER_MODE };
   });
-  app.get('/api/me', async (req) => {
+  app.get('/api/me', async (req, reply) => {
     const s = await auth.session(req.cookies.session);
     await auth.check(s, config.DISCORD_GUILD_ID);
+    if (s.expires_at.getTime() < Date.now() + (SESSION_MAX_AGE_SECONDS - 24 * 60 * 60) * 1000) {
+      await auth.renew(s);
+      reply.setCookie('session', req.cookies.session!, { ...cookieOptions, maxAge: SESSION_MAX_AGE_SECONDS });
+    }
     return {
       user_id: s.user_id,
       display_name: s.display_name,
@@ -160,7 +164,7 @@ export async function buildServer(config: AppConfig, store: Store) {
         },
       );
       return reply
-        .setCookie('session', value, { ...cookieOptions, maxAge: 43200 })
+        .setCookie('session', value, { ...cookieOptions, maxAge: SESSION_MAX_AGE_SECONDS })
         .redirect(returnTo);
     }
     const state = randomBytes(32).toString('base64url'),
@@ -230,7 +234,7 @@ export async function buildServer(config: AppConfig, store: Store) {
     }
     return reply
       .clearCookie('oauth_browser', { path: '/' })
-      .setCookie('session', value, { ...cookieOptions, maxAge: 43200 })
+      .setCookie('session', value, { ...cookieOptions, maxAge: SESSION_MAX_AGE_SECONDS })
       .redirect(safeReturnTo(state.return_to));
   });
   app.post('/auth/logout', async (req, reply) => {
