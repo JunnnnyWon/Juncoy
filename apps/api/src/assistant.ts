@@ -1342,7 +1342,7 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
         ready: Boolean(ref.upload_id && readyIds.has(ref.upload_id)),
       })),
       request: body.request,
-      review_warnings: [...uniqueRefs.values()].filter(ref => Object.keys(ref.roleUsage ?? {}).some(key => !(ref.roles ?? [ref.role]).includes(key))).map(ref => ref.name + '의 역할과 사용 강도가 달라 자동 참고에서 제외했습니다.'),
+      review_warnings: [...uniqueRefs.values()].filter(ref => !body.reference_upload_ids.length || body.reference_upload_ids.includes(ref.upload_id)).filter(ref => Object.keys(ref.roleUsage ?? {}).some(key => !(ref.roles ?? [ref.role]).includes(key))).map(ref => ref.name + '의 역할과 사용 강도가 달라 자동 참고에서 제외했습니다.'),
       reference_upload_ids: referenceUploadIds,
       approval_id: approvalId,
       generation_ready: Boolean(approvalId),

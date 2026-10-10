@@ -340,6 +340,8 @@ export function ArtReferenceCanvas() {
           const savedBrief = pending.after.image_brief;
           setBrief({ brief: savedBrief, request: savedBrief.request, approval_id: pending.id, reference_upload_ids: savedBrief.references.map((ref: any) => ref.upload_id), style_approved: savedBrief.art_bible_version != null });
           setGenerationRequest(savedBrief.request);
+          setReferenceUploadSelection(savedBrief.references.map((ref: any) => ref.upload_id));
+          setUseSelectedReferences(savedBrief.references.length > 0);
           setInspectorPanel('create');
           setMobilePanel('inspector');
         }
@@ -787,6 +789,7 @@ export function ArtReferenceCanvas() {
                 <small className="brief-error">생성 작업이 실행되지 않았습니다. provider와 권한 상태를 확인해 주세요.</small>
               )}
               {brief.generated && <button className="secondary-button" onClick={() => setInspectorPanel('results')}>생성 결과 보기</button>}
+              {brief.approval_id && !brief.generated && <button className="brief-cancel-button" disabled={generationBusy} onClick={async () => { try { await api('/api/assistant/approvals/' + brief.approval_id + '/reject', { method:'POST', body:'{}' }); setBrief(null); } catch(error) { setActionError(artActionError(error)); } }}>이 준비 취소</button>}
             </div>
           )}
           </div>

@@ -32,8 +32,7 @@ export function selectReferences(refs: any[], output: string, explicitUploadIds:
   if (explicitUploadIds.some(id => !candidates.some(ref => ref.upload_id === id)))
     throw Object.assign(new Error('지정한 원본 중 준비되지 않았거나 검토가 필요한 이미지가 있습니다.'), { code: 'REFERENCE_NOT_READY', statusCode: 409 });
   const explicit = explicitUploadIds.map(id => candidates.find(ref => ref.upload_id === id)!);
-  return [...explicit, ...candidates.filter(ref => !explicitUploadIds.includes(ref.upload_id))]
-    .slice(0, Math.max(6, explicit.length)).map(ref => ({ ...ref, purpose: ref.roles.join(', ') + ' 특성만 참고',
+  return (explicit.length ? explicit : candidates.slice(0, 6)).map(ref => ({ ...ref, purpose: ref.roles.join(', ') + ' 특성만 참고',
       reason: output + ' 요청과 관련된 역할', forbidden: ['인물 정체성', '의상', '행동', '장소', '카메라 구도'],
       note: (ref.roles.map((role: string) => role + ': ' + ref.roleUsage[role]).join('; ') + '. 사용자 참고 지시: ' + (ref.note?.startsWith('자동 분류:') ? '자동 관찰의 장면 내용은 계승하지 않음' : ref.note ?? '없음') + '. 해당 스타일 특성만 참고. 원본 인물·의상·행동·장소·구도를 복제하지 않는다.').slice(0, 2000) }));
 }
