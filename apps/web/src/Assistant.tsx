@@ -1,5 +1,6 @@
 import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { api } from './api.ts';
+import { stripEvidenceMarkers, inlineMarkdown } from './assistant-format.ts';
 
 // 웹 어시스턴트 — spec §7: 대화/메시지/SSE 스트림 + 승인 카드 + 우측 일정·작업 패널.
 
@@ -484,9 +485,7 @@ function safeText(value: unknown, fallback = '') {
 }
 
 function renderMarkdown(value: unknown) {
-  const text = safeText(value, '응답 내용이 없습니다.')
-    .replace(/\(?\s*e\d+(?:\s*,\s*e\d+)*\s*\)?/gi, '')
-    .replace(/\[e\d+\]/gi, '')
+  const text = stripEvidenceMarkers(safeText(value, '응답 내용이 없습니다.'))
     .replaceAll('\\n', '\n')
     .replace(/ {2,}/g, ' ')
     .trim();
@@ -504,10 +503,11 @@ function renderMarkdown(value: unknown) {
 }
 
 function formatInline(text: string) {
-  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
-    return <span key={index}>{part}</span>;
+  return inlineMarkdown(text).map((part, index) => {
+    if(part.kind==='link') return <a key={index} href={part.url} target="_blank" rel="noreferrer">{part.text}</a>;
+    if(part.kind==='strong')return <strong key={index}>{part.text}</strong>;
+    if(part.kind==='code')return <code key={index}>{part.text}</code>;
+    return <span key={index}>{part.text}</span>;
   });
 }
 

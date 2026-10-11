@@ -33,7 +33,7 @@ export function registerReadTools(reg: ToolRegistry) {
         if(!/^[a-f0-9]{40,64}$/.test(item.sha)) throw new Error('github_commits_invalid_sha');
         return {sha:item.sha,title:String(item.commit?.message??'').split('\n')[0],author:item.commit?.author?.name??null,date:item.commit?.committer?.date??item.commit?.author?.date??null,url:`https://github.com/${repo}/commit/${item.sha}`};
       });
-      return {status:'OK',repo,ref,observed_at:new Date().toISOString(),commits};
+      return {status:'OK',repo,ref,branches:allowed.map(item=>item.scope_key.slice(4)),observed_at:new Date().toISOString(),commits};
     },
   });
   reg.register({
