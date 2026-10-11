@@ -102,9 +102,10 @@ export function buildToolContext(
   if (process.env.NOTION_TOKEN) deps.notion = new NotionRest(process.env.NOTION_TOKEN);
   const appId = process.env.GITHUB_APP_ID;
   const key = process.env.GITHUB_APP_PRIVATE_KEY?.replace(/\\n/g, '\n');
-  const inst = process.env.GITHUB_APP_INSTALLATION_ID;
+  const inst = process.env.GITHUB_INSTALLATION_ID ?? process.env.GITHUB_APP_INSTALLATION_ID;
   if (appId && key && inst)
     deps.github = new GitHubRest(new InstallationTokenProvider(appId, key, inst));
+  else if (process.env.GITHUB_TOKEN) deps.github = new GitHubRest({token:async()=>process.env.GITHUB_TOKEN!});
   return {
     store: ctx.store,
     projectId,
@@ -219,14 +220,15 @@ async function executeRunInOrder(
         if (!r.ok) throw new Error(r.error);
         await store.emitRunEvent(runId, 'tool_call', {
           tool: plan.tool,
-          status: 'DONE',
+          status: (r.result as any)?.status ?? 'DONE',
+          provider_status: (r.result as any)?.provider_status,
           input: plan.input,
         });
         final = {
           status: (r.result as any)?.status === 'UNAVAILABLE' || (r.result as any)?.status === 'NOT_CONFIGURED' ? 'PARTIAL' : (r.result as any)?.status === 'NEEDS_CLARIFICATION' ? 'NEEDS_CLARIFICATION' : 'COMPLETE',
           phase: (r.result as any)?.status && (r.result as any).status !== 'OK' ? 'partial' : 'completed',
           text: formatReadResult(plan.tool, r.result),
-          extra: { tool: plan.tool, rows: Array.isArray(r.result) ? r.result.length : Array.isArray((r.result as any)?.commits) ? (r.result as any).commits.length : 1 },
+          extra: { tool: plan.tool, read_status:(r.result as any)?.status, rows: Array.isArray(r.result) ? r.result.length : Array.isArray((r.result as any)?.commits) ? (r.result as any).commits.length : 1 },
         };
       }
     } else {
