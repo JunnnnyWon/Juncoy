@@ -226,7 +226,7 @@ async function executeRunInOrder(
           status: (r.result as any)?.status === 'UNAVAILABLE' || (r.result as any)?.status === 'NOT_CONFIGURED' ? 'PARTIAL' : (r.result as any)?.status === 'NEEDS_CLARIFICATION' ? 'NEEDS_CLARIFICATION' : 'COMPLETE',
           phase: (r.result as any)?.status && (r.result as any).status !== 'OK' ? 'partial' : 'completed',
           text: formatReadResult(plan.tool, r.result),
-          extra: { tool: plan.tool, rows: Array.isArray(r.result) ? r.result.length : 1 },
+          extra: { tool: plan.tool, rows: Array.isArray(r.result) ? r.result.length : Array.isArray((r.result as any)?.commits) ? (r.result as any).commits.length : 1 },
         };
       }
     } else {
@@ -282,7 +282,7 @@ async function pickTool(ctx: KnowledgeCtx, registry: ToolRegistry, text: string)
   const tools = registry
     .names()
     .filter(n => registry.get(n)?.kind === 'read')
-    .join(', ');
+    .map(name => { const tool=registry.get(name)!; return {name,description:tool.description,input_schema:z.toJSONSchema(tool.input,{target:'draft-7'})}; });
   const schema = z.object({
     tool: z.string(),
     input: z.any(),
