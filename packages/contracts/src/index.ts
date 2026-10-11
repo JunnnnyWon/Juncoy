@@ -262,3 +262,4 @@ export const SummaryResult = z.object({
 });
 export type SummaryResultDTO = z.infer<typeof SummaryResult>;
 export * from './image-plan.ts';
+export * from './citation-text.ts';

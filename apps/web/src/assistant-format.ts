@@ -1,7 +1,5 @@
-export function stripEvidenceMarkers(text:string) {
-  // URLs, code and Markdown links may contain legitimate e-prefixed hashes.
-  return text.split(/(`[^`]*`|\[[^\]]*\]\([^)]+\)|https?:\/\/\S+)/g).map((part,index)=> index%2 ? part : part.replace(/\[\s*e\d+(?:\s*,\s*e\d+)*\s*\]/gi,'').replace(/(?<![A-Za-z0-9_])\(?\s*e\d+(?:\s*,\s*e\d+)*\s*\)?(?![A-Za-z0-9_])/gi,'')).join('');
-}
+import { cleanEvidenceText } from '@meeting/contracts';
+export const stripEvidenceMarkers = cleanEvidenceText;
 export function inlineMarkdown(text:string) {
   const literal=(value:string)=>value.replace(/\\([\\`*_{}\[\]<>#|])/g,'$1');
   return text.split(/((?<!\\)\*\*[^*]+\*\*|(?<!\\)`[^`]+`|(?<!\\)\[[^\]\n]+\]\((?:https?:\/\/|\/(?!\/))[^)\s]+\))/g).filter(Boolean).map(part=> {
