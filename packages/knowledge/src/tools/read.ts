@@ -9,6 +9,34 @@ import type { GitHubRest } from '../github.ts';
 
 export function registerReadTools(reg: ToolRegistry) {
   reg.register({
+    name:'github.list_commits', kind:'read', minRole:'reader', auditKind:'GITHUB_COMMITS',
+    description:'프로젝트에서 허용한 저장소·브랜치의 최근 커밋을 GitHub에서 실시간 조회',
+    input:z.object({ repo:z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(), ref:z.string().max(200).optional(), limit:z.number().int().min(1).max(30).default(10) }),
+    run:async(ctx,q)=> {
+      const scopes = await rows<any>(sql`SELECT sc.scope_key,sc.metadata FROM source_scopes sc JOIN knowledge_sources src ON src.id=sc.source_id WHERE src.project_id=${ctx.projectId} AND src.kind='github' AND src.status='ACTIVE' AND sc.allowed AND sc.scope_key LIKE 'ref:%'`,ctx.store.db);
+      const available = scopes.filter(item=>/^[\w.-]+\/[\w.-]+$/.test(item.metadata?.repo ?? ''));
+      const repositories = [...new Set<string>(available.map(item=>item.metadata.repo))];
+      if (!repositories.length) return {status:'NOT_CONFIGURED',commits:[]};
+      if (q.repo && !repositories.includes(q.repo)) throw new Error('github_repository_not_allowed');
+      if (!q.repo && repositories.length > 1) return {status:'NEEDS_CLARIFICATION',repositories,commits:[]};
+      const repo = q.repo ?? repositories[0]!;
+      const allowed = available.filter(item=>item.metadata.repo===repo);
+      const scope = q.ref ? allowed.find(item=>item.scope_key==='ref:'+q.ref) : allowed.find(item=>item.scope_key==='ref:main') ?? allowed.find(item=>item.scope_key==='ref:master') ?? allowed[0];
+      if (!scope) throw new Error('github_branch_not_allowed');
+      const ref = scope.scope_key.slice(4);
+      const gh=ctx.deps.github as GitHubRest|undefined;
+      if (!gh) return {status:'UNAVAILABLE',repo,ref,commits:[]};
+      const response=await gh.request(`/repos/${repo}/commits`,{sha:ref,per_page:String(q.limit)});
+      if(response.status!==200) return {status:'UNAVAILABLE',repo,ref,provider_status:response.status,commits:[]};
+      if(!Array.isArray(response.body)) throw new Error('github_commits_invalid_response');
+      const commits=response.body.slice(0,q.limit).map((item:any)=> {
+        if(!/^[a-f0-9]{40,64}$/.test(item.sha)) throw new Error('github_commits_invalid_sha');
+        return {sha:item.sha,title:String(item.commit?.message??'').split('\n')[0],author:item.commit?.author?.name??null,date:item.commit?.committer?.date??item.commit?.author?.date??null,url:`https://github.com/${repo}/commit/${item.sha}`};
+      });
+      return {status:'OK',repo,ref,observed_at:new Date().toISOString(),commits};
+    },
+  });
+  reg.register({
     name: 'knowledge.search',
     kind: 'read',
     description: '프로젝트 코퍼스 하이브리드 검색 — 질문자 ACL 적용',

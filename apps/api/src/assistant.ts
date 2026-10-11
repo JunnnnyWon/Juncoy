@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
 import { selectReferences, inferImageOutput } from '../../../packages/knowledge/src/image-selection.ts';
+import { isCommitRequest, isShortFollowup, commitRequestInput, resolveFollowup, formatReadResult } from '../../../packages/knowledge/src/tools/read-result.ts';
 import { z } from 'zod';
 import { sql, first, rows } from '@meeting/knowledge-db';
 import { AssistantMode, ArtBoardSnapshot, ImageBrief, ImageBriefDraft, ImageGenerationPlan, imageBriefHashInput } from '@meeting/contracts';
@@ -164,14 +165,17 @@ async function executeRunInOrder(
     const allMessages = await store.listMessages(conversationId, 1000);
     const currentIndex = allMessages.findIndex(message => message.run_id === runId && message.role === "user");
     const history = currentIndex >= 0 ? allMessages.slice(0, currentIndex + 1) : allMessages;
+    const explanationOnly = isShortFollowup(text);
+    text = resolveFollowup(text, history.filter(message=>message.role==='user' && message.run_id!==runId).map(message=>message.content));
+    if (!text) { const message='어떤 내용을 확인할까요? 질문이나 이전 요청을 알려 주세요.'; const messageId=await store.createMessage(conversationId,'assistant',message,{runId}); await store.updateRun(runId,{phase:'partial',status:'NEEDS_CLARIFICATION'}); await store.emitRunEvent(runId,'delta',{text:message,done:true}); await store.emitRunEvent(runId,'result',{status:'NEEDS_CLARIFICATION',message_id:messageId}); return; }
     const conversationImages = history.flatMap(message => (message.attachments as any[]).filter(image => image?.type === "generated_image").map(image => ({ ...image, message_id: message.id, response: message.content })));
     const current = history.find(message => message.run_id === runId && message.role === "user");
     const explicitTarget = (current?.attachments as any[])?.find(item => item?.type === "edit_image")?.id;
-    let mode = await classifyMode(ctx, text);
+    let mode = isCommitRequest(text) ? 'search' as const : explanationOnly ? 'answer' as const : await classifyMode(ctx, text);
     let parentImageId: string | undefined;
     let referenceImages: { id: string; instruction: string }[] = [];
     let generationRequest = text;
-    if (conversationImages.length || explicitTarget) {
+    if ((conversationImages.length || explicitTarget) && !isCommitRequest(text) && !explanationOnly) {
       const plan = await ctx.model.structured(z.object({ intent: z.enum(["new", "edit", "variant", "question", "other"]), image_number: z.number().int().nonnegative(), change: z.string().max(1000), preserve: z.string().max(1000), references: z.array(z.object({ image_number: z.number().int().positive(), instruction: z.string().min(1).max(500) })).max(15) }), { request: text, selected_image_id: explicitTarget, images: conversationImages.map((image, index) => ({ number: index + 1, id: image.id, prompt: String(image.prompt).slice(0, 1600), parent_image_id: image.parent_image_id, reference_images: image.reference_images, user_request: image.user_request })), conversation: history.slice(-30).map(message => ({ role: message.role, content: message.content.slice(0, 2000), image_ids: (message.attachments as any[]).filter(item => item?.type === "generated_image").map(item => item.id) })) }, "대화 전체 맥락으로 이미지 작업과 참조를 능동적으로 결정한다. 사용자는 이미지 순번을 말할 필요가 없다. 더 밝게, 이 느낌 유지, 이전 분위기로, 다시 수정 등은 기존 이미지 편집이다. 최근 성공 이미지는 명시적 부분 수정일 때만 기본 기준이다. 새 인물·새 장소·다른 후보·UI 신규 생성 요청에 이전 인물/의상/행동/구도를 자동 상속하지 않는다. variant는 화풍만 계승하고 preserve에 인물과 구도를 넣지 않는다. 씬 변경과 HUD 유지는 edit로 선택하되 preserve에는 HUD만 넣는다. 명시 선택 또는 이전 대화에서 지목한 인물/배경/조명에 맞는 이미지가 있으면 그 대상을 선택한다. new는 기존 결과와 무관한 새 생성, variant는 다른 후보, question은 설명만 하는 질문, other는 이미지 무관 요청이다. image_number는 주 원본 순번. references에는 이전 대화의 요구와 누적 참조 관계를 읽고 필요한 보조 이미지와 그 용도(인물, 배경, 조명 등)를 선택한다. 사용자가 순번을 명시하지 않아도 이전에 좋아했던 조명이나 배경을 가져오라고 하면 해당 이미지를 찾는다. 단순 밝기 변경은 주 원본만 사용하고, 과거 참조가 필요한 복합 요청만 보조를 추가한다. 관련 없는 이미지는 넣지 않는다. 주 원본은 references에서 제외. 서로 다른 대상이 똑같이 가능해 결정 불가능할 때만 image_number=0. change와 preserve는 짧고 구체적인 한국어, JSON 전체를 간결하게 반환한다.");
       if (["edit", "variant"].includes(plan.result.intent) || explicitTarget || /다른 후보|새 후보/.test(text) || (/유지/.test(text) && /씬|장면|배경/.test(text))) {
         if (/다른 후보|새 후보/.test(text)) plan.result.intent = 'variant';
@@ -203,7 +207,7 @@ async function executeRunInOrder(
     } else if (mode === 'search') {
       await phase('executing_tool');
       // 도구 선택 — 모델이 도구와 입력을 고른다 (registry가 스키마·권한으로 재검증).
-      const plan = await pickTool(ctx, registry, text);
+      const plan = isCommitRequest(text) ? {tool:'github.list_commits',input:commitRequestInput(text)} : await pickTool(ctx, registry, text);
       if (!plan) {
         final = {
           status: 'NEEDS_CLARIFICATION',
@@ -219,9 +223,9 @@ async function executeRunInOrder(
           input: plan.input,
         });
         final = {
-          status: 'COMPLETE',
-          phase: 'completed',
-          text: JSON.stringify(r.result),
+          status: (r.result as any)?.status === 'UNAVAILABLE' || (r.result as any)?.status === 'NOT_CONFIGURED' ? 'PARTIAL' : (r.result as any)?.status === 'NEEDS_CLARIFICATION' ? 'NEEDS_CLARIFICATION' : 'COMPLETE',
+          phase: (r.result as any)?.status && (r.result as any).status !== 'OK' ? 'partial' : 'completed',
+          text: formatReadResult(plan.tool, r.result),
           extra: { tool: plan.tool, rows: Array.isArray(r.result) ? r.result.length : 1 },
         };
       }
@@ -277,14 +281,7 @@ async function executeRunInOrder(
 async function pickTool(ctx: KnowledgeCtx, registry: ToolRegistry, text: string) {
   const tools = registry
     .names()
-    .filter(
-      (n) =>
-        n.endsWith('search') ||
-        n.includes('query') ||
-        n.includes('fetch') ||
-        n.includes('refresh') ||
-        n.includes('status'),
-    )
+    .filter(n => registry.get(n)?.kind === 'read')
     .join(', ');
   const schema = z.object({
     tool: z.string(),
@@ -299,7 +296,7 @@ async function pickTool(ctx: KnowledgeCtx, registry: ToolRegistry, text: string)
 회의 전사→meeting.search_transcript, 지식 검색→knowledge.search, Discord 새로고침→discord.refresh_context.
 못 고르면 tool에 "none". 입력은 각 도구 스키마에 맞게 최소한만.`,
     );
-    if (res.result.tool === 'none' || !registry.has(res.result.tool)) return null;
+    if (res.result.tool === 'none' || registry.get(res.result.tool)?.kind !== 'read') return null;
     return { tool: res.result.tool, input: res.result.input ?? {} };
   } catch {
     return null;

@@ -47,6 +47,7 @@ export const AssistantToolName = z.enum([
   'notion.query_schedule',
   'notion.query_tasks',
   'github.search_code',
+  'github.list_commits',
   'github.fetch_file',
   'meeting.search_transcript',
   'file.get_ingestion_status',
