@@ -4040,3 +4040,13 @@ body:has(.art-workspace) { overflow:hidden; }
   .art-workspace .art-board { min-height:0; flex:1; }
   .art-workspace .art-inspector.mobile-hidden, .art-workspace .art-board.mobile-hidden { display:none; }
 }
+
+/* 어시스턴트 — 셸을 머리글 아래 남은 화면 높이에 꽉 채운다. 고정 min-height(100dvh - 168px)로는
+   화면 아래에 빈 띠가 남았다. 채팅창과 왼쪽 대화 목록이 화면 바닥에 붙고, 긴 대화는 안에서 스크롤한다. */
+.app-shell:has(.workspace-assistant) { display:grid; grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); height:100dvh; min-height:0; overflow:hidden; }
+.app-shell:has(.workspace-assistant) .app-header { position:relative; }
+.app-shell:has(.workspace-assistant) .main-shell { display:flex; flex-direction:column; min-height:0; height:100%; overflow:hidden; }
+.app-shell:has(.workspace-assistant) .workspace-assistant { flex:1; min-height:0; height:auto; border-bottom:0; }
+.app-shell:has(.workspace-assistant) .workspace-assistant .assistant-convs { min-height:0; overflow-y:auto; }
+.app-shell:has(.workspace-assistant) .workspace-assistant .assistant-main { min-height:0; overflow:hidden; }
+.app-shell:has(.workspace-assistant) .workspace-assistant .assistant-msgs { min-height:0; max-height:none; overflow-y:auto; }
