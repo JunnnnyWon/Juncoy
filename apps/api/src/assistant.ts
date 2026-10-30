@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
 import { selectReferences, inferImageOutput } from '../../../packages/knowledge/src/image-selection.ts';
-import { isCommitRequest, isShortFollowup, commitRequestInput, resolveFollowup, formatReadResult } from '../../../packages/knowledge/src/tools/read-result.ts';
+import { isCommitRequest, isShortFollowup, commitRequestInput, resolveFollowup, formatReadResult, needsGroundedAnswer } from '../../../packages/knowledge/src/tools/read-result.ts';
 import { z } from 'zod';
 import { sql, first, rows } from '@meeting/knowledge-db';
 import { AssistantMode, ArtBoardSnapshot, ImageBrief, ImageBriefDraft, ImageGenerationPlan, imageBriefHashInput } from '@meeting/contracts';
@@ -73,8 +73,8 @@ async function classifyMode(
       out as unknown as z.ZodType<{ mode: z.infer<typeof AssistantMode> }>,
       { request: text },
       `사용자 요청을 실행 모드 하나로 분류한다.
-- answer: 프로젝트 자료에 근거한 질문 답변 (기본값)
-- search: 일정·작업·코드·파일 등 목록/조회
+- answer: 프로젝트 자료에 근거한 질문 답변 (기본값). 자료·레퍼런스·파일이 어디 있는지, 무엇인지, 어떻게 정해졌는지 묻는 질문도 answer.
+- search: Notion 일정·작업 목록, GitHub 코드·커밋, 회의 전사 원문처럼 특정 시스템의 목록/원문 조회
 - propose: 변경은 하지 않고 계획·미리보기만
 - mutate: Notion 일정/작업/페이지를 실제로 추가·수정
 - generate: 이미지 생성 요청
@@ -189,6 +189,9 @@ async function executeRunInOrder(
     }
     if (ctx.model) await store.updateRun(runId, { model: 'solar' });
     const tctx = buildToolContext(ctx, projectId, userId, role, config);
+    // 도구 선택 — 모델이 도구와 입력을 고른다 (registry가 스키마·권한으로 재검증).
+    let plan = mode === 'search' ? (isCommitRequest(text) ? {tool:'github.list_commits',input:commitRequestInput(text)} : await pickTool(ctx, registry, tctx, text)) : undefined;
+    if (needsGroundedAnswer(plan?.tool)) { mode = 'answer'; plan = undefined; }
 
     let final: { status: string; phase: string; text: string; extra?: Record<string, any> };
     // 지식 답변 파이프라인 — answer 모드이거나 search 도구 선택·실행이 실패해
@@ -212,8 +215,6 @@ async function executeRunInOrder(
       final = await runAnswer();
     } else if (mode === 'search') {
       await phase('executing_tool');
-      // 도구 선택 — 모델이 도구와 입력을 고른다 (registry가 스키마·권한으로 재검증).
-      const plan = isCommitRequest(text) ? {tool:'github.list_commits',input:commitRequestInput(text)} : await pickTool(ctx, registry, tctx, text);
       if (!plan) {
         // 도구를 못 고르거나 해당 커넥터가 미설정 → 지식 답변으로 폴백.
         final = await runAnswer();

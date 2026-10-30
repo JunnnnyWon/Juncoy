@@ -56,6 +56,8 @@ function formatItem(item: any): string {
   return '- ' + head + (meta ? ' · ' + meta : '') + (body ? '\n  ' + escapeText(String(body).slice(0, 1000)) : '');
 }
 
+/** knowledge.search 결과는 검색 조각 원문이다. 사용자에게 그대로 보이지 않고 근거 기반 답변(knowledge.ask)으로 보낸다. */
+export function needsGroundedAnswer(tool: string | undefined) { return tool === 'knowledge.search'; }
 export function formatReadResult(tool: string, result: any): string {
   if (tool === 'github.list_commits') {
     if (result.status === 'NOT_CONFIGURED') return '이 프로젝트에 조회 가능한 GitHub 저장소가 연결되어 있지 않습니다.';
