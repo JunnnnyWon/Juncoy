@@ -72,7 +72,17 @@ export class ToolRegistry {
       .update(JSON.stringify(z.toJSONSchema(def.input, { target: 'draft-7' })))
       .digest('hex')
       .slice(0, 16);
-    const result = await def.run(ctx, parsed.data as any);
-    return { ok: true as const, result, inputSchemaHash, auditKind: def.auditKind, idempotencyKey };
+    try {
+      const result = await def.run(ctx, parsed.data as any);
+      return { ok: true as const, result, inputSchemaHash, auditKind: def.auditKind, idempotencyKey };
+    } catch (e) {
+      // 커넥터 미설정·provider 오류·타임아웃 같은 도구 내부 예외가 run 전체를
+      // 죽이지 않게 구조화된 실패로 변환한다 (QA 10-12). 원본 메시지만 남기고
+      // 스택·시크릿이 섞인 오류 객체는 노출하지 않는다.
+      return {
+        ok: false as const,
+        error: `tool_error:${String((e as any)?.message ?? e).slice(0, 200)}`,
+      };
+    }
   }
 }

@@ -15,6 +15,14 @@ export interface RetrievedChunk {
   span: Record<string, any>;
   /** 후보 추출 시점의 current content_hash — 생성 전 캡처해 재검증 기준으로 쓴다 (RAG-004). */
   revision: string;
+  /** 출처별 revision 문자열 (github는 `<head>:<blobSha>`) — permalink 복원용. */
+  source_revision: string | null;
+  /** 원본 발생/수정 시각 + 수집 시각 — "최신" 판단과 화면 표시에 쓴다. */
+  occurred_at: string | null;
+  modified_at: string | null;
+  indexed_at: string | null;
+  /** 문서 metadata (github: repo/ref/path/head, meeting: title 등). */
+  metadata: Record<string, any> | null;
   score: number;
   keyword_rank: number | null;
   vector_rank: number | null;
@@ -46,7 +54,15 @@ interface ChunkRow {
   content: string;
   span: any;
   revision: string;
+  source_revision: string | null;
+  occurred_at: Date | string | null;
+  modified_at: Date | string | null;
+  indexed_at: Date | string | null;
+  metadata: Record<string, any> | null;
 }
+
+const iso = (v: Date | string | null | undefined) =>
+  v == null ? null : v instanceof Date ? v.toISOString() : new Date(v).toISOString();
 
 /**
  * 출처별 최소 커버리지 (RAG-019): 한 출처가 후보를 독점하지 않도록
@@ -127,11 +143,51 @@ export async function keywordSearch(
     : sql``;
   return rows<ChunkRow & { kw: number }>(
     sql`SELECT c.id AS chunk_id, d.id AS document_id, d.stable_key, src.kind AS source,
-          c.content, c.span, v.content_hash AS revision,
+          c.content, c.span, v.content_hash AS revision, v.source_revision,
+          v.source_occurred_at AS occurred_at, v.source_modified_at AS modified_at,
+          d.created_at AS indexed_at, d.metadata,
           similarity(c.content, ${q}) AS kw
         ${baseFrom(projectId, acl)}
           AND (c.content % ${q} ${identOr})
         ORDER BY kw DESC LIMIT ${limit}`,
+    store.db,
+  );
+}
+
+/**
+ * 최신 문서 보강 (QA 10-12): "최근/마지막" 질문에서 최신 문서가
+ * 유사도 순위 밖이면 근거에서 누락된다. 소스별 최신 문서의 앞쪽
+ * 청크를 항상 후보에 추가해 모델이 최신 시각을 비교할 수 있게 한다.
+ */
+export async function recentSearch(
+  store: KnowledgeStore,
+  projectId: string,
+  chunksPerDoc = 2,
+  acl?: AclInput,
+) {
+  return rows<ChunkRow>(
+    sql`WITH newest AS (
+          SELECT DISTINCT ON (src.kind) d.id AS document_id
+          FROM documents d
+          JOIN chunk_sets s ON s.document_id=d.id AND s.active
+            AND s.version_id = d.current_version_id
+          JOIN document_versions v ON v.id=d.current_version_id
+          JOIN knowledge_sources src ON src.id=d.source_id AND src.project_id=${projectId}
+          WHERE NOT d.deleted AND d.state='READY' AND NOT d.dirty ${aclClause(acl)}
+          ORDER BY src.kind,
+            coalesce(v.source_modified_at, v.source_occurred_at, d.updated_at) DESC
+        )
+        SELECT c.id AS chunk_id, d.id AS document_id, d.stable_key, src.kind AS source,
+          c.content, c.span, v.content_hash AS revision, v.source_revision,
+          v.source_occurred_at AS occurred_at, v.source_modified_at AS modified_at,
+          d.created_at AS indexed_at, d.metadata
+        FROM newest n
+        JOIN chunk_sets s ON s.document_id=n.document_id AND s.active
+        JOIN chunks c ON c.chunk_set_id=s.id AND c.ordinal < ${chunksPerDoc}
+        JOIN documents d ON d.id=n.document_id
+        JOIN document_versions v ON v.id=d.current_version_id
+        JOIN knowledge_sources src ON src.id=d.source_id
+        ORDER BY coalesce(v.source_modified_at, v.source_occurred_at, d.updated_at) DESC`,
     store.db,
   );
 }
@@ -151,7 +207,9 @@ export async function vectorSearch(
   const lit = `[${vec.join(',')}]`;
   return rows<ChunkRow & { dist: number }>(
     sql`SELECT c.id AS chunk_id, d.id AS document_id, d.stable_key, src.kind AS source,
-          c.content, c.span, v.content_hash AS revision,
+          c.content, c.span, v.content_hash AS revision, v.source_revision,
+          v.source_occurred_at AS occurred_at, v.source_modified_at AS modified_at,
+          d.created_at AS indexed_at, d.metadata,
           (e.embedding <=> ${lit}::vector) AS dist
         FROM chunks c
         JOIN chunk_sets s ON s.id=c.chunk_set_id AND s.active
@@ -193,7 +251,19 @@ export async function retrieve(
   const byId = new Map<string, ChunkRow>();
   for (const c of [...kw, ...vec]) if (!byId.has(c.chunk_id)) byId.set(c.chunk_id, c);
   const ordered = perSourceQuota(merged, (m) => byId.get(m.id)!.source, opts.limit ?? 40);
-  return ordered.map((m): RetrievedChunk => {
+  const seen = new Set(ordered.map((m) => m.id));
+  const recent = (await recentSearch(store, opts.projectId, 2, opts.acl)).filter(
+    (r) => !seen.has(r.chunk_id),
+  );
+  for (const r of recent) byId.set(r.chunk_id, r);
+  const tail = recent.map(
+    (r): { id: string; score: number; ranks: (number | null)[] } => ({
+      id: r.chunk_id,
+      score: 0,
+      ranks: [],
+    }),
+  );
+  return [...ordered, ...tail].map((m): RetrievedChunk => {
     const r = byId.get(m.id)!;
     return {
       chunk_id: m.id,
@@ -203,9 +273,14 @@ export async function retrieve(
       content: r.content,
       span: r.span,
       score: m.score,
-      keyword_rank: m.ranks[0],
-      vector_rank: m.ranks[1],
+      keyword_rank: m.ranks[0] ?? null,
+      vector_rank: m.ranks[1] ?? null,
       revision: r.revision,
+      source_revision: r.source_revision,
+      occurred_at: iso(r.occurred_at),
+      modified_at: iso(r.modified_at),
+      indexed_at: iso(r.indexed_at),
+      metadata: r.metadata ?? null,
     };
   });
 }

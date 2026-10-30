@@ -28,6 +28,7 @@
     "verify:load": "tsx scripts/load.ts",
     "schema": "tsx scripts/schemas.ts",
     "retention": "tsx scripts/retention.ts",
+    "status:knowledge": "tsx scripts/status-knowledge.ts",
     "init:env": "tsx scripts/init-env.ts",
     "status": "tsx scripts/status.ts",
     "reconcile": "tsx scripts/reconcile-outbox.ts",

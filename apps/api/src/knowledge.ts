@@ -418,7 +418,8 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
     const ref = typeof payload?.ref === 'string' ? payload.ref.replace('refs/heads/', '') : null;
     if (!repo) return { received: true, queued: false };
     // source 바인딩 (RAG-014): "첫 ACTIVE 소스"가 아니라 이 repo를 scope로
-    // 등록한 github 소스를 찾는다. push면 ref 허용 스코프까지 확인한다.
+    // 등록한 github 소스를 찾는다. ref 매칭은 요구하지 않는다 — push 자체가
+    // 최근 활동의 증거이므로 미등록 ref는 아래에서 자동 등록한다.
     const src = await first<{ id: string }>(
       sql`SELECT s.id FROM knowledge_sources s
           WHERE s.kind='github' AND s.status='ACTIVE'
@@ -427,12 +428,24 @@ export function registerKnowledgeRoutes(app: FastifyInstance, deps: Deps) {
               WHERE sc.source_id=s.id AND sc.allowed
                 AND sc.scope_key LIKE 'ref:%'
                 AND sc.metadata->>'repo' = ${repo}
-                ${ref ? sql`AND sc.scope_key = ${`ref:${ref}`}` : sql``}
             )
           LIMIT 1`,
       c.store.db,
     );
-    if (!src) return { received: true, queued: false, ignored: 'unregistered_repo_or_ref' };
+    if (!src) return { received: true, queued: false, ignored: 'unregistered_repo' };
+    // push된 미등록 ref 자동 등록 — 소스당 ref 수 상한으로 남용을 막는다.
+    if (event === 'push' && ref) {
+      const count = await first<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM source_scopes
+            WHERE source_id=${src.id} AND scope_key LIKE 'ref:%'`,
+        c.store.db,
+      );
+      if ((count?.n ?? 0) < 100)
+        await sql`INSERT INTO source_scopes(id, source_id, scope_key, allowed, metadata)
+            VALUES (gen_random_uuid(), ${src.id}, ${'ref:' + ref}, true,
+              ${JSON.stringify({ repo, auto_registered: true, via: 'webhook' })}::jsonb)
+            ON CONFLICT (source_id, scope_key) DO NOTHING`.execute(c.store.db);
+    }
     // dedupe + 잡 생성을 한 트랜잭션으로 — 이벤트만 저장되고 잡이 빠지지 않는다.
     const { eventId } = await c.store.recordSourceEventWithJob(
       src.id,

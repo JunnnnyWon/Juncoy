@@ -94,3 +94,73 @@ docker compose --env-file .env.production -f infra/compose.yml up -d --no-deps a
 QA 원본·중간 사실·단계 파일의 보관 기한은 180일입니다. 검증 결과를 공유할 때는 익명화한 집계 보고서만 전달합니다. 원음은 성공 후 24시간·최대 7일이며, 사용자에게서 받은 원본 파일은 별도 사용자 소유 자료로 그대로 둡니다.
 
 게시 결과가 불명확한 카드의 삭제는 먼저 봇 작성자 ID와 고유 footer로 이력을 확인합니다. 이력에서도 확인할 수 없으면 `MESSAGE_DELETION_UNCERTAIN`으로 남기고 접근 차단을 유지합니다. 게시 여부가 불명확한 상태를 삭제 완료로 표시하지 않습니다.
+
+## 지식(RAG) 스택 운영
+
+QA 10-12 이후 추가된 절차입니다. 지식 스택은 `infra/compose.knowledge.yml`에 있고 회의 스택과 다른 컨테이너·DB를 씁니다.
+
+### Discord 대화 수집 활성화
+
+Discord 채팅 기록이 답변에 빠지는 가장 흔한 원인은 `discord-context` 컨테이너가 꺼져 있는 것입니다. 유일한 스위치는 `DISCORD_CONTEXT_ENABLED`입니다 — 꺼져 있으면 프로세스가 즉시 종료하고 컨테이너는 `Exited (0)`으로 남습니다.
+
+1. Discord Developer Portal → 봇 애플리케이션 → **Message Content Intent**를 켭니다. 꺼져 있으면 Gateway가 연결돼도 메시지 본문을 받지 못해 수집이 진행되지 않습니다.
+2. `.env.knowledge`에 `DISCORD_CONTEXT_ENABLED=true`, `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`를 설정합니다. 수집 채널을 제한하려면 `DISCORD_CONTEXT_CHANNELS`에 채널 ID를 csv로 적습니다.
+3. 스코프 시드(멱등): `pnpm tsx scripts/seed-knowledge.ts` — 지정·열거 채널과 `guild:<id>` 스코프를 등록합니다.
+4. 기동/재기동:
+
+```bash
+docker compose -f infra/compose.knowledge.yml \
+  --env-file .env.production --env-file .env.knowledge up -d
+docker logs -f --tail 50 discord-knowledge-discord
+```
+
+`discord-context`는 별도 프로파일 없이 스택에 포함됩니다. `DISCORD_CONTEXT_ENABLED`가 `true`가 아니거나 봇 토큰이 없으면 프로세스가 즉시 종료(exit 0)하고 `restart: on-failure`라 재시작 루프는 없습니다. `docker ps -a`에서 `Exited (0)`이면 플래그가 꺼진 상태입니다.
+
+로그에 `reconcile`/`backfill` 진행이 보이고 `pnpm status:knowledge`의 discord 소스 `last_reconciled_at`이 갱신되면 정상입니다.
+
+### 지식 워커 상태 점검
+
+```bash
+pnpm status:knowledge
+```
+
+출력 항목:
+
+- `sources`: 소스별 ACTIVE 상태·문서 수·마지막 대조 시각
+- `scopes`: `ref:*`/`channel:*`/`guild:*` 스코프와 각 `last_reconciled_at` — 오래 멈춘 스코프는 워커 중단이나 권한 상실 신호입니다.
+- `jobs`: `RETRYABLE`/`DEAD_LETTER` 잡이 누적되면 `knowledge_jobs`에서 error를 확인합니다.
+- `freshness`: 소스별 가장 최근 `source_occurred_at`(원본 발생 시각). 회의가 이 값에서 멈췄으면 회의 수집이 중단된 것입니다.
+- `answers`: 최근 7일 답변 상태 분포 — `FAILED`가 늘면 모델/커넥터 설정을 봅니다.
+
+컨테이너 생존 확인: `docker ps | grep discord-knowledge`로 `discord-knowledge-worker`가 떠 있는지 확인합니다. CI는 `api`만 재배포하므로 지식 스택은 별도로 `up -d`해야 새 코드가 반영됩니다.
+
+### 지식 스택 재배포
+
+```bash
+cd /home/junnnnyserver/services/discord-meeting-bot
+MEETING_IMAGE="<검증된 이미지 태그>" docker compose -f infra/compose.knowledge.yml \
+  --env-file .env.production --env-file .env.knowledge \
+  up -d --build --force-recreate knowledge-worker discord-context
+# 스키마 변경이 있으면 migrate 서비스가 선행된다 (service_completed_successfully 조건).
+```
+
+> 주의: `knowledge-worker`/`discord-context`의 이미지는 `MEETING_IMAGE`에서 오고,
+> `api`는 `MEETING_API_IMAGE`에서 온다. `.env.production`에 같은 키가 중복되면
+> **마지막 값이 유효**하다. 지식 스택만 `up -d`하고 `MEETING_IMAGE`를 안 바꾸면
+> 구 이미지로 컨테이너가 재생성돼 소스 코드가 최신인데도 구 동작을 한다 —
+> 배포 후 `docker inspect <컨테이너> --format '{{.Config.Image}}'`로 확인한다.
+
+### GitHub 수집 범위
+
+- `ref:*` 스코프만 수집합니다. seed 기본값은 `main,SideView,Stairs`입니다.
+- 10-12 QA 이후 워커가 10분 주기로 최근 30일 내 커밋이 있는 브랜치를 자동 등록합니다(`GITHUB_DISCOVERY_*` 상수). push webhook도 미등록 ref를 자동 등록합니다(소스당 100개 상한).
+- 근거 링크는 이제 `blob/<head_sha>/` permalink라 브랜치 삭제·개명 후에도 열립니다. 이미 인덱싱된 문서는 `source_revision`의 head에서 permalink를 복원합니다.
+- 수집이 안 되는 브랜치는 `status:knowledge`의 `scopes`에서 `ref:<브랜치>` 존재와 `allowed`를 확인합니다. 수동 추가는 SQL `INSERT INTO source_scopes ... scope_key='ref:<이름>'` 또는 seed 스크립트 재실행으로 가능합니다.
+
+### 답변 신선도
+
+문서 시각은 `source_occurred_at`(원본 발생), `source_modified_at`(원본 수정), `indexed_at`(지식 등록)으로 분리됩니다. 답변 근거 카드에 원본 날짜가 표시되고, 모델은 "최신/마지막" 질문에 이 값들을 비교해 날짜를 명시합니다. 특정 소스의 `newest_source_occurred`가 오래됐으면 수집 문제이고, `last_indexed`만 오래됐으면 인덱서 문제입니다.
+
+### 어시스턴트 스트림
+
+`/api/assistant/runs/:id/stream`은 `Last-Event-ID`를 받아 끊긴 지점부터 재생합니다. 클라이언트가 자동 재연결하며, 재연결이 안 되면 4초 폴링으로 run 종결을 잡습니다. run이 끝났는데도 화면이 '작업을 실행하는 중'이면 브라우저 네트워크 탭에서 스트림 상태를 확인하고 `GET /api/assistant/runs/:id`로 실제 상태를 봅니다.

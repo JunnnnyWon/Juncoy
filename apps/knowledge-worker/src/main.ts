@@ -23,6 +23,9 @@ import { loadKnowledgeConfig } from '@meeting/providers';
 const INDEX_MS = 3_000;
 const JUNCOY_MS = 5_000;
 const GITHUB_MS = 60_000;
+const GITHUB_DISCOVERY_MS = 600_000; // 최근 활동 브랜치 자동 등록 주기
+const GITHUB_ACTIVE_DAYS = 30; // 최근 N일 내 커밋된 브랜치만 등록 대상
+const GITHUB_DISCOVERY_CAP = 25; // 한 주기에 repo당 새로 등록하는 ref 상한
 const NOTION_INCREMENTAL_MS = 120_000;
 const NOTION_STRUCTURE_MS = 900_000;
 
@@ -145,6 +148,62 @@ const main = async () => {
       }
     };
     every(GITHUB_MS, runGitHub);
+
+    // ── 최근 활동 브랜치 자동 등록 — seed된 ref만 보면 새 브랜치를 영구히
+    // 놓친다 (QA 10-12). N일 내 커밋이 있는 브랜치를 ref:* scope로 upsert한다.
+    const discoverBranches = async () => {
+      try {
+        const bound = await rows<{ source_id: string; repo: string }>(
+          sql`SELECT DISTINCT s.source_id, s.metadata->>'repo' AS repo
+              FROM source_scopes s JOIN knowledge_sources k ON k.id=s.source_id
+              WHERE k.kind='github' AND k.status='ACTIVE' AND s.scope_key LIKE 'ref:%'
+                AND s.metadata->>'repo' IS NOT NULL`,
+          store.db,
+        );
+        const repoSource = new Map<string, string>();
+        for (const b of bound)
+          if (b.repo && !repoSource.has(b.repo)) repoSource.set(b.repo, b.source_id);
+        if (process.env.GITHUB_REPO && !repoSource.has(process.env.GITHUB_REPO)) {
+          // scope가 하나도 없는 신규 설정 — ACTIVE 소스에 환경 repo를 묶는다.
+          const src = await first<{ id: string }>(
+            sql`SELECT id FROM knowledge_sources WHERE kind='github' AND status='ACTIVE' LIMIT 1`,
+            store.db,
+          );
+          if (src) repoSource.set(process.env.GITHUB_REPO, src.id);
+        }
+        const cutoff = Date.now() - GITHUB_ACTIVE_DAYS * 86_400_000;
+        for (const [repo, sourceId] of repoSource) {
+          const list = await rest.branches(repo);
+          if (list.status !== 200 || !Array.isArray(list.body)) continue;
+          let added = 0;
+          for (const br of list.body) {
+            const name = (br as any)?.name as string | undefined;
+            if (!name || added >= GITHUB_DISCOVERY_CAP) continue;
+            const existing = await first(
+              sql`SELECT id FROM source_scopes WHERE source_id=${sourceId}
+                    AND scope_key=${'ref:' + name}`,
+              store.db,
+            );
+            if (existing) continue;
+            const detail = await rest.branch(repo, name);
+            const pushed =
+              detail.status === 200
+                ? (detail.body?.commit?.commit?.committer?.date as string | undefined)
+                : undefined;
+            if (!pushed || Date.parse(pushed) < cutoff) continue;
+            await sql`INSERT INTO source_scopes(id, source_id, scope_key, allowed, metadata)
+                VALUES (gen_random_uuid(), ${sourceId}, ${'ref:' + name}, true,
+                  ${JSON.stringify({ repo, auto_registered: true, pushed_at: pushed })}::jsonb)
+                ON CONFLICT (source_id, scope_key) DO NOTHING`.execute(store.db);
+            added++;
+          }
+          if (added) log(`github discovery ${repo}: +${added} refs`);
+        }
+      } catch (e) {
+        process.stderr.write(`github discovery: ${e}\n`);
+      }
+    };
+    every(GITHUB_DISCOVERY_MS, discoverBranches);
   } else log('github auth unset — github collector off');
 
   // ── Notion 증분(2분)/구조(15분) 대조 루프 (§6.1) ────────────────
