@@ -3,6 +3,7 @@ import { sql, rows, first } from '@meeting/knowledge-db';
 import type { ToolContext, ToolRegistry } from './registry.ts';
 import { retrieve } from '../retrieve.ts';
 import { answerQuestion } from '../answer.ts';
+import { ConversationMemorySchema } from '../conversation.ts';
 import type { GitHubRest } from '../github.ts';
 
 // 읽기 도구 — spec §6. 전부 reader 최소 권한, 외부 상태를 바꾸지 않는다.
@@ -68,7 +69,10 @@ export function registerReadTools(reg: ToolRegistry) {
     description: '근거 기반 문답 — coverage·재검증 포함, 기존 answer 파이프라인',
     minRole: 'reader',
     auditKind: 'KNOWLEDGE_ASK',
-    input: z.object({ question: z.string().min(1).max(4000) }),
+    input: z.object({
+      question: z.string().min(1).max(4000),
+      conversation: ConversationMemorySchema.optional(),
+    }),
     run: async (ctx, q) => {
       if (!ctx.model) throw new Error('model_unavailable');
       return answerQuestion(
@@ -82,6 +86,7 @@ export function registerReadTools(reg: ToolRegistry) {
         },
         ctx.projectId,
         { question: q.question, temporal_mode: 'current' },
+        { conversation: q.conversation },
       );
     },
   });

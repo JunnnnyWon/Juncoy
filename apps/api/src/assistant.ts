@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createHash } from 'node:crypto';
 import { selectReferences, inferImageOutput } from '../../../packages/knowledge/src/image-selection.ts';
 import { isCommitRequest, isShortFollowup, commitRequestInput, resolveFollowup, formatReadResult, needsGroundedAnswer } from '../../../packages/knowledge/src/tools/read-result.ts';
+import { buildConversationMemory, understandTurn, answerFromConversation, hasMemory } from '../../../packages/knowledge/src/conversation.ts';
+import { wantsLinks } from '../../../packages/knowledge/src/answer.ts';
 import { z } from 'zod';
 import { sql, first, rows } from '@meeting/knowledge-db';
 import { AssistantMode, ArtBoardSnapshot, ImageBrief, ImageBriefDraft, ImageGenerationPlan, imageBriefHashInput } from '@meeting/contracts';
@@ -163,28 +165,42 @@ async function executeRunInOrder(
   try {
     if (await cancelled()) return;
     await phase('planning_tool_call');
-    const allMessages = await store.listMessages(conversationId, 1000);
+    // 최근 메시지부터 읽는다. 오래된 순으로 N개를 읽으면 긴 대화에서 방금 보낸 메시지가 빠진다.
+    const allMessages = await store.listRecentMessages(conversationId, 300);
     const currentIndex = allMessages.findIndex(message => message.run_id === runId && message.role === "user");
     const history = currentIndex >= 0 ? allMessages.slice(0, currentIndex + 1) : allMessages;
     const explanationOnly = isShortFollowup(text);
+    const userMessage = text;
     text = resolveFollowup(text, history.filter(message=>message.role==='user' && message.run_id!==runId).map(message=>message.content));
     if (!text) { const message='어떤 내용을 확인할까요? 질문이나 이전 요청을 알려 주세요.'; const messageId=await store.createMessage(conversationId,'assistant',message,{runId}); await store.updateRun(runId,{phase:'partial',status:'NEEDS_CLARIFICATION'}); await store.emitRunEvent(runId,'delta',{text:message,done:true}); await store.emitRunEvent(runId,'result',{status:'NEEDS_CLARIFICATION',message_id:messageId}); return; }
     const conversationImages = history.flatMap(message => (message.attachments as any[]).filter(image => image?.type === "generated_image").map(image => ({ ...image, message_id: message.id, response: message.content })));
     const current = history.find(message => message.run_id === runId && message.role === "user");
     const explicitTarget = (current?.attachments as any[])?.find(item => item?.type === "edit_image")?.id;
+    // 이미지 편집 계획은 대화 전체를 따로 보므로 원문(generationRequest)을 쓰고, 답변·조회에는 맥락을 채운 질문을 쓴다.
+    const originalText = text;
+    // 대화 기억 — 이 대화(세션)의 이전 메시지만 쓴다. 다른 대화의 기록은 섞지 않는다.
+    const memory = buildConversationMemory(history.filter((message) => message.run_id !== runId));
+    let fromConversation = false;
+    if (hasMemory(memory)) {
+      const understood = await understandTurn(ctx.model, userMessage, memory);
+      // 모델이 실패해 원문만 돌려주면 "왜?" 같은 짧은 후속 질문은 직전 질문으로 채운 값(text)을 쓴다.
+      if (understood.question !== userMessage || !explanationOnly) text = understood.question;
+      // 링크 요청은 서버가 근거 링크를 붙이므로 항상 자료 답변으로 보낸다.
+      fromConversation = understood.from_conversation && !explicitTarget && !wantsLinks(text) && !wantsLinks(userMessage);
+    }
     let mode = isCommitRequest(text) ? 'search' as const : explanationOnly ? 'answer' as const : await classifyMode(ctx, text);
     let parentImageId: string | undefined;
     let referenceImages: { id: string; instruction: string }[] = [];
-    let generationRequest = text;
+    let generationRequest = originalText;
     if ((conversationImages.length || explicitTarget) && !isCommitRequest(text) && !explanationOnly) {
-      const plan = await ctx.model.structured(z.object({ intent: z.enum(["new", "edit", "variant", "question", "other"]), image_number: z.number().int().nonnegative(), change: z.string().max(1000), preserve: z.string().max(1000), references: z.array(z.object({ image_number: z.number().int().positive(), instruction: z.string().min(1).max(500) })).max(15) }), { request: text, selected_image_id: explicitTarget, images: conversationImages.map((image, index) => ({ number: index + 1, id: image.id, prompt: String(image.prompt).slice(0, 1600), parent_image_id: image.parent_image_id, reference_images: image.reference_images, user_request: image.user_request })), conversation: history.slice(-30).map(message => ({ role: message.role, content: message.content.slice(0, 2000), image_ids: (message.attachments as any[]).filter(item => item?.type === "generated_image").map(item => item.id) })) }, "대화 전체 맥락으로 이미지 작업과 참조를 능동적으로 결정한다. 사용자는 이미지 순번을 말할 필요가 없다. 더 밝게, 이 느낌 유지, 이전 분위기로, 다시 수정 등은 기존 이미지 편집이다. 최근 성공 이미지는 명시적 부분 수정일 때만 기본 기준이다. 새 인물·새 장소·다른 후보·UI 신규 생성 요청에 이전 인물/의상/행동/구도를 자동 상속하지 않는다. variant는 화풍만 계승하고 preserve에 인물과 구도를 넣지 않는다. 씬 변경과 HUD 유지는 edit로 선택하되 preserve에는 HUD만 넣는다. 명시 선택 또는 이전 대화에서 지목한 인물/배경/조명에 맞는 이미지가 있으면 그 대상을 선택한다. new는 기존 결과와 무관한 새 생성, variant는 다른 후보, question은 설명만 하는 질문, other는 이미지 무관 요청이다. image_number는 주 원본 순번. references에는 이전 대화의 요구와 누적 참조 관계를 읽고 필요한 보조 이미지와 그 용도(인물, 배경, 조명 등)를 선택한다. 사용자가 순번을 명시하지 않아도 이전에 좋아했던 조명이나 배경을 가져오라고 하면 해당 이미지를 찾는다. 단순 밝기 변경은 주 원본만 사용하고, 과거 참조가 필요한 복합 요청만 보조를 추가한다. 관련 없는 이미지는 넣지 않는다. 주 원본은 references에서 제외. 서로 다른 대상이 똑같이 가능해 결정 불가능할 때만 image_number=0. change와 preserve는 짧고 구체적인 한국어, JSON 전체를 간결하게 반환한다.");
-      if (["edit", "variant"].includes(plan.result.intent) || explicitTarget || /다른 후보|새 후보/.test(text) || (/유지/.test(text) && /씬|장면|배경/.test(text))) {
-        if (/다른 후보|새 후보/.test(text)) plan.result.intent = 'variant';
-        const target = explicitTarget ? conversationImages.find(image => image.id === explicitTarget) : conversationImages[plan.result.image_number - 1] ?? (/유지/.test(text) && /씬|장면|배경/.test(text) ? conversationImages.at(-1) : undefined);
+      const plan = await ctx.model.structured(z.object({ intent: z.enum(["new", "edit", "variant", "question", "other"]), image_number: z.number().int().nonnegative(), change: z.string().max(1000), preserve: z.string().max(1000), references: z.array(z.object({ image_number: z.number().int().positive(), instruction: z.string().min(1).max(500) })).max(15) }), { request: originalText, selected_image_id: explicitTarget, images: conversationImages.map((image, index) => ({ number: index + 1, id: image.id, prompt: String(image.prompt).slice(0, 1600), parent_image_id: image.parent_image_id, reference_images: image.reference_images, user_request: image.user_request })), conversation: history.slice(-30).map(message => ({ role: message.role, content: message.content.slice(0, 2000), image_ids: (message.attachments as any[]).filter(item => item?.type === "generated_image").map(item => item.id) })) }, "대화 전체 맥락으로 이미지 작업과 참조를 능동적으로 결정한다. 사용자는 이미지 순번을 말할 필요가 없다. 더 밝게, 이 느낌 유지, 이전 분위기로, 다시 수정 등은 기존 이미지 편집이다. 최근 성공 이미지는 명시적 부분 수정일 때만 기본 기준이다. 새 인물·새 장소·다른 후보·UI 신규 생성 요청에 이전 인물/의상/행동/구도를 자동 상속하지 않는다. variant는 화풍만 계승하고 preserve에 인물과 구도를 넣지 않는다. 씬 변경과 HUD 유지는 edit로 선택하되 preserve에는 HUD만 넣는다. 명시 선택 또는 이전 대화에서 지목한 인물/배경/조명에 맞는 이미지가 있으면 그 대상을 선택한다. new는 기존 결과와 무관한 새 생성, variant는 다른 후보, question은 설명만 하는 질문, other는 이미지 무관 요청이다. image_number는 주 원본 순번. references에는 이전 대화의 요구와 누적 참조 관계를 읽고 필요한 보조 이미지와 그 용도(인물, 배경, 조명 등)를 선택한다. 사용자가 순번을 명시하지 않아도 이전에 좋아했던 조명이나 배경을 가져오라고 하면 해당 이미지를 찾는다. 단순 밝기 변경은 주 원본만 사용하고, 과거 참조가 필요한 복합 요청만 보조를 추가한다. 관련 없는 이미지는 넣지 않는다. 주 원본은 references에서 제외. 서로 다른 대상이 똑같이 가능해 결정 불가능할 때만 image_number=0. change와 preserve는 짧고 구체적인 한국어, JSON 전체를 간결하게 반환한다.");
+      if (["edit", "variant"].includes(plan.result.intent) || explicitTarget || /다른 후보|새 후보/.test(originalText) || (/유지/.test(originalText) && /씬|장면|배경/.test(originalText))) {
+        if (/다른 후보|새 후보/.test(originalText)) plan.result.intent = 'variant';
+        const target = explicitTarget ? conversationImages.find(image => image.id === explicitTarget) : conversationImages[plan.result.image_number - 1] ?? (/유지/.test(originalText) && /씬|장면|배경/.test(originalText) ? conversationImages.at(-1) : undefined);
         if (!target) throw new Error("어느 이미지를 수정할지 대화에서 알려 주세요.");
         mode = "generate"; parentImageId = target.id;
         referenceImages = plan.result.references.map(ref => { const image = conversationImages[ref.image_number - 1]; if (!image) throw new Error("대화의 참고 이미지를 확인하지 못했습니다. 다시 요청해 주세요."); return { id: image.id, instruction: ref.instruction }; }).filter((ref, index, all) => ref.id !== parentImageId && all.findIndex(item => item.id === ref.id) === index);
-        generationRequest = [plan.result.intent === "variant" ? "다른 후보 생성. 화풍만 유지하고 인물·행동·장소·구도는 새롭게 구성한다." : /(?:씬|장면|배경).{0,20}(?:바꿔|교체|변경|재구성)/.test(text) ? "장면 재구성. 지정한 요소만 유지하고 나머지는 바꾼다." : "기존 이미지 수정. 아래 유지 대상으로 명시된 요소만 유지한다.", "이번 요청: " + text, "변경: " + plan.result.change, "유지: " + plan.result.preserve].join("\n").slice(0, 4000);
+        generationRequest = [plan.result.intent === "variant" ? "다른 후보 생성. 화풍만 유지하고 인물·행동·장소·구도는 새롭게 구성한다." : /(?:씬|장면|배경).{0,20}(?:바꿔|교체|변경|재구성)/.test(originalText) ? "장면 재구성. 지정한 요소만 유지하고 나머지는 바꾼다." : "기존 이미지 수정. 아래 유지 대상으로 명시된 요소만 유지한다.", "이번 요청: " + originalText, "변경: " + plan.result.change, "유지: " + plan.result.preserve].join("\n").slice(0, 4000);
       } else if (plan.result.intent === "question") mode = "answer";
     }
     if (ctx.model) await store.updateRun(runId, { model: 'solar' });
@@ -198,7 +214,7 @@ async function executeRunInOrder(
     // 폴백할 때 공통으로 쓴다 (QA 10-12 — "조회 항목"/실행 중 정지 방지).
     const runAnswer = async () => {
       await phase('retrieving');
-      const r = await registry.execute(tctx, 'knowledge.ask', { question: text });
+      const r = await registry.execute(tctx, 'knowledge.ask', { question: text, ...(hasMemory(memory) ? { conversation: memory } : {}) });
       if (!r.ok) throw new Error(r.error);
       const ans = r.result as any;
       for (const e of ans.evidence ?? []) await store.emitRunEvent(runId, 'evidence', e);
@@ -211,7 +227,14 @@ async function executeRunInOrder(
         extra: { answer_id: ans.answer_id, warnings: ans.warnings, evidence: ans.evidence ?? [] },
       };
     };
-    if (mode === 'answer') {
+    if (mode === 'answer' && fromConversation) {
+      // 요약·번역·다시 쓰기처럼 이전 대화만으로 답하는 요청 — 자료를 다시 찾지 않는다. 실패하면 자료 답변으로 간다.
+      await phase('generating');
+      const reply = await answerFromConversation(ctx.model, userMessage, memory).catch(() => null);
+      final = reply
+        ? { status: 'COMPLETE', phase: 'completed', text: reply, extra: { from_conversation: true } }
+        : await runAnswer();
+    } else if (mode === 'answer') {
       final = await runAnswer();
     } else if (mode === 'search') {
       await phase('executing_tool');
@@ -510,7 +533,8 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
     const id = (req.params as any).id;
     const conv = await ctx.store.getConversation(projectId, id, session.user_id);
     if (!conv) return { not_found: true };
-    const messages = await ctx.store.listMessages(id);
+    // 최근 메시지 기준으로 보여 준다. 오래된 순 200개만 주면 긴 대화에서 새 메시지가 화면에 안 보였다.
+    const messages = await ctx.store.listRecentMessages(id, 1000);
     const approvals = await ctx.store.listApprovals(projectId, session.user_id);
     return { conversation: conv, messages, pending_approvals: approvals };
   });

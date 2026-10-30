@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { rrfMerge } from '@meeting/knowledge';
-import { queryTerms } from '../../packages/knowledge/src/retrieve.ts';
+import { queryTerms, namedFiles } from '../../packages/knowledge/src/retrieve.ts';
 import { UpstageEmbeddings } from '@meeting/knowledge';
 
 describe('rrfMerge', () => {
@@ -61,5 +61,14 @@ describe('queryTerms', () => {
     expect(queryTerms('소녀의 나이는 몇 살로 정했어?').map((t) => t.term)).toEqual(expect.arrayContaining(['소녀', '나이']));
     expect(queryTerms('GameMode 클래스는 어디서 쓰여?').map((t) => t.term)).toEqual(expect.arrayContaining(['gamemode', '클래스']));
     expect(queryTerms('어디 있어?')).toEqual([]);
+  });
+});
+
+describe('namedFiles', () => {
+  it('finds file names written in the question', () => {
+    expect(namedFiles('화풍레퍼런스5.jpg와 화풍레퍼런스2.jpg의 열 수 있는 링크(URL)를 알려줘')).toEqual(expect.arrayContaining(['화풍레퍼런스5.jpg', '화풍레퍼런스2.jpg']));
+    expect(namedFiles('그거 girl image.png 링크')).toEqual(expect.arrayContaining(['girl image.png']));
+    expect(namedFiles('기획서.PDF 어디 있어?')).toEqual(['기획서.PDF']);
+    expect(namedFiles('소녀 레퍼런스 어디 있어?')).toEqual([]);
   });
 });

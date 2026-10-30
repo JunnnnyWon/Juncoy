@@ -817,6 +817,26 @@ export class KnowledgeStore {
     return id;
   }
 
+  /** 가장 최근 메시지 limit개를 오래된 순으로 돌려준다. 긴 대화에서도 방금 보낸 메시지가 빠지지 않는다. */
+  async listRecentMessages(conversationId: string, limit = 200) {
+    return rows<{
+      id: string;
+      run_id: string | null;
+      role: string;
+      content: string;
+      attachments: unknown[];
+      citations: unknown[];
+      created_at: Date;
+    }>(
+      sql`SELECT * FROM (
+            SELECT id, run_id, role, content, attachments, citations, created_at
+              FROM assistant_messages WHERE conversation_id=${conversationId}
+             ORDER BY created_at DESC LIMIT ${limit}
+          ) recent ORDER BY created_at ASC`,
+      this.db,
+    );
+  }
+
   async listMessages(conversationId: string, limit = 200) {
     return rows<{
       id: string;

@@ -530,17 +530,54 @@ function renderMarkdown(value: unknown) {
     .replaceAll('\\n', '\n')
     .replace(/ {2,}/g, ' ')
     .trim();
-  return text.split(/\n/).map((line, index) => {
-    const trimmed = line.trim();
-    if (!trimmed) return <div key={index} className="md-spacer" />;
-    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
-    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
-    const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
-    const content = formatInline(heading?.[2] ?? bullet?.[1] ?? numbered?.[1] ?? trimmed);
-    if (heading) return <h3 key={index} className="md-heading">{content}</h3>;
-    if (bullet || numbered) return <div key={index} className="md-bullet"><span>{numbered ? numbered[0].split(/[.)]/)[0] + '.' : '•'}</span>{content}</div>;
-    return <p key={index}>{content}</p>;
-  });
+  const lines = text.split(/\n/);
+  const out: ReactNode[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    // 마크다운 표 — 머리줄 다음에 구분줄(| --- |)이 오면 이어지는 | 줄을 표로 그린다.
+    if (isTableRow(lines[index]) && isTableDivider(lines[index + 1] ?? '')) {
+      const head = tableCells(lines[index]);
+      const body: string[][] = [];
+      let next = index + 2;
+      while (next < lines.length && isTableRow(lines[next])) body.push(tableCells(lines[next++]));
+      out.push(
+        <div key={index} className="md-table-wrap">
+          <table className="md-table">
+            <thead><tr>{head.map((cell, c) => <th key={c}>{formatInline(cell)}</th>)}</tr></thead>
+            <tbody>{body.map((row, r) => <tr key={r}>{head.map((_, c) => <td key={c}>{formatInline(row[c] ?? '')}</td>)}</tr>)}</tbody>
+          </table>
+        </div>,
+      );
+      index = next - 1;
+      continue;
+    }
+    out.push(renderMarkdownLine(lines[index], index));
+  }
+  return out;
+}
+
+function isTableRow(line: string) {
+  const t = line.trim();
+  return t.startsWith('|') && t.endsWith('|') && t.length > 1;
+}
+
+function isTableDivider(line: string) {
+  return isTableRow(line) && tableCells(line).every((cell) => /^:?-{2,}:?$/.test(cell));
+}
+
+function tableCells(line: string) {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+}
+
+function renderMarkdownLine(line: string, index: number) {
+  const trimmed = line.trim();
+  if (!trimmed) return <div key={index} className="md-spacer" />;
+  const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+  const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+  const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+  const content = formatInline(heading?.[2] ?? bullet?.[1] ?? numbered?.[1] ?? trimmed);
+  if (heading) return <h3 key={index} className="md-heading">{content}</h3>;
+  if (bullet || numbered) return <div key={index} className="md-bullet"><span>{numbered ? numbered[0].split(/[.)]/)[0] + '.' : '•'}</span>{content}</div>;
+  return <p key={index}>{content}</p>;
 }
 
 function formatInline(text: string) {

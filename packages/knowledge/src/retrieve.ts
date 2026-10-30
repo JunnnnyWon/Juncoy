@@ -271,6 +271,38 @@ export async function vectorSearch(
   );
 }
 
+/** 질문에 이름이 그대로 적힌 파일 — "화풍레퍼런스2.jpg", "기획서.pdf". */
+export function namedFiles(query: string) {
+  const out = new Set<string>();
+  for (const m of query.matchAll(/[\p{L}\p{N}_()\-]+(?: [\p{L}\p{N}_()\-]+)*\.(?:png|jpe?g|webp|gif|pdf|docx?|txt|md|hwpx?|xlsx?|pptx?)\b/giu))
+  {
+    // 앞 단어까지 붙어 잡힐 수 있으므로("그거 girl image.png") 뒤쪽 부분들도 후보로 둔다.
+    const words = m[0].normalize('NFC').split(' ');
+    for (let i = 0; i < words.length; i++) out.add(words.slice(i).join(' '));
+  }
+  return [...out].slice(0, 20);
+}
+
+/**
+ * 질문이 이름으로 지목한 업로드 파일의 청크. 출처별 상한(perSourceQuota) 때문에
+ * "A.jpg와 B.jpg"처럼 두 파일을 함께 물으면 하나가 빠졌다. 지목한 파일은 상한 밖에서 먼저 넣는다.
+ */
+async function namedFileSearch(store: KnowledgeStore, projectId: string, names: string[], acl?: AclInput) {
+  if (!names.length) return [];
+  const lowered = names.map((n) => n.toLowerCase());
+  return rows<ChunkRow>(
+    sql`SELECT c.id AS chunk_id, d.id AS document_id, d.stable_key, src.kind AS source,
+          c.content, c.span, v.content_hash AS revision, v.source_revision,
+          v.source_occurred_at AS occurred_at, v.source_modified_at AS modified_at,
+          d.created_at AS indexed_at, d.metadata
+        ${baseFrom(projectId, acl)}
+          AND src.kind = 'upload' AND c.ordinal < 2
+          AND lower(normalize(d.metadata->>'filename', NFC)) = ANY(${lowered}::text[])
+        ORDER BY d.metadata->>'filename', c.ordinal LIMIT 20`,
+    store.db,
+  );
+}
+
 /**
  * 하이브리드 검색 — 키워드+벡터 후보를 RRF로 합친다.
  * 출처별 상한은 호출자가 정한다 (기본 각 30개, §11.1).
@@ -295,9 +327,15 @@ export async function retrieve(
     kw.map((c) => ({ id: c.chunk_id, row: c as ChunkRow })),
     vec.map((c) => ({ id: c.chunk_id, row: c as ChunkRow })),
   ]);
+  const named = await namedFileSearch(store, opts.projectId, namedFiles(opts.query), opts.acl);
   const byId = new Map<string, ChunkRow>();
-  for (const c of [...kw, ...vec]) if (!byId.has(c.chunk_id)) byId.set(c.chunk_id, c);
-  const ordered = perSourceQuota(merged, (m) => byId.get(m.id)!.source, opts.limit ?? 40);
+  for (const c of [...named, ...kw, ...vec]) if (!byId.has(c.chunk_id)) byId.set(c.chunk_id, c);
+  const pinned = named.map((c) => ({ id: c.chunk_id, score: 1, ranks: [null, null] as (number | null)[] }));
+  const pinnedIds = new Set(pinned.map((p) => p.id));
+  const ordered = [
+    ...pinned,
+    ...perSourceQuota(merged.filter((m) => !pinnedIds.has(m.id)), (m) => byId.get(m.id)!.source, Math.max(0, (opts.limit ?? 40) - pinned.length)),
+  ];
   const seen = new Set(ordered.map((m) => m.id));
   const recent = (await recentSearch(store, opts.projectId, 2, opts.acl)).filter(
     (r) => !seen.has(r.chunk_id),

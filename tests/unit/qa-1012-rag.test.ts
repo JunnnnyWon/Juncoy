@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { stableKeyToUrl } from '../../packages/knowledge/src/answer.ts';
+import { stableKeyToUrl, restrictAnswerLinks, appendEvidenceLinks, wantsLinks } from '../../packages/knowledge/src/answer.ts';
 import { formatReadResult } from '../../packages/knowledge/src/tools/read-result.ts';
 import { ToolRegistry } from '../../packages/knowledge/src/tools/registry.ts';
 import { Evidence } from '@meeting/contracts';
@@ -110,5 +110,36 @@ describe('evidence source timing fields', () => {
         observed_at: now,
       }).source_occurred_at,
     ).toBeUndefined();
+  });
+});
+
+describe('answer links', () => {
+  it('keeps links to evidence and unlinks made-up addresses', () => {
+    const allowed = new Set(['/api/assistant/files/abc/content', 'https://notion.so/123']);
+    const text = '[화풍레퍼런스5.jpg](/api/assistant/files/abc/content), [가짜](https://evil.example/x), [노션](https://notion.so/123)';
+    expect(restrictAnswerLinks(text, allowed)).toBe('[화풍레퍼런스5.jpg](/api/assistant/files/abc/content), 가짜, [노션](https://notion.so/123)');
+    expect(restrictAnswerLinks('링크 없음', allowed)).toBe('링크 없음');
+  });
+});
+
+describe('evidence links for link requests', () => {
+  const items = [
+    { url: '/api/assistant/files/a/content', filename: '화풍레퍼런스5.jpg' },
+    { url: '/api/assistant/files/b/content', filename: '화풍레퍼런스2.jpg' },
+    { url: '/api/assistant/files/c/content', filename: '의상재질1.jpg' },
+    { url: 'https://notion.so/1' },
+  ];
+  it('adds links for files named in the question or answer', () => {
+    const out = appendEvidenceLinks('두 파일은 AI 레퍼런스 보드에 있습니다.', '화풍레퍼런스5.jpg와 화풍레퍼런스2.jpg의 열 수 있는 링크(URL)를 알려줘', items);
+    expect(out).toContain('- [화풍레퍼런스5.jpg](/api/assistant/files/a/content)');
+    expect(out).toContain('- [화풍레퍼런스2.jpg](/api/assistant/files/b/content)');
+    expect(out).not.toContain('의상재질1');
+  });
+  it('leaves other questions and already-linked answers alone', () => {
+    expect(appendEvidenceLinks('답', '화풍레퍼런스5.jpg 어디 있어?', items)).toBe('답');
+    const linked = '[화풍레퍼런스5.jpg](/api/assistant/files/a/content)';
+    expect(appendEvidenceLinks(linked, '화풍레퍼런스5.jpg 링크', items)).toBe(linked);
+    expect(wantsLinks('그거 주소로 보내줘')).toBe(true);
+    expect(wantsLinks('소녀 레퍼런스 어디 있어?')).toBe(false);
   });
 });
