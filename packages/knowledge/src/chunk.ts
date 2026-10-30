@@ -19,6 +19,7 @@ export const estimateTokens = (s: string) =>
 
 const CHARS_PER_TOKEN = 2.2; // 한국어 혼용 보수치
 const windowChars = (tokens: number) => Math.floor(tokens * CHARS_PER_TOKEN);
+const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
 /** 문단/heading/표 경계를 우선하는 일반 문서 청커 — 500~900tok, overlap ~100tok. */
 export function chunkText(
@@ -217,6 +218,9 @@ export function chunkDocument(
         },
       },
     ]);
+  // 이미지 설명에는 파일명이 없어서 "girl image.png" 같은 이름으로 찾을 수 없다. 파일명을 함께 색인한다.
+  if (sourceKind === 'upload' && IMAGE_MIMES.has(normalized.mime) && normalized.filename && text.trim())
+    return capChunkSize(chunkText(`이미지 파일: ${normalized.filename}\n${text}`, { spanBase: { document_key: stableKey } }));
   if (Array.isArray(normalized.blocks) && normalized.blocks.length) {
     const blocks = normalized.blocks
       .filter((b: any) => String(b.text ?? '').trim())

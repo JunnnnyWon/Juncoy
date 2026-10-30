@@ -93,6 +93,21 @@ describe('chunkDocument dispatch', () => {
       source_sha256: 'a'.repeat(64),
     });
   });
+
+  it('indexes image uploads with their filename so name searches can find them', () => {
+    const chunks = chunkDocument('upload', 'upload:img-1', {
+      text: '창문 너머로 거대한 눈동자가 들여다보는 어두운 방',
+      mime: 'image/png',
+      filename: 'girl image.png',
+    });
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe('이미지 파일: girl image.png\n창문 너머로 거대한 눈동자가 들여다보는 어두운 방');
+    expect(chunks[0].span.document_key).toBe('upload:img-1');
+    // 설명이 없는 이미지는 이전처럼 청크를 만들지 않는다.
+    expect(chunkDocument('upload', 'upload:img-2', { text: '', mime: 'image/png', filename: 'a.png' })).toEqual([]);
+    // 문서 업로드는 파일명을 덧붙이지 않는다.
+    expect(chunkDocument('upload', 'upload:txt', { text: '본문', mime: 'text/plain', filename: 'a.txt' })[0].content).toBe('본문');
+  });
 });
 
 describe('estimateTokens', () => {

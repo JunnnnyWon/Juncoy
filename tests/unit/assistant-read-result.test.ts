@@ -1,5 +1,5 @@
 import { expect,it } from 'vitest';
-import { isCommitRequest,commitRequestInput,resolveFollowup,formatReadResult } from '../../packages/knowledge/src/tools/read-result.ts';
+import { isCommitRequest,commitRequestInput,resolveFollowup,formatReadResult,needsGroundedAnswer } from '../../packages/knowledge/src/tools/read-result.ts';
 it('routes commit reads and resolves punctuation from actual user history',()=>{
   const original='현재 우리 깃 커밋 기록 확인진행.';
   expect(isCommitRequest(original)).toBe(true);
@@ -20,4 +20,10 @@ it('formats authoritative commits with safe links and no model-authored instruct
   expect(text).toContain('\\[ignore\\]');
   expect(text).toContain('최근 커밋');
   expect(text).not.toBe('[]');
+});
+it('sends knowledge search picks to a grounded answer instead of dumping raw chunks',()=>{
+  expect(needsGroundedAnswer('knowledge.search')).toBe(true);
+  expect(needsGroundedAnswer('github.list_commits')).toBe(false);
+  expect(needsGroundedAnswer('notion.query_tasks')).toBe(false);
+  expect(needsGroundedAnswer(undefined)).toBe(false);
 });
