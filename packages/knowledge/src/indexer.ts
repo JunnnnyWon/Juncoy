@@ -54,9 +54,9 @@ export async function reparseUpload(store: KnowledgeStore, uploadId: string, job
   let text = extracted.text;
   if (policy?.external_processing_allowed && upload.mime.startsWith('image/') && process.env.OPENROUTER_VISION_ENABLED === 'true') {
     if (!process.env.OPENROUTER_API_KEY) throw new Error('vision_not_configured');
-    const observation = await new OpenRouterVision(process.env.OPENROUTER_API_KEY, process.env.OPENROUTER_VISION_MODEL ?? 'google/gemini-3.7-flash').analyzeImage(bytes, upload.mime);
+    const observation = await new OpenRouterVision(process.env.OPENROUTER_API_KEY, process.env.OPENROUTER_VISION_MODEL ?? 'google/gemini-3.7-flash').analyzeImage(bytes, upload.mime, upload.filename);
     vision = observation;
-    text = [observation.description, ...observation.visible_text, ...observation.subjects, ...observation.materials, ...observation.lighting, ...observation.palette].join('\n');
+    text = [observation.description, ...observation.visible_text, ...observation.subjects, ...observation.materials, ...observation.lighting, ...observation.palette, observation.search_keywords?.length ? '검색어: ' + observation.search_keywords.join(', ') : ''].filter(Boolean).join('\n');
   }
   return (await store.commitUploadIngestion(upload.id, upload.sha256, job, async (scoped, connection) => {
   if (!upload.document_id) {

@@ -7,6 +7,12 @@ import type { GitHubRest } from '../github.ts';
 
 // 읽기 도구 — spec §6. 전부 reader 최소 권한, 외부 상태를 바꾸지 않는다.
 
+/** 여러 단어 검색어를 단어별로 나눈다. 통째로 ILIKE하면 "소녀 레퍼런스"처럼 띄어 쓴 말은 거의 맞지 않았다. */
+export function searchPatterns(query: string) {
+  const words = query.replace(/[%_\\]/g, '').split(/\s+/).filter(Boolean).slice(0, 6);
+  return (words.length ? words : [query.replace(/[%_\\]/g, '')]).map((w) => '%' + w + '%');
+}
+
 export function registerReadTools(reg: ToolRegistry) {
   reg.register({
     name:'github.list_commits', kind:'read', minRole:'reader', auditKind:'GITHUB_COMMITS',
@@ -128,7 +134,7 @@ export function registerReadTools(reg: ToolRegistry) {
             JOIN knowledge_sources src ON src.id=d.source_id
             WHERE src.project_id=${ctx.projectId} AND src.kind='meeting'
               AND NOT d.deleted AND d.state='READY' AND NOT d.dirty
-              AND c.content ILIKE ${'%' + q.query.replace(/[%_]/g, '') + '%'}
+              AND c.content ILIKE ALL (${searchPatterns(q.query)}::text[])
             ORDER BY d.updated_at DESC LIMIT ${q.limit}`,
         ctx.store.db,
       ),
@@ -153,7 +159,7 @@ export function registerReadTools(reg: ToolRegistry) {
             JOIN knowledge_sources src ON src.id=d.source_id
             WHERE src.project_id=${ctx.projectId} AND src.kind='github'
               AND NOT d.deleted AND d.state='READY' AND NOT d.dirty
-              AND c.content ILIKE ${'%' + q.query.replace(/[%_]/g, '') + '%'}
+              AND c.content ILIKE ALL (${searchPatterns(q.query)}::text[])
             ORDER BY d.stable_key LIMIT ${q.limit}`,
         ctx.store.db,
       ),

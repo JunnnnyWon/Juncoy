@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { rrfMerge } from '@meeting/knowledge';
+import { queryTerms } from '../../packages/knowledge/src/retrieve.ts';
 import { UpstageEmbeddings } from '@meeting/knowledge';
 
 describe('rrfMerge', () => {
@@ -48,5 +49,17 @@ describe('UpstageEmbeddings', () => {
       new Response(JSON.stringify({ error: 'bad' }), { status: 400 }),
     );
     await expect(client.embedQuery('x')).rejects.toThrow('400');
+  });
+});
+
+describe('queryTerms', () => {
+  it('pulls Korean words, weights quoted words and drops question filler', () => {
+    expect(queryTerms('지금 "소녀"(메인캐릭터말고) 레퍼런스 어디에 있음 ?')).toEqual([
+      { term: '소녀', weight: 2 },
+      { term: '레퍼런스', weight: 1 },
+    ]);
+    expect(queryTerms('소녀의 나이는 몇 살로 정했어?').map((t) => t.term)).toEqual(expect.arrayContaining(['소녀', '나이']));
+    expect(queryTerms('GameMode 클래스는 어디서 쓰여?').map((t) => t.term)).toEqual(expect.arrayContaining(['gamemode', '클래스']));
+    expect(queryTerms('어디 있어?')).toEqual([]);
   });
 });

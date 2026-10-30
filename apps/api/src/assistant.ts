@@ -77,7 +77,7 @@ async function classifyMode(
 - search: Notion 일정·작업 목록, GitHub 코드·커밋, 회의 전사 원문처럼 특정 시스템의 목록/원문 조회
 - propose: 변경은 하지 않고 계획·미리보기만
 - mutate: Notion 일정/작업/페이지를 실제로 추가·수정
-- generate: 이미지 생성 요청
+- generate: 새 이미지를 만들어 달라는 요청만. 이미 있는 이미지·레퍼런스를 찾거나 보여 달라는 요청은 answer
 - ingest: 파일을 지식에 추가
 애매하면 answer. JSON으로 { "mode": "..." } 만 반환.`,
     );
@@ -191,7 +191,7 @@ async function executeRunInOrder(
     const tctx = buildToolContext(ctx, projectId, userId, role, config);
     // 도구 선택 — 모델이 도구와 입력을 고른다 (registry가 스키마·권한으로 재검증).
     let plan = mode === 'search' ? (isCommitRequest(text) ? {tool:'github.list_commits',input:commitRequestInput(text)} : await pickTool(ctx, registry, tctx, text)) : undefined;
-    if (needsGroundedAnswer(plan?.tool)) { mode = 'answer'; plan = undefined; }
+    if (needsGroundedAnswer(plan?.tool, text)) { mode = 'answer'; plan = undefined; }
 
     let final: { status: string; phase: string; text: string; extra?: Record<string, any> };
     // 지식 답변 파이프라인 — answer 모드이거나 search 도구 선택·실행이 실패해
