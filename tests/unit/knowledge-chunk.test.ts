@@ -6,6 +6,7 @@ import {
   chunkText,
   estimateTokens,
 } from '@meeting/knowledge';
+import { filenameTerms } from '../../packages/knowledge/src/chunk.ts';
 
 describe('chunkText', () => {
   it('splits on paragraph/heading boundaries and keeps order', () => {
@@ -94,19 +95,35 @@ describe('chunkDocument dispatch', () => {
     });
   });
 
-  it('indexes image uploads with their filename so name searches can find them', () => {
-    const chunks = chunkDocument('upload', 'upload:img-1', {
-      text: '창문 너머로 거대한 눈동자가 들여다보는 어두운 방',
+  it('puts the filename on every upload chunk so name searches can find it', () => {
+    const image = chunkDocument('upload', 'upload:img-1', {
+      text: '창문 너머로 거대한 눈동자가 들여다보는 어두운 방\n검색어: 소녀, girl, 눈동자',
       mime: 'image/png',
       filename: 'girl image.png',
     });
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].content).toBe('이미지 파일: girl image.png\n창문 너머로 거대한 눈동자가 들여다보는 어두운 방');
-    expect(chunks[0].span.document_key).toBe('upload:img-1');
+    expect(image).toHaveLength(1);
+    expect(image[0].content.split('\n')[0]).toBe('레퍼런스 이미지 파일: girl image.png (girl image)');
+    expect(image[0].content).toContain('소녀');
+    expect(image[0].span.document_key).toBe('upload:img-1');
     // 설명이 없는 이미지는 이전처럼 청크를 만들지 않는다.
     expect(chunkDocument('upload', 'upload:img-2', { text: '', mime: 'image/png', filename: 'a.png' })).toEqual([]);
-    // 문서 업로드는 파일명을 덧붙이지 않는다.
-    expect(chunkDocument('upload', 'upload:txt', { text: '본문', mime: 'text/plain', filename: 'a.txt' })[0].content).toBe('본문');
+    // 문서 업로드도 모든 청크에 파일명이 붙는다 (Document Parse 블록 포함).
+    const doc = chunkDocument('upload', 'upload:doc-2', {
+      text: '제목\n본문',
+      mime: 'application/pdf',
+      filename: '레퍼런스_게임분석-v2.pdf',
+      blocks: [{ block_id: 'b1', page: 1, ordinal: 0, block_type: 'paragraph', text: '본문' }],
+    });
+    expect(doc[0].content).toBe('파일: 레퍼런스_게임분석-v2.pdf (레퍼런스 게임분석 v2)\n본문');
+    expect(doc[0].span.block_ids).toEqual(['b1']);
+    // 업로드가 아닌 출처는 바뀌지 않는다.
+    expect(chunkDocument('notion', 'notion:p1', { text: '본문', filename: 'x.md' })[0].content).toBe('본문');
+  });
+
+  it('splits filenames into search words', () => {
+    expect(filenameTerms('girl_image-v2.png')).toBe('girl image v2');
+    expect(filenameTerms('BossCharacterRef.jpeg')).toBe('Boss Character Ref');
+    expect(filenameTerms('소녀 레퍼런스.webp')).toBe('소녀 레퍼런스');
   });
 });
 

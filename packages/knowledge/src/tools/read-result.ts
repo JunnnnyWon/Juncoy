@@ -56,8 +56,18 @@ function formatItem(item: any): string {
   return '- ' + head + (meta ? ' · ' + meta : '') + (body ? '\n  ' + escapeText(String(body).slice(0, 1000)) : '');
 }
 
-/** knowledge.search 결과는 검색 조각 원문이다. 사용자에게 그대로 보이지 않고 근거 기반 답변(knowledge.ask)으로 보낸다. */
-export function needsGroundedAnswer(tool: string | undefined) { return tool === 'knowledge.search'; }
+/** 코퍼스 조각(회의 전사·코드·지식 청크)을 그대로 돌려주는 검색 도구. */
+const CORPUS_SEARCH_TOOLS = new Set(['knowledge.search', 'meeting.search_transcript', 'github.search_code']);
+/** 원문·목록 자체를 달라는 요청 — 이때만 검색 조각을 그대로 보여 준다. */
+const RAW_REQUEST = /원문|전문|그대로|목록|리스트|검색\s*결과|전부\s*보여|다\s*보여|코드\s*(?:보여|찾아|검색)|전사(?:본)?\s*(?:보여|출력|검색)/;
+/**
+ * 검색 조각은 답이 아니다. 질문에는 근거 기반 답변(knowledge.ask)으로 보낸다.
+ * knowledge.search는 항상, 회의·코드 검색은 원문이나 목록을 달라고 할 때만 그대로 보여 준다.
+ */
+export function needsGroundedAnswer(tool: string | undefined, request = '') {
+  if (!tool || !CORPUS_SEARCH_TOOLS.has(tool)) return false;
+  return tool === 'knowledge.search' || !RAW_REQUEST.test(request);
+}
 export function formatReadResult(tool: string, result: any): string {
   if (tool === 'github.list_commits') {
     if (result.status === 'NOT_CONFIGURED') return '이 프로젝트에 조회 가능한 GitHub 저장소가 연결되어 있지 않습니다.';

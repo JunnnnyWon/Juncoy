@@ -174,7 +174,42 @@ function capChunkSize(chunks: ChunkOut[]): ChunkOut[] {
   return out;
 }
 
+/** 파일명을 검색어로 쓸 수 있게 나눈다. "girl_image-v2.png" → "girl image v2". */
+export function filenameTerms(filename: string) {
+  const base = filename.replace(/\.[A-Za-z0-9]{1,5}$/, '');
+  return base
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_\-.\s]+/g, ' ')
+    .trim();
+}
+
+/**
+ * 업로드 청크 머리글 — 본문·이미지 설명에는 파일명이 없어서 "girl image.png"나
+ * "레퍼런스 게임 분석.pdf" 같은 이름으로 찾을 수 없었다. 모든 청크에 파일명을 붙인다.
+ */
+function uploadHeader(normalized: Record<string, any>) {
+  const filename = typeof normalized.filename === 'string' ? normalized.filename.trim() : '';
+  if (!filename) return '';
+  const terms = filenameTerms(filename);
+  const label = IMAGE_MIMES.has(normalized.mime) ? '레퍼런스 이미지 파일' : '파일';
+  return `${label}: ${filename}${terms && terms !== filename ? ` (${terms})` : ''}`;
+}
+
 export function chunkDocument(
+  sourceKind: string,
+  stableKey: string,
+  normalized: Record<string, any>,
+): ChunkOut[] {
+  const chunks = chunkDocumentBody(sourceKind, stableKey, normalized);
+  const header = sourceKind === 'upload' ? uploadHeader(normalized) : '';
+  if (!header) return chunks;
+  return chunks.map((c) => {
+    const content = `${header}\n${c.content}`;
+    return { ...c, content, tokenCount: estimateTokens(content) };
+  });
+}
+
+function chunkDocumentBody(
   sourceKind: string,
   stableKey: string,
   normalized: Record<string, any>,
@@ -218,9 +253,6 @@ export function chunkDocument(
         },
       },
     ]);
-  // 이미지 설명에는 파일명이 없어서 "girl image.png" 같은 이름으로 찾을 수 없다. 파일명을 함께 색인한다.
-  if (sourceKind === 'upload' && IMAGE_MIMES.has(normalized.mime) && normalized.filename && text.trim())
-    return capChunkSize(chunkText(`이미지 파일: ${normalized.filename}\n${text}`, { spanBase: { document_key: stableKey } }));
   if (Array.isArray(normalized.blocks) && normalized.blocks.length) {
     const blocks = normalized.blocks
       .filter((b: any) => String(b.text ?? '').trim())

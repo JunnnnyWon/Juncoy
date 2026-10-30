@@ -124,7 +124,42 @@ const baseFrom = (projectId: string, acl?: AclInput) => sql`
   JOIN knowledge_sources src ON src.id=d.source_id AND src.project_id=${projectId}
   WHERE NOT d.deleted AND d.state='READY' AND NOT d.dirty ${aclClause(acl)}`;
 
-/** 키워드 후보: pg_trgm 유사도 + 코드 식별자 정확 매칭 결합 (§10/R09). */
+const QUESTION_STOPWORDS = new Set([
+  '지금', '현재', '어디', '어디에', '어디서', '어디야', '있음', '있어', '있어요', '있나요', '있는지', '있나',
+  '뭐', '뭐야', '뭔가', '무엇', '무슨', '어떤', '어떻게', '언제', '누가', '누구', '왜', '좀', '그', '이', '저',
+  '알려줘', '알려', '줘', '해줘', '보여줘', '찾아줘', '확인', '관련', '대한', '대해', '그리고', '혹시', '우리',
+  'the', 'and', 'for', 'what', 'where', 'how', 'which', 'with',
+]);
+const PARTICLE = /(?:으로|에서|에게|한테|까지|부터|이랑|하고|처럼|말고|이나|이야|이에요|예요|이랑|은|는|이|가|을|를|에|의|도|로|와|과|만|랑|요)$/;
+
+/**
+ * 질문에서 키워드 검색어를 뽑는다. 따옴표로 감싼 말은 가중치 2.
+ * pg_trgm 유사도는 긴 질문 전체와 짧은 청크를 비교해 한국어 단어 하나("소녀")로는
+ * 후보에 오르지 못했다. 단어 단위로도 맞춰 본다.
+ */
+export function queryTerms(query: string): { term: string; weight: number }[] {
+  const out = new Map<string, number>();
+  for (const m of query.matchAll(/["“”'‘’「」『』]([^"“”'‘’「」『』]{1,40})["“”'‘’「」『』]/g)) {
+    const t = m[1].trim();
+    if (t.length >= 2 || /[가-힣]/.test(t)) out.set(t.toLowerCase(), 2);
+  }
+  for (const raw of query.split(/[\s"“”'‘’「」『』()[\]{}<>?!.,~:;\/·]+/)) {
+    let t = raw.trim().toLowerCase();
+    if (!t) continue;
+    // "메인캐릭터말고", "주인공 빼고"처럼 빼 달라는 말은 검색어로 쓰지 않는다.
+    if (/(?:말고|빼고|제외)$/.test(t)) continue;
+    if (/[가-힣]/.test(t)) {
+      const stripped = t.replace(PARTICLE, '');
+      if (stripped.length >= 2) t = stripped;
+      if (t.length < 2) continue;
+    } else if (t.length < 3) continue;
+    if (QUESTION_STOPWORDS.has(t) || out.has(t)) continue;
+    out.set(t, 1);
+  }
+  return [...out.entries()].slice(0, 8).map(([term, weight]) => ({ term, weight }));
+}
+
+/** 키워드 후보: pg_trgm 유사도 + 코드 식별자 정확 매칭 + 질문 단어 매칭 (§10/R09). */
 export async function keywordSearch(
   store: KnowledgeStore,
   projectId: string,
@@ -141,14 +176,26 @@ export async function keywordSearch(
   const identOr = ident.length
     ? sql`OR c.content ILIKE ANY (SELECT '%' || w.word || '%' FROM unnest(${ident}::text[]) AS w(word))`
     : sql``;
+  const terms = queryTerms(q);
+  const termWords = terms.map((t) => t.term.replace(/[%_\\]/g, ''));
+  const termWeights = terms.map((t) => t.weight);
+  const totalWeight = termWeights.reduce((a, b) => a + b, 0) || 1;
+  const termOr = terms.length
+    ? sql`OR c.content ILIKE ANY (SELECT '%' || w || '%' FROM unnest(${termWords}::text[]) AS w)`
+    : sql``;
+  // 질문 단어가 많이 겹칠수록 위로. 유사도(0~1)와 같은 척도로 맞춘다.
+  const termScore = terms.length
+    ? sql`(SELECT coalesce(sum(t.weight), 0) FROM unnest(${termWords}::text[], ${termWeights}::int[]) AS t(word, weight)
+            WHERE c.content ILIKE '%' || t.word || '%')::float / ${totalWeight}`
+    : sql`0`;
   return rows<ChunkRow & { kw: number }>(
     sql`SELECT c.id AS chunk_id, d.id AS document_id, d.stable_key, src.kind AS source,
           c.content, c.span, v.content_hash AS revision, v.source_revision,
           v.source_occurred_at AS occurred_at, v.source_modified_at AS modified_at,
           d.created_at AS indexed_at, d.metadata,
-          similarity(c.content, ${q}) AS kw
+          similarity(c.content, ${q}) + ${termScore} AS kw
         ${baseFrom(projectId, acl)}
-          AND (c.content % ${q} ${identOr})
+          AND (c.content % ${q} ${identOr} ${termOr})
         ORDER BY kw DESC LIMIT ${limit}`,
     store.db,
   );

@@ -61,6 +61,7 @@ const ANSWER_SYSTEM = `너는 프로젝트 지식 어시스턴트다. 아래 evi
 - 각 evidence의 occurred_at은 원본이 생긴 시각, modified_at은 원본 수정 시각, indexed_at은 지식 등록 시각이다.
 - "최신/가장 최근/마지막/요즘"을 묻는 질문에는 이 시각들을 비교해 판단하고, 답변에 근거가 된 기록의 날짜(YYYY-MM-DD)를 명시한다.
 - 최신 정보가 없거나 요청 시점과 evidence가 다르면 warnings에 명시한다.
+- evidence에 location이 있으면 그 자료가 있는 곳(파일명, 아트보드, 프레임)이다. "어디 있어" 같은 위치 질문에는 location을 그대로 써서 답한다. location이 없는 곳을 지어내지 않는다.
 - answer는 간결한 한국어 문장들로 쓴다.`;
 
 function cleanAnswerText(text: string) {
@@ -114,6 +115,54 @@ export function stableKeyToUrl(
     return `/api/assistant/files/${rest[0]}/content${page > 0 ? `#page=${page}` : ''}`;
   }
   return '';
+}
+
+/**
+ * 업로드 근거의 위치 — 파일명과, 질문자가 볼 수 있는 아트보드·프레임.
+ * 아트보드는 사용자별이라 색인 글에 넣지 않고 답변 시점에 질문자 권한으로 조회한다.
+ */
+export async function uploadLocations(
+  store: KnowledgeStore,
+  projectId: string,
+  userId: string | undefined,
+  uploadIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(uploadIds)].filter((id) => /^[0-9a-f-]{36}$/i.test(id));
+  if (!ids.length) return out;
+  const files = await rows<{ id: string; filename: string }>(
+    sql`SELECT id::text, filename FROM knowledge_uploads
+        WHERE project_id=${projectId} AND state != 'DELETED' AND id::text = ANY(${ids}::text[])`,
+    store.db,
+  );
+  const placed = userId
+    ? await rows<{ upload_id: string; board: string; frame: string | null }>(
+        sql`SELECT DISTINCT n.data->>'upload_id' AS upload_id, b.name AS board,
+              (SELECT f.data->>'text' FROM art_board_nodes f
+                WHERE f.board_id=n.board_id AND f.revision=n.revision AND f.node_type='frame'
+                  AND n.x >= f.x AND n.y >= f.y AND n.x <= f.x + f.width AND n.y <= f.y + f.height
+                ORDER BY f.width * f.height LIMIT 1) AS frame
+            FROM art_board_nodes n
+            JOIN art_boards b ON b.id=n.board_id AND n.revision=b.current_revision
+            WHERE b.project_id=${projectId} AND b.archived_at IS NULL
+              AND n.node_type='image_reference' AND n.data->>'upload_id' = ANY(${ids}::text[])
+              AND (b.owner_id=${userId}
+                OR EXISTS (SELECT 1 FROM art_board_shares sh WHERE sh.board_id=b.id AND sh.user_id=${userId})
+                OR EXISTS (SELECT 1 FROM project_memberships m WHERE m.project_id=b.project_id AND m.user_id=${userId} AND m.role='admin'))`,
+        store.db,
+      )
+    : [];
+  for (const f of files) {
+    const boards = placed
+      .filter((p) => p.upload_id === f.id)
+      .map((p) => `아트보드 '${p.board}'${p.frame ? ` > '${p.frame}' 프레임` : ''}`);
+    out.set(
+      f.id,
+      `업로드 파일 '${f.filename}'` +
+        (boards.length ? ` · ${[...new Set(boards)].slice(0, 5).join(', ')}` : ' · 질문자가 볼 수 있는 아트보드에는 없음'),
+    );
+  }
+  return out;
 }
 
 async function sourceRows(store: KnowledgeStore, projectId: string) {
@@ -279,13 +328,21 @@ export async function answerQuestion(
     await setPhase('generating');
     const revisions = new Map<string, string>();
     for (const c of chunks) revisions.set(c.document_id, c.revision);
+    const locations = await uploadLocations(
+      store,
+      projectId,
+      deps.userId,
+      chunks.filter((c) => c.source === 'upload').map((c) => c.stable_key.split(':')[1] ?? ''),
+    );
     const evidenceInput = chunks.map((c, i) => {
       const id = `e${i + 1}`;
+      const location = c.source === 'upload' ? locations.get(c.stable_key.split(':')[1] ?? '') : undefined;
       return {
         id,
         source: c.source,
         chunk: c.content.slice(0, 1200),
         stable_key: c.stable_key,
+        ...(location ? { location } : {}),
         occurred_at: c.occurred_at,
         modified_at: c.modified_at,
         indexed_at: c.indexed_at,
