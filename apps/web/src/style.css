@@ -2652,6 +2652,9 @@ small {
 .message-data > div { display:grid; grid-template-columns:minmax(100px, 150px) minmax(0,1fr); gap:12px; padding-top:7px; border-top:1px solid var(--border-subtle); }
 .message-data dt { color:var(--text-muted); font-size:11px; }
 .message-data dd { margin:0; color:var(--text-primary); overflow-wrap:anywhere; }
+.msg-answer-meta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.msg-answer-meta .chip { color:var(--text-secondary); }
+.msg-answer-meta .warn-note { color:#f0c17c; font-size:11px; }
 .message-citations { margin-top:12px; border-top:1px solid var(--border-subtle); padding-top:9px; }
 .message-citations summary,.approval-raw summary { color:#f0a18e; cursor:pointer; font-size:11px; }
 .citation-row { display:grid; gap:3px; padding:9px 0; border-bottom:1px solid var(--border-subtle); font-size:11px; }

@@ -111,6 +111,10 @@ export class GitHubRest {
   branch(repo: string, ref: string) {
     return this.request(`/repos/${repo}/branches/${encodeURIComponent(ref)}`);
   }
+  /** repo의 브랜치 목록 — 이름 + head sha (활동 시각은 브랜치 상세로 확인). */
+  branches(repo: string, perPage = 100) {
+    return this.request(`/repos/${repo}/branches`, { per_page: String(perPage) });
+  }
   tree(repo: string, sha: string) {
     return this.request(`/repos/${repo}/git/trees/${sha}`, { recursive: '1' });
   }
@@ -275,6 +279,9 @@ export class GitHubCollector {
       `github ${this.repo}@${ref} head=${head.slice(0, 8)} files=${Object.keys(tree).length} +${added.length} ~${modified.length} -${removed.length}\n`,
     );
     const work = [...new Set([...added, ...modified, ...pending])];
+    // head 커밋 시각을 문서의 원본 발생/수정 시각으로 쓴다 — 파일 내용은 그
+    // 커밋 상태의 스냅샷이므로 수집 시각(now)보다 커밋 시각이 정확하다.
+    const commitAt = (br.body?.commit?.commit?.committer?.date as string | undefined) ?? null;
     // 첫 동기화(빈 cursor)는 blob GET × N 대신 tarball 1회 다운로드로 수집한다.
     let tarContents: Map<string, Buffer> | null = null;
     if (!prev.head_sha && work.length > 0) {
@@ -295,7 +302,7 @@ export class GitHubCollector {
       const batch = work.slice(i, i + PAR);
       const results = await Promise.all(
         batch.map((p) =>
-          this.ingestFile(ref, p, tree[p], head, tarContents?.get(p))
+          this.ingestFile(ref, p, tree[p], head, tarContents?.get(p), commitAt)
             .then(() => ({ p, ok: true }))
             .catch((e) => {
               process.stderr.write(`github ingest ${p}: ${e}\n`);
@@ -334,6 +341,7 @@ export class GitHubCollector {
     blobSha: string,
     head: string,
     tarContent?: Buffer,
+    commitAt?: string | null,
   ) {
     const key = documentKeys.githubFile(this.repoId, ref, path);
     const revision = `${head}:${blobSha}`;
@@ -341,7 +349,8 @@ export class GitHubCollector {
     const marked = await this.store.markDocumentDirty(
       this.sourceId,
       key,
-      { repo: this.repo, ref, path },
+      // head는 evidence permalink(ref 불변 링크)에 쓴다 (QA 10-12).
+      { repo: this.repo, ref, path, head },
       {
         unlessHash: blobSha,
         revision,
@@ -375,7 +384,8 @@ export class GitHubCollector {
     const published = await this.store.publishVersion(doc.id, {
       contentHash: blobSha, // blob SHA 자체가 내용 해시 (§6.2-5)
       sourceRevision: revision,
-      sourceModifiedAt: new Date(),
+      sourceOccurredAt: commitAt ? new Date(commitAt) : null,
+      sourceModifiedAt: commitAt ? new Date(commitAt) : new Date(),
       normalized: {
         text: text ?? '',
         path,

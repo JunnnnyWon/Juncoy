@@ -111,7 +111,7 @@ function AssistantView() {
   useEffect(() => void loadConvs(), []);
 
   const openConv = async (id: string) => {
-    esRef.current?.close();
+    stopStream();
     setConvId(id);
     setLive(null);
     const r = await api<{ conversation: Conv; messages: Msg[]; pending_approvals: Approval[] }>(
@@ -142,7 +142,7 @@ function AssistantView() {
     if (!window.confirm('이 대화와 모든 메시지·실행 기록을 삭제할까요?')) return;
     await api('/api/assistant/conversations/' + conversation.id, { method: 'DELETE' });
     if (conversation.id === convId) {
-      esRef.current?.close();
+      stopStream();
       setConvId(null);
       setMessages([]);
       setApprovals([]);
@@ -153,7 +153,7 @@ function AssistantView() {
   const deleteAllConvs = async () => {
     if (!window.confirm('현재 계정의 대화와 모든 메시지·승인·실행 기록을 전부 영구 삭제할까요? 이 작업은 복구할 수 없습니다.')) return;
     await api<{ deleted: number }>('/api/assistant/conversations', { method: 'DELETE' });
-    esRef.current?.close();
+    stopStream();
     setConvId(null);
     setMessages([]);
     setApprovals([]);
@@ -161,12 +161,28 @@ function AssistantView() {
     await loadConvs();
   };
 
-  const streamRun = (runId: string) => {
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopStream = () => {
     esRef.current?.close();
+    esRef.current = null;
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const streamRun = (runId: string) => {
+    stopStream();
     const es = new EventSource(`/api/assistant/runs/${runId}/stream`);
     esRef.current = es;
     const liveRun: LiveRun = { phase: 'idle', evidence: [], text: '' };
     setLive({ ...liveRun });
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      stopStream();
+    };
     es.onmessage = () => {};
     for (const kind of [
       'phase',
@@ -192,20 +208,44 @@ function AssistantView() {
             `/api/assistant/conversations/${convId}`,
           ).then((r) => setApprovals(asArray<Approval>(r.pending_approvals)));
         setLive({ ...liveRun, evidence: [...liveRun.evidence] });
-        if (kind === 'result') {
-          if (data.image_generated) { setPanelTab('images'); void api<any[]>('/api/assistant/images').then(setImages); }
-          es.close();
+        if (kind === 'result' || kind === 'done') {
+          // result/done 둘 다 종결 — 재연결 후 done만 도착하는 경우도 마무리한다.
+          if (kind === 'result' && data.image_generated) { setPanelTab('images'); void api<any[]>('/api/assistant/images').then(setImages); }
+          finish();
           setLive(null);
           if (convId) void openConv(convId);
         } else if (kind === 'error') {
-          es.close();
+          finish();
           setLive({ ...liveRun, evidence: [...liveRun.evidence] });
         }
       });
     }
-    es.onerror = () => {
-      es.close();
-    };
+    // onerror에서 닫지 않는다 — 브라우저가 Last-Event-ID로 자동 재연결한다.
+    // 재연결이 계속 실패하면 run 상태 폴링으로 종결을 잡는다 (QA 10-12,
+    // "작업을 실행하는 중"에서 영구 정지하던 문제).
+    const deadline = Date.now() + 10 * 60_000;
+    pollRef.current = setInterval(() => {
+      if (finished) return;
+      if (Date.now() > deadline) {
+        liveRun.status = 'FAILED';
+        finish();
+        setLive({ ...liveRun, evidence: [...liveRun.evidence] });
+        return;
+      }
+      if (es.readyState === EventSource.OPEN) return; // 스트림 정상
+      void (async () => {
+        try {
+          const run = await api<any>(`/api/assistant/runs/${runId}`);
+          if (run?.status || run?.cancelled) {
+            finish();
+            setLive(null);
+            if (convId) void openConv(convId);
+          }
+        } catch {
+          /* 다음 틱에 재시도 */
+        }
+      })();
+    }, 4_000);
   };
 
   const send = async () => {
@@ -389,6 +429,7 @@ function AssistantView() {
                   <div className="msg-author">{m.role === 'user' ? '나' : '프로젝트 어시스턴트'}</div>
                   <div className="msg-body">{renderMarkdown(m.content)}</div>
                   {asArray<any>(m.attachments).filter(item => item?.type === 'generated_image').map(image => <button key={image.id} className="chat-generated-image" aria-label="생성 이미지 크게 보기" onClick={() => setSelectedImage(image)}><img src={'/api/assistant/images/' + image.id} alt="채팅에서 생성한 이미지" loading="lazy" /></button>)}
+                  <AnswerMeta citations={m.citations} />
                   <CitationList citations={m.citations} />
                 </div>
               ))}
@@ -511,10 +552,30 @@ function formatInline(text: string) {
   });
 }
 
+/** 답변 상태·경고 배지 — 부분/실패/추가확인 답변을 완료로 오해하지 않게 (QA 10-12). */
+function AnswerMeta({ citations }: { citations: unknown }) {
+  const meta = asArray<any>(citations).find(
+    (item) => item && typeof item === 'object' && typeof item.answer_status === 'string',
+  );
+  if (!meta || meta.answer_status === 'COMPLETE') return null;
+  const warnings = asArray<string>(meta.warnings).filter((w) => typeof w === 'string' && w);
+  return (
+    <div className="msg-answer-meta">
+      <span className={`chip ${meta.answer_status === 'FAILED' ? 'warn' : ''}`}>
+        {STATUS_KO[meta.answer_status] ?? meta.answer_status}
+      </span>
+      {warnings.slice(0, 2).map((warning, index) => (
+        <span key={index} className="warn-note">{warning}</span>
+      ))}
+    </div>
+  );
+}
+
 function CitationList({ citations }: { citations: unknown }) {
   const items = asArray<any>(citations).filter((item) => item && typeof item === 'object' && (item.url || item.quote || item.stable_key));
   if (!items.length) return null;
-  return <details className="message-citations"><summary>참고 자료 {items.length}건</summary>{items.map((citation: any, index: number) => { const quote = safeText(citation.quote ?? citation.excerpt ?? citation.stable_key, '근거 세부 정보').replace(/\s+/g, ' ').trim(); const shortQuote = quote.length > 150 ? quote.slice(0, 150) + '…' : quote; return <div key={citation.id ?? index} className="citation-row"><strong>{safeText(citation.source ?? citation.title, '프로젝트 자료')}</strong><span>{shortQuote}</span><small>{citation.page_start ? '페이지 ' + citation.page_start : ''}{citation.parser_version ? ' · ' + citation.parser_version : ''}</small>{typeof citation.url === 'string' && citation.url && <a href={citation.url} target="_blank" rel="noreferrer">원문 열기 ↗</a>}</div>; })}</details>;
+  const fmtDate = (v: unknown) => { const d = new Date(String(v)); return Number.isNaN(+d) ? '' : d.toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' }); };
+  return <details className="message-citations"><summary>참고 자료 {items.length}건</summary>{items.map((citation: any, index: number) => { const quote = safeText(citation.quote ?? citation.excerpt ?? citation.stable_key, '근거 세부 정보').replace(/\s+/g, ' ').trim(); const shortQuote = quote.length > 150 ? quote.slice(0, 150) + '…' : quote; const occurred = citation.source_occurred_at ? fmtDate(citation.source_occurred_at) : ''; return <div key={citation.id ?? index} className="citation-row"><strong>{safeText(citation.source ?? citation.title, '프로젝트 자료')}</strong><span>{shortQuote}</span><small>{occurred ? occurred + ' 기록' : ''}{citation.page_start ? (occurred ? ' · ' : '') + '페이지 ' + citation.page_start : ''}{citation.parser_version ? ' · ' + citation.parser_version : ''}</small>{typeof citation.url === 'string' && citation.url && <a href={citation.url} target="_blank" rel="noreferrer">원문 열기 ↗</a>}</div>; })}</details>;
 }
 
 function renderMessage(rawContent: unknown) {

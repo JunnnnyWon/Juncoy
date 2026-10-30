@@ -107,6 +107,10 @@ export const Evidence = z
     bbox: z.unknown().optional(),
     parser_version: z.string().optional(),
     source_sha256: z.string().optional(),
+    // §13 시간 근거 — 원본 발생/수정/수집 시각. 과거 저장 답변과의 호환을 위해 optional.
+    source_occurred_at: z.iso.datetime().nullable().optional(),
+    source_modified_at: z.iso.datetime().nullable().optional(),
+    indexed_at: z.iso.datetime().nullable().optional(),
   })
   .strict();
 export type Evidence = z.infer<typeof Evidence>;

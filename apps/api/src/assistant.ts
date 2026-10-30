@@ -191,45 +191,58 @@ async function executeRunInOrder(
     const tctx = buildToolContext(ctx, projectId, userId, role, config);
 
     let final: { status: string; phase: string; text: string; extra?: Record<string, any> };
-    if (mode === 'answer') {
+    // 지식 답변 파이프라인 — answer 모드이거나 search 도구 선택·실행이 실패해
+    // 폴백할 때 공통으로 쓴다 (QA 10-12 — "조회 항목"/실행 중 정지 방지).
+    const runAnswer = async () => {
       await phase('retrieving');
       const r = await registry.execute(tctx, 'knowledge.ask', { question: text });
       if (!r.ok) throw new Error(r.error);
       const ans = r.result as any;
       for (const e of ans.evidence ?? []) await store.emitRunEvent(runId, 'evidence', e);
       await store.emitRunEvent(runId, 'coverage', { source_coverage: ans.source_coverage });
-      final = {
+      return {
         status: ans.status,
         phase:
           ans.status === 'COMPLETE' ? 'completed' : ans.status === 'FAILED' ? 'failed' : 'partial',
         text: ans.answer,
         extra: { answer_id: ans.answer_id, warnings: ans.warnings, evidence: ans.evidence ?? [] },
       };
+    };
+    if (mode === 'answer') {
+      final = await runAnswer();
     } else if (mode === 'search') {
       await phase('executing_tool');
       // 도구 선택 — 모델이 도구와 입력을 고른다 (registry가 스키마·권한으로 재검증).
-      const plan = isCommitRequest(text) ? {tool:'github.list_commits',input:commitRequestInput(text)} : await pickTool(ctx, registry, text);
+      const plan = isCommitRequest(text) ? {tool:'github.list_commits',input:commitRequestInput(text)} : await pickTool(ctx, registry, tctx, text);
       if (!plan) {
-        final = {
-          status: 'NEEDS_CLARIFICATION',
-          phase: 'partial',
-          text: '조회 대상을 특정해 주세요 (일정/작업/코드/회의 전사).',
-        };
+        // 도구를 못 고르거나 해당 커넥터가 미설정 → 지식 답변으로 폴백.
+        final = await runAnswer();
       } else {
         const r = await registry.execute(tctx, plan.tool, plan.input);
-        if (!r.ok) throw new Error(r.error);
-        await store.emitRunEvent(runId, 'tool_call', {
-          tool: plan.tool,
-          status: (r.result as any)?.status ?? 'DONE',
-          provider_status: (r.result as any)?.provider_status,
-          input: plan.input,
-        });
-        final = {
-          status: (r.result as any)?.status === 'UNAVAILABLE' || (r.result as any)?.status === 'NOT_CONFIGURED' ? 'PARTIAL' : (r.result as any)?.status === 'NEEDS_CLARIFICATION' ? 'NEEDS_CLARIFICATION' : 'COMPLETE',
-          phase: (r.result as any)?.status && (r.result as any).status !== 'OK' ? 'partial' : 'completed',
-          text: formatReadResult(plan.tool, r.result),
-          extra: { tool: plan.tool, read_status:(r.result as any)?.status, rows: Array.isArray(r.result) ? r.result.length : Array.isArray((r.result as any)?.commits) ? (r.result as any).commits.length : 1 },
-        };
+        if (!r.ok) {
+          // 도구 내부 오류(커넥터 미설정·provider 실패)도 빈 실패가 아니라
+          // 지식 답변으로 폴백해 사용자에게 결과를 준다.
+          await store.emitRunEvent(runId, 'tool_call', {
+            tool: plan.tool,
+            status: 'FAILED',
+            error: r.error,
+            input: plan.input,
+          });
+          final = await runAnswer();
+        } else {
+          await store.emitRunEvent(runId, 'tool_call', {
+            tool: plan.tool,
+            status: (r.result as any)?.status ?? 'DONE',
+            provider_status: (r.result as any)?.provider_status,
+            input: plan.input,
+          });
+          final = {
+            status: (r.result as any)?.status === 'UNAVAILABLE' || (r.result as any)?.status === 'NOT_CONFIGURED' ? 'PARTIAL' : (r.result as any)?.status === 'NEEDS_CLARIFICATION' ? 'NEEDS_CLARIFICATION' : 'COMPLETE',
+            phase: (r.result as any)?.status && (r.result as any).status !== 'OK' ? 'partial' : 'completed',
+            text: formatReadResult(plan.tool, r.result),
+            extra: { tool: plan.tool, read_status:(r.result as any)?.status, rows: Array.isArray(r.result) ? r.result.length : Array.isArray((r.result as any)?.commits) ? (r.result as any).commits.length : 1 },
+          };
+        }
       }
     } else {
       // propose/mutate/generate/ingest — 승인 필요 작업은 preview 도구가 approval을 만든다.
@@ -243,7 +256,12 @@ async function executeRunInOrder(
     const msgId = await store.createMessage(conversationId, 'assistant', final.text, {
       runId,
       attachments: final.extra?.images ?? [],
-      citations: final.extra?.evidence ?? (final.extra?.answer_id ? [{ answer_id: final.extra.answer_id }] : []),
+      citations: [
+        ...(final.extra?.evidence ?? []),
+        ...(final.extra?.answer_id ? [{ answer_id: final.extra.answer_id }] : []),
+        // 답변 상태·경고를 함께 저장해 UI가 부분/실패 답변을 표시한다 (QA 10-12).
+        { answer_status: final.status, warnings: final.extra?.warnings ?? [] },
+      ],
     });
     // Provider responses are structured rather than token-streamed. Emit safe deltas so the UI
     // can show progress immediately without changing the provider contract.
@@ -279,12 +297,21 @@ async function executeRunInOrder(
   }
 }
 
+/** 커넥터 dep가 없는 도구는 모델 선택지에서 제외 — 미설정 도구를 골라 실패하지 않게. */
+function toolConnectorAvailable(name: string, tctx: ToolContext): boolean {
+  if (name.startsWith('notion.')) return !!tctx.deps.notion;
+  if (name.startsWith('github.')) return !!tctx.deps.github;
+  if (name.startsWith('discord.')) return !!tctx.discordRead;
+  return true;
+}
+
 /** 모델이 read 도구 하나와 입력을 고른다 — registry의 스키마 이름만 허용. */
-async function pickTool(ctx: KnowledgeCtx, registry: ToolRegistry, text: string) {
+async function pickTool(ctx: KnowledgeCtx, registry: ToolRegistry, tctx: ToolContext, text: string) {
   const tools = registry
     .names()
-    .filter(n => registry.get(n)?.kind === 'read')
+    .filter(n => registry.get(n)?.kind === 'read' && toolConnectorAvailable(n, tctx))
     .map(name => { const tool=registry.get(name)!; return {name,description:tool.description,input_schema:z.toJSONSchema(tool.input,{target:'draft-7'})}; });
+  if (!tools.length) return null;
   const schema = z.object({
     tool: z.string(),
     input: z.any(),
@@ -298,7 +325,12 @@ async function pickTool(ctx: KnowledgeCtx, registry: ToolRegistry, text: string)
 회의 전사→meeting.search_transcript, 지식 검색→knowledge.search, Discord 새로고침→discord.refresh_context.
 못 고르면 tool에 "none". 입력은 각 도구 스키마에 맞게 최소한만.`,
     );
-    if (res.result.tool === 'none' || registry.get(res.result.tool)?.kind !== 'read') return null;
+    if (
+      res.result.tool === 'none' ||
+      registry.get(res.result.tool)?.kind !== 'read' ||
+      !toolConnectorAvailable(res.result.tool, tctx)
+    )
+      return null;
     return { tool: res.result.tool, input: res.result.input ?? {} };
   } catch {
     return null;
@@ -399,15 +431,28 @@ async function handleActionMode(
 export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
   app.setErrorHandler((error, req, reply) => {
     const e = error as any;
-    req.log.error({ error_name: e.name, error_code: e.code, provider_status: e.providerStatus, path: req.url.split('?')[0] }, 'assistant request failed');
+    // 프록시(cloudflared)가 5xx 응답 본문을 삼키므로, 요청 검증 실패는 400으로 내려
+    // 클라이언트가 실제 오류 코드/메시지를 볼 수 있게 한다.
+    const isZod = e instanceof z.ZodError;
+    const issue = isZod ? e.issues[0] : undefined;
+    req.log.error({
+      error_name: e.name, error_code: e.code, provider_status: e.providerStatus,
+      path: req.url.split('?')[0],
+      ...(isZod ? { zod_issues: e.issues.slice(0, 5).map((i: any) => `${i.path.join('.')}: ${i.message}`) } : {}),
+    }, 'assistant request failed');
     const status =
-      (e instanceof z.ZodError ? 502 : undefined) ?? e.statusCode ??
-      e.status ??
-      (e.code === 'KNOWLEDGE_DISABLED' ? 503 : e.code === 'PROJECT_SCOPE_DENIED' ? 403 : 503);
+      e.statusCode ?? e.status ??
+      (isZod ? 400 : e.code === 'KNOWLEDGE_DISABLED' ? 503 : e.code === 'PROJECT_SCOPE_DENIED' ? 403 : 503);
     return reply.code(status).send({
       error: {
-        code: status === 429 ? 'RATE_LIMITED' : e instanceof z.ZodError ? 'MODEL_OUTPUT_INVALID' : e.code ?? 'TEMPORARY_FAILURE',
-        message: status === 429 ? '요청이 잠시 몰렸습니다. 잠시 후 다시 시도해 주세요.' : e instanceof z.ZodError ? '자동 분석 결과의 형식이 올바르지 않습니다. 다시 시도해 주세요.' : e.code ? e.message : '어시스턴트가 일시적으로 불안정합니다.',
+        code: status === 429 ? 'RATE_LIMITED' : isZod ? 'INVALID_ARGUMENT' : e.code ?? 'TEMPORARY_FAILURE',
+        message: status === 429
+          ? '요청이 잠시 몰렸습니다. 잠시 후 다시 시도해 주세요.'
+          : isZod
+            ? `요청 형식이 올바르지 않습니다${issue ? ` (${issue.path.join('.')}: ${issue.message})` : ''}.`
+            : e.code
+              ? e.message
+              : '어시스턴트가 일시적으로 불안정합니다.',
         retryable: status === 429 || status >= 500,
       },
     });
@@ -559,7 +604,9 @@ export function registerAssistantRoutes(app: FastifyInstance, deps: Deps) {
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    let lastSeq = 0;
+    // EventSource 재연결 시 브라우저가 마지막 id를 Last-Event-ID로 보낸다 —
+    // 그 이후 이벤트만 재생해 끊긴 구간 없이 이어간다 (QA 10-12).
+    let lastSeq = Math.max(0, Number(req.headers['last-event-id']) || 0);
     let closed = false;
     req.raw.on('close', () => (closed = true));
     const heartbeat = SSE_HEARTBEAT_MS();

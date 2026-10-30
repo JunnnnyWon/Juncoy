@@ -17,6 +17,8 @@ interface SharedMeeting {
   tombstoned: boolean;
   transcript_version: number;
   status: string;
+  title: string | null;
+  started_at: string | null;
   ended_at: string | null;
 }
 
@@ -33,7 +35,9 @@ export class MeetingReader {
       `SELECT m.id AS meeting_id, m.guild_id, m.deleted_at,
               (t.meeting_id IS NOT NULL) AS tombstoned,
               COALESCE((m.view->>'transcript_version')::int, 0) AS transcript_version,
-              m.status, m.view->>'ended_at' AS ended_at
+              m.status, m.view->>'title' AS title,
+              m.view->>'started_at' AS started_at,
+              m.view->>'ended_at' AS ended_at
          FROM workspace_meetings w
          JOIN meetings m ON m.id = w.meeting_id
          LEFT JOIN deletion_tombstones t ON t.meeting_id = m.id
@@ -124,7 +128,12 @@ export class JuncoyCollector {
     const marked = await this.store.markDocumentDirty(
       this.sourceId,
       key,
-      { meeting_id: m.meeting_id, origin_guild_id: m.guild_id, status: m.status },
+      {
+        meeting_id: m.meeting_id,
+        origin_guild_id: m.guild_id,
+        status: m.status,
+        title: m.title,
+      },
       {
         unlessHash: contentHash,
         revision,
@@ -144,6 +153,8 @@ export class JuncoyCollector {
     const published = await this.store.publishVersion(doc.id, {
       contentHash,
       sourceRevision: revision,
+      // 회의 발생 시각은 started_at 우선 — 진행 중 회의도 날짜 판단이 가능하다.
+      sourceOccurredAt: m.started_at ? new Date(m.started_at) : m.ended_at ? new Date(m.ended_at) : null,
       sourceModifiedAt: m.ended_at ? new Date(m.ended_at) : null,
       normalized: {
         text: segments

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from './api.ts';
+import { api, ApiError } from './api.ts';
 import { ArtGenerationSetup, ArtGenerationReview } from './ArtGenerationSetup.tsx';
 import type { ArtCanvasNode, ArtCanvasEdge } from '@meeting/contracts';
 import { changeCanvas, travelCanvas, type CanvasHistory } from './canvas-history.ts';
@@ -60,6 +60,8 @@ interface RefCard {
   scale?: number;
   excluded?: boolean;
   local_blob?: Blob;
+  /** 서버 업로드가 끝까지 성공하지 못한 로컬 전용 카드 표시. */
+  upload_failed?: boolean;
 }
 const roleLabels: Record<Role, string> = {
   face_shape: '얼굴 형태',
@@ -229,7 +231,8 @@ export function ArtReferenceCanvas() {
   const [revision, setRevision] = useState(0);
   const [syncState, setSyncState] = useState('로컬 초안');
   const [brief, setBrief] = useState<any>(null);
-  const [inspectorPanel, setInspectorPanel] = useState<'asset' | 'create' | 'results'>('asset');
+  // 생성 준비·승인·결과를 한 탭에 모은다 — 별도 'results' 탭 없음 (QA 10-12).
+  const [inspectorPanel, setInspectorPanel] = useState<'asset' | 'create'>('asset');
   const [generated, setGenerated] = useState<any[]>([]);
   const [visibleResultCount, setVisibleResultCount] = useState(6);
   const [analysis, setAnalysis] = useState<any>(null);
@@ -250,6 +253,7 @@ export function ArtReferenceCanvas() {
   const [useSelectedReferences, setUseSelectedReferences] = useState(false);
   const [referenceUploadSelection, setReferenceUploadSelection] = useState<string[]>([]);
   const [actionError, setActionError] = useState('');
+  const [boardError, setBoardError] = useState('');
   const [assetAnalysis, setAssetAnalysis] = useState<any>(null);
   const [assetCorrections, setAssetCorrections] = useState('');
   const [canonicalNotes, setCanonicalNotes] = useState<Record<string, string>>({});
@@ -267,10 +271,48 @@ export function ArtReferenceCanvas() {
   useEffect(() => { revisionRef.current = revision; }, [revision]);
   const selected = refs.find((ref) => ref.id === selectedId) ?? refs[0];
   const selectedCount = useMemo(() => refs.filter((ref) => ref.selected).length, [refs]);
-  const serverSnapshot = () => ({
-    references: refs.filter((ref) => ref.upload_id).map(({ url: _url, local_blob: _blob, ...ref }) => ref),
-    nodes, edges, viewport: { ...pan, zoom },
-  });
+  const serverSnapshot = () => {
+    // 서버 스키마(ArtBoardSnapshot)를 무조건 통과하게 정제한다 — 로컬 상태가
+    // 오염돼 있어도 저장이 검증 실패로 영구히 막히지 않게 한다.
+    const num = (v: unknown, min: number, max: number) =>
+      typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : undefined;
+    const usedIds = new Set<string>();
+    const uniqueId = (raw: unknown) => {
+      let id = typeof raw === 'string' && raw ? raw.slice(0, 196) : '';
+      if (!id) id = crypto.randomUUID();
+      while (usedIds.has(id)) id = id.slice(0, 192) + '-' + crypto.randomUUID().slice(0, 4);
+      usedIds.add(id);
+      return id;
+    };
+    const references = refs
+      .filter((ref) => ref.upload_id)
+      .map(({ url: _url, local_blob: _blob, ...ref }) => ({ ...ref, id: uniqueId(ref.id) }))
+      .map((ref) => ({
+        ...ref,
+        x: num(ref.x, -1e9, 1e9), y: num(ref.y, -1e9, 1e9),
+        width: num(ref.width, 80, 5000), height: num(ref.height, 60, 5000),
+      }));
+    const cleanNodes = nodes
+      .filter((node) => ['text_note', 'frame', 'group'].includes(node.node_type))
+      .map((node) => ({
+        id: uniqueId(node.id), node_type: node.node_type,
+        x: num(node.x, -1e9, 1e9) ?? 0, y: num(node.y, -1e9, 1e9) ?? 0,
+        width: num(node.width, 80, 5000) ?? 220, height: num(node.height, 60, 5000) ?? 140,
+        text: String(node.text ?? '').slice(0, 4000),
+      }));
+    const edgeIds = new Set<string>();
+    const edgeKeys = new Set<string>();
+    const cleanEdges = edges.filter((edge) => {
+      if (typeof edge.id !== 'string' || !edge.id || edge.id.length > 200) return false;
+      const key = JSON.stringify([edge.source, edge.target, edge.edge_type]);
+      return usedIds.has(edge.source) && usedIds.has(edge.target) && edge.source !== edge.target
+        && !edgeKeys.has(key) && !edgeIds.has(edge.id) && !!edgeIds.add(edge.id) && !!edgeKeys.add(key);
+    });
+    return {
+      references, nodes: cleanNodes, edges: cleanEdges,
+      viewport: { x: num(pan.x, -1e9, 1e9) ?? 0, y: num(pan.y, -1e9, 1e9) ?? 0, zoom: num(zoom, 0.5, 1.8) ?? 1 },
+    };
+  };
   const localSnapshot = () => ({ references: refs.map(({ url: _url, ...ref }) => ref), nodes, edges, viewport: { ...pan, zoom } });
   useEffect(() => {
     const generation = ++assetAnalysisGeneration.current;
@@ -286,9 +328,11 @@ export function ArtReferenceCanvas() {
     }
     return () => { assetAnalysisGeneration.current++; };
   }, [selected?.art_asset_id]);
-  useEffect(() => {
-    void (async () => {
+  const loadBoard = async () => {
+    {
       let activeBoardId = '';
+      setBoardError('');
+      setSyncState('서버 연결 중');
       try {
         const boards = await api<any[]>('/api/assistant/art-boards');
         setBoardList(boards);
@@ -346,10 +390,26 @@ export function ArtReferenceCanvas() {
           setInspectorPanel('create');
           setMobilePanel('inspector');
         }
-      } catch {
-        setSyncState('로컬 초안');
+      } catch (error) {
+        // 401/403은 연결 성공·권한 부족 — 네트워크 오류와 구분해 안내한다.
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          setSyncState('서버에 연결됨');
+          setBoardError(
+            error.status === 401
+              ? '로그인이 만료되었습니다. 다시 로그인해 주세요.'
+              : '아트보드 편집 권한이 없습니다. 관리자에게 편집 권한을 요청해 주세요.',
+          );
+        } else {
+          // 서버 연결 실패 — '서버 연결 중'으로 멈추지 않게 실패 상태와
+          // 다시 시도 경로를 둔다 (QA 10-12).
+          setSyncState('서버 연결 실패');
+          setBoardError('아트보드 서버에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.');
+        }
       }
-    })();
+    }
+  };
+  useEffect(() => {
+    void loadBoard();
   }, []);
   const saveRightsNotes = async (snapshot: ReturnType<typeof serverSnapshot>) => {
     const assets = new Map(snapshot.references.filter((ref) => ref.art_asset_id && ref.rights_note !== undefined).map((ref) => [ref.art_asset_id!, ref.rights_note!]));
@@ -500,6 +560,7 @@ export function ArtReferenceCanvas() {
             .join('');
           let upload_id: string | undefined;
           let art_asset_id: string | undefined;
+          let upload_failed = false;
           try {
             const init = await api<{ id: string; reused: boolean }>('/api/assistant/files/init', {
               method: 'POST',
@@ -510,35 +571,47 @@ export function ArtReferenceCanvas() {
                 sha256: sha,
               }),
             });
-            upload_id = init.id;
             if (!init.reused)
               await api('/api/assistant/files/' + init.id + '/complete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/octet-stream' },
                 body: bytes,
               });
+            // complete까지 성공해야 upload_id를 둔다 — 중간 실패로 /content가
+            // 404인 깨진 카드가 스냅샷에 저장되는 것을 막는다 (QA 10-12).
+            upload_id = init.id;
             const asset = await api<{ id: string }>('/api/assistant/art-assets/init', {
               method: 'POST',
               body: JSON.stringify({ upload_id: init.id, source_label: file.name }),
             });
             art_asset_id = asset.id;
           } catch {
-            /* local draft remains usable when API is unavailable */
+            upload_failed = true;
           }
           return {
-            id: file.name + '-' + file.lastModified + '-' + index,
+            // id는 파일명+수정시각+배치순번에 임의 접미사를 붙인다 — 같은 파일을 두 번
+            // 올려도 id가 충돌하지 않게 (충돌하면 스냅샷 검증에 걸려 저장이 전부 실패한다).
+            id: (file.name.slice(0, 150) + '-' + file.lastModified + '-' + index + '-' + crypto.randomUUID().slice(0, 8)),
             upload_id,
             art_asset_id,
+            upload_failed,
             name: file.name,
             url: upload_id ? '/api/assistant/files/' + upload_id + '/content' : URL.createObjectURL(file),
             local_blob: upload_id ? undefined : file,
             role: 'mood' as Role, roles: ['mood' as Role], roleUsage: { mood: 'REVIEW_REQUIRED' as Usage },
             usage: 'REVIEW_REQUIRED' as Usage,
-            note: '새 레퍼런스. 분석 전 검토 필요',
+            note: upload_failed
+              ? '서버에 업로드하지 못했습니다. 이 기기에서만 표시되며 보드 저장·생성 참고에 포함되지 않습니다.'
+              : '새 레퍼런스. 분석 전 검토 필요',
             selected: false,
           };
         }),
     );
+    const failedUploads = next.filter((ref) => ref.upload_failed).length;
+    if (failedUploads)
+      setActionError(
+        `${failedUploads}개 이미지를 서버에 업로드하지 못했습니다. 해당 이미지는 이 기기에만 남고 저장·생성에 포함되지 않습니다.`,
+      );
     setRefs((current) => [...next.map((ref, index) => ({ ...ref, selected: true, x: 80 + (current.length + index) % 4 * 260, y: 120 + Math.floor((current.length + index) / 4) * 250 })), ...current]);
     if (next[0]) setSelectedId(next[0].id);
     await Promise.all(next.filter((ref) => ref.art_asset_id).map(async (ref) => {
@@ -684,7 +757,12 @@ export function ArtReferenceCanvas() {
           <div className="board-grid" />
           <div className="board-label">
             <span>CHARACTER / ENVIRONMENT</span>
-            <strong>{boardId ? '프로젝트 아트보드' : '서버 연결 중'}</strong>
+            <strong>{boardId ? '프로젝트 아트보드' : boardError ? '서버 연결 실패' : '서버 연결 중'}</strong>
+            {boardError && (
+              <button className="secondary-button" onClick={() => void loadBoard()}>
+                다시 시도
+              </button>
+            )}
           </div>
           <div className="board-stage" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
           {nodes.map((node) => <div key={node.id} className={'canvas-node ' + node.node_type + (activeNodeId === node.id ? ' active' : '')} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={() => setActiveNodeId(node.id)}>
@@ -743,7 +821,7 @@ export function ArtReferenceCanvas() {
           </div>
         </section>
         <aside className={'art-inspector ' + (mobilePanel === 'canvas' ? 'mobile-hidden' : '')}>
-          <nav className="art-panel-nav" aria-label="오른쪽 작업 패널">{([['asset','이미지 정보'],['create','이미지 만들기'],['results','생성 결과']] as const).map(([key,label]) => <button key={key} aria-pressed={inspectorPanel === key} onClick={() => setInspectorPanel(key)}>{label}</button>)}</nav>
+          <nav className="art-panel-nav" aria-label="오른쪽 작업 패널">{([['asset','이미지 정보'],['create','이미지 만들기']] as const).map(([key,label]) => <button key={key} aria-pressed={inspectorPanel === key} onClick={() => setInspectorPanel(key)}>{label}</button>)}</nav>
           <div hidden={inspectorPanel !== 'create'}>
             <ArtGenerationSetup request={generationRequest} manual={useSelectedReferences} selected={referenceUploadSelection} refs={refs} busy={briefBusy || generationBusy || analysisBusy} onRequest={value => { setGenerationRequest(value); setBrief(null); }} onManual={value => { setUseSelectedReferences(value); setBrief(null); }} onSelected={value => { setReferenceUploadSelection(value); setBrief(null); }} onPreview={() => void previewBrief()} />
           {brief && (
@@ -789,7 +867,7 @@ export function ArtReferenceCanvas() {
               {brief.generation_not_executed && (
                 <small className="brief-error">생성 작업이 실행되지 않았습니다. provider와 권한 상태를 확인해 주세요.</small>
               )}
-              {brief.generated && <button className="secondary-button" onClick={() => setInspectorPanel('results')}>생성 결과 보기</button>}
+              {brief.generated && <p className="panel-help">생성된 이미지는 이 탭 아래 결과에서 확인할 수 있습니다.</p>}
               {brief.approval_id && !brief.generated && <button className="brief-cancel-button" disabled={generationBusy} onClick={async () => { try { await api('/api/assistant/approvals/' + brief.approval_id + '/reject', { method:'POST', body:'{}' }); setBrief(null); } catch(error) { setActionError(artActionError(error)); } }}>이 준비 취소</button>}
             </div>
           )}
@@ -864,7 +942,7 @@ export function ArtReferenceCanvas() {
             </>
           )}
           </section>
-          <section className="art-output-panel" hidden={inspectorPanel !== 'results'}>
+          <section className="art-output-panel" hidden={inspectorPanel !== 'create'}>
             <div className="output-heading">
               <div>
                 <h3>생성 결과</h3>

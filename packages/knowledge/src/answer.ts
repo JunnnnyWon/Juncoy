@@ -58,6 +58,8 @@ const ANSWER_SYSTEM = `너는 프로젝트 지식 어시스턴트다. 아래 evi
 - 각 claim의 evidence_ids에 근거 evidence의 id를 넣는다. 근거 없는 claim은 만들지 않는다.
 - answer 본문에는 [e1], (e2), [] 같은 근거 표시를 쓰지 않는다. 근거 연결은 claims.evidence_ids에만 보존한다.
 - evidence 간 충돌·구버전·상반된 결정이 보이면 conflicts에 적는다.
+- 각 evidence의 occurred_at은 원본이 생긴 시각, modified_at은 원본 수정 시각, indexed_at은 지식 등록 시각이다.
+- "최신/가장 최근/마지막/요즘"을 묻는 질문에는 이 시각들을 비교해 판단하고, 답변에 근거가 된 기록의 날짜(YYYY-MM-DD)를 명시한다.
 - 최신 정보가 없거나 요청 시점과 evidence가 다르면 warnings에 명시한다.
 - answer는 간결한 한국어 문장들로 쓴다.`;
 
@@ -74,16 +76,34 @@ interface CoverageInput {
   gaps: string[];
 }
 
-/** stable_key → 사람이 열 수 있는 URL (출처별 형식, §13 evidence.url). */
-export function stableKeyToUrl(stableKey: string, span: Record<string, any> = {}): string {
+/**
+ * stable_key → 사람이 열 수 있는 URL (출처별 형식, §13 evidence.url).
+ * GitHub는 브랜치명 대신 head commit SHA로 permalink를 만든다 — 브랜치가
+ * 삭제·개명돼도 링크가 깨지지 않는다 (QA 10-12). repo는 stable_key의
+ * 안정 식별자가 아니라 문서 metadata의 `owner/name`을 우선한다.
+ */
+export function stableKeyToUrl(
+  stableKey: string,
+  span: Record<string, any> = {},
+  metadata: Record<string, any> | null = null,
+  sourceRevision: string | null = null,
+): string {
   const [kind, ...rest] = stableKey.split(':');
   if (kind === 'discord') {
     const [guild, channel, message] = rest;
     return `https://discord.com/channels/${guild}/${channel}/${message}`;
   }
   if (kind === 'github') {
-    const repo = rest[0];
-    const ref = rest[1];
+    // metadata.repo = 'owner/name'. stable_key의 첫 토큰은 repoId일 수 있어
+    // 숫자 ID → github.com/<id> 404를 피하려고 metadata를 우선한다.
+    const repo = typeof metadata?.repo === 'string' && metadata.repo.includes('/')
+      ? metadata.repo
+      : rest[0];
+    // 수집 revision은 `<head>:<blobSha>` — head가 permalink ref가 된다.
+    const head =
+      (typeof metadata?.head === 'string' ? metadata.head : null) ??
+      sourceRevision?.split(':')[0];
+    const ref = head && /^[0-9a-f]{40}$/i.test(head) ? head : (metadata?.ref ?? rest[1]);
     const path = rest.slice(2).join(':');
     return `https://github.com/${repo}/blob/${ref}/${path}`;
   }
@@ -261,7 +281,15 @@ export async function answerQuestion(
     for (const c of chunks) revisions.set(c.document_id, c.revision);
     const evidenceInput = chunks.map((c, i) => {
       const id = `e${i + 1}`;
-      return { id, source: c.source, chunk: c.content.slice(0, 1200), stable_key: c.stable_key };
+      return {
+        id,
+        source: c.source,
+        chunk: c.content.slice(0, 1200),
+        stable_key: c.stable_key,
+        occurred_at: c.occurred_at,
+        modified_at: c.modified_at,
+        indexed_at: c.indexed_at,
+      };
     });
     let modelOut: ModelOutput | null = null;
     let modelName = '';
@@ -295,8 +323,11 @@ export async function answerQuestion(
         source: c.source as any,
         document_id: c.document_id,
         revision: rev || 'unknown',
-        url: stableKeyToUrl(c.stable_key, c.span),
+        url: stableKeyToUrl(c.stable_key, c.span, c.metadata, c.source_revision),
         quote: c.content.slice(0, 500),
+        source_occurred_at: c.occurred_at,
+        source_modified_at: c.modified_at,
+        indexed_at: c.indexed_at,
         observed_at: new Date().toISOString(),
         ...(Number.isInteger(c.span?.page_start) && c.span.page_start > 0 ? { page_start: c.span.page_start } : {}),
         ...(Number.isInteger(c.span?.page_end) && c.span.page_end > 0 ? { page_end: c.span.page_end } : {}),
