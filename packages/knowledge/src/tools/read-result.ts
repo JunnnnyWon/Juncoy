@@ -68,12 +68,6 @@ export function needsGroundedAnswer(tool: string | undefined, request = '') {
   if (!tool || !CORPUS_SEARCH_TOOLS.has(tool)) return false;
   return tool === 'knowledge.search' || !RAW_REQUEST.test(request);
 }
-/** 이전 대화를 봐야 뜻이 통하는 메시지 — "그거", "거기", "아까 그 파일", "둘 다" 같은 지시어나 아주 짧은 후속 요청. */
-const DEIXIS = /(?:그거|이거|저거|그것|이것|저것|그걸|이걸|저걸|그게|이게|그건|이건|거기|여기|저기|아까|방금|위에|위의|앞에서|그럼|그러면|그 중|그중|둘 ?다|셋 ?다|전부|첫 ?번째|두 ?번째|세 ?번째|마지막 거|걔|얘|그 ?(?:파일|이미지|사진|자료|문서|링크|주소|보드|사람|분|회의|코드|작업|일정))/;
-export function needsConversationContext(text: string) {
-  const t = text.trim();
-  return DEIXIS.test(t) || t.replace(/\s+/g, '').length <= 8;
-}
 export function formatReadResult(tool: string, result: any): string {
   if (tool === 'github.list_commits') {
     if (result.status === 'NOT_CONFIGURED') return '이 프로젝트에 조회 가능한 GitHub 저장소가 연결되어 있지 않습니다.';

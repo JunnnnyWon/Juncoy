@@ -1,6 +1,6 @@
 import { expect,it } from 'vitest';
 import { searchPatterns } from '../../packages/knowledge/src/tools/read.ts';
-import { isCommitRequest,commitRequestInput,resolveFollowup,formatReadResult,needsGroundedAnswer,needsConversationContext } from '../../packages/knowledge/src/tools/read-result.ts';
+import { isCommitRequest,commitRequestInput,resolveFollowup,formatReadResult,needsGroundedAnswer } from '../../packages/knowledge/src/tools/read-result.ts';
 it('routes commit reads and resolves punctuation from actual user history',()=>{
   const original='현재 우리 깃 커밋 기록 확인진행.';
   expect(isCommitRequest(original)).toBe(true);
@@ -35,12 +35,4 @@ it('sends corpus search picks to a grounded answer unless raw text is asked for'
 it('searches meeting and code text word by word',()=>{
   expect(searchPatterns('소녀 레퍼런스')).toEqual(['%소녀%','%레퍼런스%']);
   expect(searchPatterns('100%_done')).toEqual(['%100done%']);
-});
-it('detects follow-ups that only make sense with the earlier conversation',()=>{
-  expect(needsConversationContext('그거 주소로 좀 보내줘봐')).toBe(true);
-  expect(needsConversationContext('거기 있는 거 둘 다 링크 줘')).toBe(true);
-  expect(needsConversationContext('그 파일 누가 올렸어?')).toBe(true);
-  expect(needsConversationContext('링크 줘')).toBe(true);
-  expect(needsConversationContext('지금 "소녀"(메인캐릭터말고) 레퍼런스 어디에 있음?')).toBe(false);
-  expect(needsConversationContext('이번 주 Notion 작업 목록 보여줘')).toBe(false);
 });

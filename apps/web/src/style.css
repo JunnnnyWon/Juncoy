@@ -4050,3 +4050,4 @@ body:has(.art-workspace) { overflow:hidden; }
 .app-shell:has(.workspace-assistant) .workspace-assistant .assistant-convs { min-height:0; overflow-y:auto; }
 .app-shell:has(.workspace-assistant) .workspace-assistant .assistant-main { min-height:0; overflow:hidden; }
 .app-shell:has(.workspace-assistant) .workspace-assistant .assistant-msgs { min-height:0; max-height:none; overflow-y:auto; }
+.md-table-wrap{overflow-x:auto;margin:6px 0 10px}.md-table{border-collapse:collapse;font-size:13px;min-width:60%}.md-table th,.md-table td{border:1px solid var(--border-subtle);padding:6px 10px;text-align:left;vertical-align:top}.md-table th{color:var(--text-primary);background:rgba(255,255,255,.04);font-weight:600}

@@ -5,6 +5,7 @@ export * from './embeddings.ts';
 export * from './github.ts';
 export * from './image-prompt.ts';
 export * from './answer.ts';
+export * from './conversation.ts';
 export * from './indexer.ts';
 export * from './juncoy.ts';
 export * from './notion.ts';
