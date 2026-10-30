@@ -6,7 +6,7 @@ import {
   chunkText,
   estimateTokens,
 } from '@meeting/knowledge';
-import { filenameTerms } from '../../packages/knowledge/src/chunk.ts';
+import { filenameTerms, stripUploadHeader } from '../../packages/knowledge/src/chunk.ts';
 
 describe('chunkText', () => {
   it('splits on paragraph/heading boundaries and keeps order', () => {
@@ -118,6 +118,19 @@ describe('chunkDocument dispatch', () => {
     expect(doc[0].span.block_ids).toEqual(['b1']);
     // 업로드가 아닌 출처는 바뀌지 않는다.
     expect(chunkDocument('notion', 'notion:p1', { text: '본문', filename: 'x.md' })[0].content).toBe('본문');
+  });
+
+  it('strips the filename header so evidence still matches the original text', () => {
+    const normalized = { text: '창문 너머 눈동자\n붉은 문', mime: 'image/png', filename: 'girl image.png' };
+    const [chunk] = chunkDocument('upload', 'upload:img-1', normalized);
+    const body = stripUploadHeader('upload', chunk.content);
+    expect(normalized.text.includes(body.trim().slice(0, 80))).toBe(true);
+    const [doc] = chunkDocument('upload', 'upload:doc-1', { text: '본문 첫 줄', mime: 'text/plain', filename: 'a.txt' });
+    expect(stripUploadHeader('upload', doc.content)).toBe('본문 첫 줄');
+    // 업로드가 아닌 출처와 머리글 없는 글은 그대로 둔다.
+    expect(stripUploadHeader('notion', '파일: x\n본문')).toBe('파일: x\n본문');
+    expect(stripUploadHeader('upload', '본문만')).toBe('본문만');
+    expect(stripUploadHeader('upload', '이미지 파일: qa-pixel.png\n붉은 단색')).toBe('붉은 단색');
   });
 
   it('splits filenames into search words', () => {

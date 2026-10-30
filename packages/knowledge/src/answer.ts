@@ -9,6 +9,7 @@ import {
   cleanEvidenceText,
 } from '@meeting/contracts';
 import { retrieve, RetrievedChunk, AclInput } from './retrieve.ts';
+import { stripUploadHeader } from './chunk.ts';
 import { UpstageEmbeddings } from './embeddings.ts';
 
 // 문답 파이프라인 — spec §11.1/§13.
@@ -236,7 +237,8 @@ async function revalidateEvidence(
   if (!doc.bound) return 'EVIDENCE_SUPERSEDED';
   if (!doc.allowed) return 'acl_revoked';
   if (doc.content_hash !== ev.revision) return 'EVIDENCE_CHANGED';
-  const probe = ev.chunk.content.trim().slice(0, 80);
+  // 업로드 청크 첫 줄의 파일명 머리글은 원문(normalized.text)에 없으므로 떼고 대조한다.
+  const probe = stripUploadHeader(ev.chunk.source, ev.chunk.content).trim().slice(0, 80);
   if (probe && doc.text !== null && !doc.text.includes(probe)) return 'quote_missing';
   return null;
 }

@@ -187,6 +187,14 @@ export function filenameTerms(filename: string) {
  * 업로드 청크 머리글 — 본문·이미지 설명에는 파일명이 없어서 "girl image.png"나
  * "레퍼런스 게임 분석.pdf" 같은 이름으로 찾을 수 없었다. 모든 청크에 파일명을 붙인다.
  */
+// '이미지 파일'은 #12 때 형식이다. 그때 만든 청크가 남아 있을 수 있다.
+const UPLOAD_HEADER = /^(?:레퍼런스 이미지 파일|이미지 파일|파일): [^\n]*\n/;
+
+/** 업로드 청크에서 파일명 머리글을 뗀 본문 — 원문과 대조할 때 쓴다. 머리글은 원문에 없다. */
+export function stripUploadHeader(sourceKind: string, content: string) {
+  return sourceKind === 'upload' ? content.replace(UPLOAD_HEADER, '') : content;
+}
+
 function uploadHeader(normalized: Record<string, any>) {
   const filename = typeof normalized.filename === 'string' ? normalized.filename.trim() : '';
   if (!filename) return '';
